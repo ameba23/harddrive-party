@@ -1,0 +1,22 @@
+[package]
+name = "harddrive-party"
+version = "0.1.0"
+authors = ["peg <peg@magmacollective.org>"]
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Share files peer-to-peer"
+homepage = "https://gitlab.com/pegpeg"
+repository = "https://gitlab.com/pegpeg/harddrive-party"
+
+[dependencies]
+async-channel = "1.7.1"
+futures-lite = "1.12.0"
+prost = "0.11.2"
+
+[dev-dependencies]
+sluice = "0.5.5"
+async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
+anyhow = "1.0.28"
+
+[build-dependencies]
+prost-build = "0.11.2"
