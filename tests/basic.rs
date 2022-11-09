@@ -1,5 +1,5 @@
 use async_std::prelude::*;
-use harddrive_party::{Options, Protocol};
+use harddrive_party::{messages, Event, Options, Protocol};
 
 mod _duplex;
 use _duplex::Duplex;
@@ -11,19 +11,30 @@ async fn basic_protocol() -> anyhow::Result<()> {
 
     let mut a = Protocol::new(Duplex::new(ar, aw), Options::new(true));
     let mut b = Protocol::new(Duplex::new(br, bw), Options::new(false));
-    let next_a = a.next().await;
-    println!("a {:?}", next_a);
-    let next_b = b.next().await;
-    println!("b {:?}", next_b);
-    let next_a = a.next().await;
-    println!("a {:?}", next_a);
-
-    a.write_ext(vec![20, 20, 20, 20, 20]).await.unwrap();
-    let next_a = a.next().await;
-    println!("a {:?}", next_a);
-    let next_b = b.next().await;
-    println!("b {:?}", next_b);
-    let next_b = b.next().await;
-    println!("b {:?}", next_b);
-    return Ok(());
+    a.request(messages::request::Msg::Ls(messages::request::Ls {
+        path: None,
+        searchterm: None,
+        recursive: None,
+    }))
+    .await?;
+    loop {
+        match a.next().race(b.next()).await {
+            Some(Ok(Event::HandshakeResponse)) => {
+                println!("handshake response");
+            }
+            Some(Ok(Event::HandshakeRequest)) => {
+                println!("handshake request");
+            }
+            Some(Ok(event)) => {
+                println!("Some other event {:?}", event);
+                return Ok(());
+            }
+            Some(Err(_)) => {
+                println!("Err");
+            }
+            None => {
+                println!("None");
+            }
+        }
+    }
 }
