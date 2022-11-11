@@ -1,12 +1,16 @@
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, Sender, TrySendError};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::Stream;
 use prost::Message;
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind, Result};
 use std::pin::Pin;
 use std::result::Result as ResultResult;
 use std::task::{Context, Poll};
+
+// TODO timeout
+// TODO do we need a length prefix?
 
 pub mod messages {
     include!(concat!(env!("OUT_DIR"), "/harddriveparty.messages.rs"));
@@ -33,19 +37,15 @@ pub fn create_handshake() -> messages::request::Msg {
     })
 }
 
-pub fn create_handshake_response() -> messages::Response {
-    messages::Response {
-        response: Some(messages::response::Response::Success(
-            messages::response::Success {
-                msg: Some(messages::response::success::Msg::Handshake(
-                    messages::response::Handshake {
-                        token: vec![10, 10, 10],
-                        version: None,
-                    },
-                )),
+pub fn create_handshake_response() -> messages::response::Response {
+    messages::response::Response::Success(messages::response::Success {
+        msg: Some(messages::response::success::Msg::Handshake(
+            messages::response::Handshake {
+                token: vec![10, 10, 10],
+                version: None,
             },
         )),
-    }
+    })
 }
 
 const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
@@ -56,7 +56,8 @@ const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
 pub enum Event {
     HandshakeRequest,
     HandshakeResponse,
-    Request(messages::request::Msg),
+    Request(messages::request::Msg), // TODO this should also include the id
+    Response(messages::response::Response),
 }
 
 #[derive(Debug)]
@@ -65,7 +66,6 @@ pub struct Options {
 }
 
 impl Options {
-    /// Create with default options.
     pub fn new(is_initiator: bool) -> Self {
         Self { is_initiator }
     }
@@ -75,10 +75,11 @@ impl Options {
 pub struct Protocol<IO> {
     io: IO,
     options: Options,
-    handshaked: bool,
+    pub handshaked: bool,
     outbound_rx: Receiver<Vec<u8>>,
     outbound_tx: Sender<Vec<u8>>,
-    request_index: u32,
+    pub request_index: u32,
+    open_requests: HashMap<u32, Sender<messages::response::Response>>,
 }
 
 impl<IO> Protocol<IO>
@@ -95,6 +96,7 @@ where
             outbound_tx,
             outbound_rx,
             request_index: 0,
+            open_requests: HashMap::new(),
         }
     }
 
@@ -103,9 +105,21 @@ where
         Poll::Ready(Ok(()))
     }
 
-    pub async fn request(&mut self, request: messages::request::Msg) -> Result<()> {
-        let buf = self.create_request(request);
-        // write msg to outbound tx
+    // TODO error handle
+    pub async fn request(
+        &mut self,
+        request: messages::request::Msg,
+    ) -> Result<Receiver<messages::response::Response>> {
+        let (id, buf) = self.create_request(request);
+        self.outbound_tx.send(buf).await.unwrap();
+        let (tx, rx) = async_channel::unbounded();
+        self.open_requests.insert(id, tx);
+        Ok(rx)
+    }
+
+    // TODO error handle
+    pub async fn respond(&mut self, response: messages::response::Response, id: u32) -> Result<()> {
+        let buf = self.create_response(id, response);
         self.outbound_tx.send(buf).await.unwrap();
         Ok(())
     }
@@ -131,22 +145,24 @@ where
         }
     }
 
-    fn create_request(&mut self, message: messages::request::Msg) -> Vec<u8> {
-        // messages::hdp_message::Msg::Request(messages::Request {
+    fn create_request(&mut self, message: messages::request::Msg) -> (u32, Vec<u8>) {
+        let id = self.request_index;
         let message = messages::HdpMessage {
-            id: self.request_index,
+            id,
             msg: Some(messages::hdp_message::Msg::Request(messages::Request {
                 msg: Some(message),
             })),
         };
         self.request_index += 1;
-        serialize_message(&message)
+        (id, serialize_message(&message))
     }
 
-    fn create_response(&mut self, message: messages::Response) -> Vec<u8> {
+    fn create_response(&mut self, id: u32, message: messages::response::Response) -> Vec<u8> {
         let message = messages::HdpMessage {
-            id: self.request_index,
-            msg: Some(messages::hdp_message::Msg::Response(message)),
+            id,
+            msg: Some(messages::hdp_message::Msg::Response(messages::Response {
+                response: Some(message),
+            })),
         };
         serialize_message(&message)
     }
@@ -168,7 +184,8 @@ where
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(messages::request::Msg::Handshake(_h)),
                     })) => {
-                        let message = self.create_response(create_handshake_response());
+                        let message_id = m.id;
+                        let message = self.create_response(message_id, create_handshake_response());
                         ready!(self.write_something(cx, message)).unwrap();
                         return Poll::Ready(Some(Ok(Event::HandshakeRequest)));
                     }
@@ -183,9 +200,31 @@ where
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(r),
                     })) => {
-                        println!("got {:?}", r);
+                        println!("got a request {:?}", r);
                         println!("handshaked? {}", self.handshaked);
                         return Poll::Ready(Some(Ok(Event::Request(r))));
+                    }
+                    Some(messages::hdp_message::Msg::Response(messages::Response {
+                        response: Some(r),
+                    })) => {
+                        println!("got a response {:?}", r);
+                        println!("handshaked? {}", self.handshaked);
+                        // TODO if the response is endResponse, close the channel (eg: with .drop())
+                        match self.open_requests.get(&m.id) {
+                            Some(sender) => match sender.try_send(r) {
+                                Ok(()) => {
+                                    println!("Sending response on channel");
+                                }
+                                Err(TrySendError::Full(_)) => {
+                                    // TODO if the channel is full, try to send next time
+                                }
+                                Err(TrySendError::Closed(_)) => {
+                                    unreachable!("Channel sender closed")
+                                }
+                            },
+                            None => {}
+                        }
+                        return Poll::Pending;
                     }
                     _ => {
                         return Poll::Ready(Some(Err(Error::new(
@@ -202,20 +241,18 @@ where
                 ))))
             }
             Poll::Pending => {
-                println!("ppp");
-            } // Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-              // // If the reader is pending, poll the timeout.
-              // Poll::Pending | Poll::Ready(Ok(_)) => {
-              //     // Return Pending if the timeout is pending, or an error if the
-              //     // timeout expired (i.e. returned Poll::Ready).
-              //     return Pin::new(&mut self.timeout)
-              //         .poll(cx)
-              //         .map(|()| Err(Error::new(ErrorKind::TimedOut, "Remote timed out")));
-              // }
+                // // If the reader is pending, poll the timeout.
+                // Poll::Pending | Poll::Ready(Ok(_)) => {
+                //     // Return Pending if the timeout is pending, or an error if the
+                //     // timeout expired (i.e. returned Poll::Ready).
+                //     return Pin::new(&mut self.timeout)
+                //         .poll(cx)
+                //         .map(|()| Err(Error::new(ErrorKind::TimedOut, "Remote timed out")));
+            }
         };
 
         if !self.handshaked && self.options.is_initiator {
-            let message = self.create_request(create_handshake());
+            let (_, message) = self.create_request(create_handshake());
             ready!(self.write_something(cx, message)).unwrap();
             self.handshaked = true;
             return Poll::Pending;
