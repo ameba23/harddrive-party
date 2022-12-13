@@ -12,11 +12,17 @@ repository = "https://gitlab.com/pegpeg/harddrive-party"
 async-channel = "1.7.1"
 futures-lite = "1.12.0"
 prost = "0.11.2"
+async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
+async-stream = "0.3.3"
+futures-util = "0.3.25"
+futures = "0.3.25"
+async-walkdir = "0.2.0"
+sled = "0.34.7"
 
 [dev-dependencies]
 sluice = "0.5.5"
-async-std = { version = "1.9.0", features = ["attributes", "unstable"] }
 anyhow = "1.0.28"
+tempfile = "3.3.0"
 
 [build-dependencies]
 prost-build = "0.11.2"
