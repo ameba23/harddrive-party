@@ -5,8 +5,10 @@ pub mod messages {
     include!(concat!(env!("OUT_DIR"), "/harddriveparty.messages.rs"));
 }
 
+pub mod fs;
 pub mod protocol;
 pub mod rpc;
+pub mod shares;
 
 pub fn serialize_message(message: &messages::HdpMessage) -> Vec<u8> {
     let mut buf = Vec::new();
