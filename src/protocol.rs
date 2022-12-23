@@ -4,7 +4,6 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::Stream;
 use std::collections::HashMap;
-use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use thiserror::Error;
@@ -116,12 +115,12 @@ where
         buf: Vec<u8>,
     ) -> Poll<Result<(), SendError>> {
         // println!("Writing {} bytes", buf.len());
-        ready!(Pin::new(&mut self.io).poll_write(cx, &buf))?;
+        ready!(Pin::new(&mut self.io).poll_write(cx, &buf)).map_err(|_| SendError::WriteError)?;
         Poll::Ready(Ok(()))
     }
 
     /// Poll for outbound messages and write them.
-    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<(), SendError> {
+    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<(), PeerConnectionError> {
         loop {
             // if let Poll::Ready(Err(e)) = self.write_state.poll_send(cx, &mut self.io) {
             //     return Err(e);
@@ -168,7 +167,7 @@ impl<IO> Stream for Protocol<IO>
 where
     IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    type Item = Result<Event, SendError>;
+    type Item = Result<Event, PeerConnectionError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE as usize];
 
@@ -226,18 +225,13 @@ where
                         return Poll::Pending;
                     }
                     _ => {
-                        return Poll::Ready(Some(Err(Error::new(
-                            ErrorKind::Other,
-                            format!("Got unkown message type {:?}", m.msg),
-                        ))));
+                        return Poll::Ready(Some(Err(PeerConnectionError::BadMessageError)));
                     }
                 }
             }
             Poll::Ready(Err(_e)) => {
-                return Poll::Ready(Some(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "e",
-                ))))
+                // TODO pass the error through
+                return Poll::Ready(Some(Err(PeerConnectionError::ConnectionError)));
             }
             Poll::Pending => {
                 // // If the reader is pending, poll the timeout.
@@ -266,17 +260,22 @@ where
     }
 }
 
+/// Error when communicating with peer
+#[derive(Error, Debug)]
+pub enum PeerConnectionError {
+    // #[error(transparent)]
+    // IOError(#[from] std::io::Error),
+    #[error("Connection error")]
+    ConnectionError,
+    #[error("Failed to handle message from peer")]
+    BadMessageError,
+}
+
 /// Error when making a request or response
 #[derive(Error, Debug)]
 pub enum SendError {
     #[error(transparent)]
-    IOError(#[from] async_channel::SendError<Vec<u8>>),
-    // #[error("Cannot parse OsString")]
-    // OsStringError(),
-    // #[error("Unable to merge db record")]
-    // DbMergeError(#[from] sled::Error),
-    // #[error("Cannot get parent of given dir")]
-    // GetParentError,
-    // #[error("Got entry which does not appear to be a child of the given directory")]
-    // PrefixError(#[from] std::path::StripPrefixError),
+    ChannelWriteError(#[from] async_channel::SendError<Vec<u8>>),
+    #[error("Error writing")]
+    WriteError,
 }

@@ -37,7 +37,7 @@ where
     pub async fn handle_peer(&mut self, peer_stream: IO, is_initiator: bool) {
         let mut peer_connection = Protocol::new(peer_stream, Options::new(is_initiator));
         let peers = self.peers.clone();
-        peers.push(peer_connection);
+        // peers.push(peer_connection);
         // TODO we need a channel pair to send requests to / get responses from the rpc
         //
         {
