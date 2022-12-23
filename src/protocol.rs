@@ -1,8 +1,9 @@
-use crate::{deserialize_message, messages, serialize_message};
+use crate::messages;
 use async_channel::{Receiver, Sender, TrySendError};
 use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::Stream;
+use prost::Message;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -113,9 +114,9 @@ where
         &mut self,
         cx: &mut Context<'_>,
         buf: Vec<u8>,
-    ) -> Poll<Result<(), SendError>> {
+    ) -> Poll<Result<(), PeerConnectionError>> {
         // println!("Writing {} bytes", buf.len());
-        ready!(Pin::new(&mut self.io).poll_write(cx, &buf)).map_err(|_| SendError::WriteError)?;
+        ready!(Pin::new(&mut self.io).poll_write(cx, &buf))?;
         Poll::Ready(Ok(()))
     }
 
@@ -174,14 +175,14 @@ where
         match &Pin::new(&mut self.io).poll_read(cx, &mut buf) {
             Poll::Ready(Ok(n)) => {
                 let message_buf = &buf[0..*n];
-                let m = deserialize_message(message_buf).unwrap();
+                let m = deserialize_message(message_buf)?;
                 match m.msg {
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(messages::request::Msg::Handshake(_h)),
                     })) => {
                         let message_id = m.id;
                         let message = self.create_response(message_id, create_handshake_response());
-                        ready!(self.write_something(cx, message)).unwrap();
+                        ready!(self.write_something(cx, message))?;
                         return Poll::Ready(Some(Ok(Event::HandshakeRequest)));
                     }
                     Some(messages::hdp_message::Msg::Response(messages::Response {
@@ -246,7 +247,7 @@ where
 
         if !self.handshaked && self.options.is_initiator {
             let (_, message) = self.create_request(create_handshake());
-            ready!(self.write_something(cx, message)).unwrap();
+            ready!(self.write_something(cx, message))?;
             self.handshaked = true;
             return Poll::Pending;
             // return Poll::Ready(Some(Ok(String::from("Initiating handshake"))));
@@ -260,15 +261,30 @@ where
     }
 }
 
+fn serialize_message(message: &messages::HdpMessage) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.reserve(message.encoded_len());
+    // Unwrap is safe, since we have reserved sufficient capacity in the vector.
+    message.encode(&mut buf).unwrap();
+    buf
+}
+
+fn deserialize_message(buf: &[u8]) -> Result<messages::HdpMessage, prost::DecodeError> {
+    // messages::HdpMessage::decode(&mut Cursor::new(buf))
+    messages::HdpMessage::decode(buf)
+}
+
 /// Error when communicating with peer
 #[derive(Error, Debug)]
 pub enum PeerConnectionError {
-    // #[error(transparent)]
-    // IOError(#[from] std::io::Error),
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
     #[error("Connection error")]
     ConnectionError,
     #[error("Failed to handle message from peer")]
     BadMessageError,
+    #[error(transparent)]
+    DeserializationError(#[from] prost::DecodeError),
 }
 
 /// Error when making a request or response
