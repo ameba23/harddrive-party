@@ -8,6 +8,7 @@ pub mod messages {
 pub mod fs;
 pub mod protocol;
 pub mod rpc;
+pub mod run;
 pub mod shares;
 
 pub fn serialize_message(message: &messages::HdpMessage) -> Vec<u8> {

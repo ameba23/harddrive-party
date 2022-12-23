@@ -1,99 +1,53 @@
 use crate::fs::ReadStream;
 use crate::messages::{request, response};
-use futures_lite::stream::{self, StreamExt};
+use crate::shares::Shares;
 use futures_lite::Stream;
 // use std::collections::VecDeque;
 use async_std::fs;
-use std::io::Error;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
-// pub struct Command {
-//     req: messages::request::Msg,
-//     sender: Sender<messages::response::Response>,
-// }
-
-pub enum InnerResponseStream {
-    Ls(stream::Iter<std::vec::IntoIter<response::Response>>),
-    Read(ReadStream),
-}
-
-pub struct ResponseStream {
-    inner: InnerResponseStream,
-}
-
-impl ResponseStream {
-    pub fn new(inner: InnerResponseStream) -> Self {
-        ResponseStream { inner }
-    }
-
-    pub fn new_from_ls(inner: stream::Iter<std::vec::IntoIter<response::Response>>) -> Self {
-        ResponseStream {
-            inner: InnerResponseStream::Ls(inner),
-        }
-    }
-    pub fn new_from_read(inner: ReadStream) -> Self {
-        ResponseStream {
-            inner: InnerResponseStream::Read(inner),
-        }
-    }
-}
-
-impl Stream for ResponseStream {
-    type Item = response::Response;
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        ctx: &mut Context<'_>,
-    ) -> Poll<Option<<Self as Stream>::Item>> {
-        match self.inner {
-            InnerResponseStream::Ls(ref mut i) => i.poll_next(ctx),
-            InnerResponseStream::Read(ref mut i) => i.poll_next(ctx),
-        }
-    }
-}
-
+/// Remote Procedure Call - process remote requests (or requests from ourself to query our own
+/// share index)
 pub struct Rpc {
+    shares: Shares,
     // command_queue: VecDeque<Command>,
 }
 
 impl Rpc {
-    pub fn new() -> Rpc {
+    pub fn new(shares: Shares) -> Rpc {
         Rpc {
+            shares,
             // command_queue: VecDeque::new(),
         }
     }
 
+    /// Query the filepath index
     async fn ls(
         &mut self,
-        _path: Option<String>,
-        _searchterm: Option<String>,
-        _recursive: Option<bool>,
-    ) -> ResponseStream {
-        let entry = response::ls::Entry {
-            name: String::from("somefile"),
-            size: 1000,
-            is_dir: false,
-        };
-        let response = response::Response::Success(response::Success {
-            msg: Some(response::success::Msg::Ls(response::Ls {
-                entries: vec![entry],
-            })),
-        });
-        ResponseStream::new_from_ls(stream::iter(vec![response]))
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: Option<bool>,
+    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
+        self.shares.query(path, searchterm, recursive).unwrap()
     }
 
+    /// Read a file, or a section of a file
     async fn read(
         &mut self,
         path: String,
         _start: Option<u64>,
         _end: Option<u64>,
-    ) -> ResponseStream {
+    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
+        // TODO convert path using share index
+        // let resolved_path = self.shares.resolve_path(path).unwrap();
         let file = fs::File::open(path).await.unwrap();
-        let rs = ReadStream::new(file, Some(5), None).await.unwrap();
-        ResponseStream::new_from_read(rs)
+        // TODO pass actual start parameter
+        Box::new(ReadStream::new(file, Some(5), None).await.unwrap())
     }
 
-    pub async fn request(&mut self, req: request::Msg) -> ResponseStream {
+    pub async fn request(
+        &mut self,
+        req: request::Msg,
+    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
         match req {
             request::Msg::Ls(request::Ls {
                 path,
@@ -111,44 +65,51 @@ impl Rpc {
         // // self.ls(None, None, None, tx);
         // rx
     }
+
+    // pub fn run(&mut self, requests_rx: Reciever<PeerRequest>) -> Sender<PeerResponse> {}
 }
 
-fn create_error_stream(_err: Error) -> ResponseStream {
-    let response = response::Response::Err(1);
-    ResponseStream::new_from_ls(stream::iter(vec![response]))
-}
+// fn create_error_stream(_err: Error) -> ResponseStream {
+//     let response = response::Response::Err(1);
+//     ResponseStream::new_from_ls(stream::iter(vec![response]))
+// }
+
+// pub struct Command {
+//     req: messages::request::Msg,
+//     sender: Sender<messages::response::Response>,
+// }
 
 // poll poll_next
 // for each active command, call poll_next
 // on finishing a command, make the next one on the queue active
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[async_std::test]
-    async fn ls() {
-        let mut r = Rpc::new();
-
-        let req = request::Msg::Ls(request::Ls {
-            path: None,
-            searchterm: None,
-            recursive: None,
-        });
-        let mut s = r.request(req).await;
-        println!("Ls response {:?}", s.next().await);
-    }
-
-    #[async_std::test]
-    async fn read() {
-        let mut r = Rpc::new();
-
-        let req = request::Msg::Read(request::Read {
-            path: "Cargo.toml".to_string(),
-            start: None,
-            end: None,
-        });
-        let mut s = r.request(req).await;
-        println!(" Read response {:?}", s.next().await);
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//
+//     #[async_std::test]
+//     async fn ls() {
+//         let mut r = Rpc::new();
+//
+//         let req = request::Msg::Ls(request::Ls {
+//             path: None,
+//             searchterm: None,
+//             recursive: None,
+//         });
+//         let mut s = r.request(req).await;
+//         println!("Ls response {:?}", s.next().await);
+//     }
+//
+//     #[async_std::test]
+//     async fn read() {
+//         let mut r = Rpc::new();
+//
+//         let req = request::Msg::Read(request::Read {
+//             path: "Cargo.toml".to_string(),
+//             start: None,
+//             end: None,
+//         });
+//         let mut s = r.request(req).await;
+//         println!(" Read response {:?}", s.next().await);
+//     }
+// }

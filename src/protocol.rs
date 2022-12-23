@@ -4,13 +4,15 @@ use futures_lite::io::{AsyncRead, AsyncWrite};
 use futures_lite::ready;
 use futures_lite::stream::Stream;
 use std::collections::HashMap;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind};
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use thiserror::Error;
 
 // TODO timeout
 // TODO do we need a length prefix?
 
+// This is a mock handshake implementation
 pub fn create_handshake() -> messages::request::Msg {
     // TODO token should be random 32 bytes
     messages::request::Msg::Handshake(messages::request::Handshake {
@@ -83,34 +85,43 @@ where
         }
     }
 
-    fn write_something(&mut self, cx: &mut Context<'_>, buf: Vec<u8>) -> Poll<Result<()>> {
-        println!("Writing {} bytes", buf.len());
-        ready!(Pin::new(&mut self.io).poll_write(cx, &buf))?;
-        Poll::Ready(Ok(()))
-    }
-
-    // TODO error handle
+    /// Send a request and return a Receiver for the responses
     pub async fn request(
         &mut self,
         request: messages::request::Msg,
-    ) -> Result<Receiver<messages::response::Response>> {
+    ) -> Result<Receiver<messages::response::Response>, SendError> {
+        // TODO error handle
         let (id, buf) = self.create_request(request);
-        self.outbound_tx.send(buf).await.unwrap();
+        self.outbound_tx.send(buf).await?;
         let (tx, rx) = async_channel::unbounded();
         self.open_requests.insert(id, tx);
         Ok(rx)
     }
 
-    // TODO error handle
-    pub async fn respond(&mut self, response: messages::response::Response, id: u32) -> Result<()> {
+    /// Send a single response message relating to the given response id
+    pub async fn respond(
+        &mut self,
+        response: messages::response::Response,
+        id: u32,
+    ) -> Result<(), SendError> {
+        // TODO error handle
         let buf = self.create_response(id, response);
-        self.outbound_tx.send(buf).await.unwrap();
-        println!("Sending resonse");
+        self.outbound_tx.send(buf).await?;
         Ok(())
     }
 
+    fn write_something(
+        &mut self,
+        cx: &mut Context<'_>,
+        buf: Vec<u8>,
+    ) -> Poll<Result<(), SendError>> {
+        // println!("Writing {} bytes", buf.len());
+        ready!(Pin::new(&mut self.io).poll_write(cx, &buf))?;
+        Poll::Ready(Ok(()))
+    }
+
     /// Poll for outbound messages and write them.
-    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<()> {
+    fn poll_outbound_write(&mut self, cx: &mut Context<'_>) -> Result<(), SendError> {
         loop {
             // if let Poll::Ready(Err(e)) = self.write_state.poll_send(cx, &mut self.io) {
             //     return Err(e);
@@ -141,6 +152,7 @@ where
         self.request_index += 1;
         (id, serialize_message(&message))
     }
+
     fn create_response(&mut self, id: u32, message: messages::response::Response) -> Vec<u8> {
         let message = messages::HdpMessage {
             id,
@@ -156,14 +168,14 @@ impl<IO> Stream for Protocol<IO>
 where
     IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
-    type Item = Result<Event>;
+    type Item = Result<Event, SendError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE as usize];
 
         match &Pin::new(&mut self.io).poll_read(cx, &mut buf) {
             Poll::Ready(Ok(n)) => {
                 let message_buf = &buf[0..*n];
-                let m = deserialize_message(message_buf)?;
+                let m = deserialize_message(message_buf).unwrap();
                 match m.msg {
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(messages::request::Msg::Handshake(_h)),
@@ -252,4 +264,19 @@ where
 
         Poll::Pending
     }
+}
+
+/// Error when making a request or response
+#[derive(Error, Debug)]
+pub enum SendError {
+    #[error(transparent)]
+    IOError(#[from] async_channel::SendError<Vec<u8>>),
+    // #[error("Cannot parse OsString")]
+    // OsStringError(),
+    // #[error("Unable to merge db record")]
+    // DbMergeError(#[from] sled::Error),
+    // #[error("Cannot get parent of given dir")]
+    // GetParentError,
+    // #[error("Got entry which does not appear to be a child of the given directory")]
+    // PrefixError(#[from] std::path::StripPrefixError),
 }

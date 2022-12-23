@@ -19,6 +19,8 @@ futures = "0.3.25"
 async-walkdir = "0.2.0"
 sled = "0.34.7"
 thiserror = "1.0.37"
+pretty-bytes-rust = "0.1.0"
+itertools = "0.10.5"
 
 [dev-dependencies]
 sluice = "0.5.5"
