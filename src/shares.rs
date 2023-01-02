@@ -205,7 +205,10 @@ impl Iterator for Chunker {
                 return Some(entries);
             }
         }
-        None
+        match entries.len() {
+            0 => None,
+            _ => Some(entries),
+        }
     }
 }
 
@@ -272,39 +275,108 @@ mod tests {
     use async_std::task;
     use tempfile::TempDir;
 
-    // TODO use standard test directory
+    fn create_test_entries() -> Vec<response::ls::Entry> {
+        vec![
+            response::ls::Entry {
+                name: "".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data/subdir".to_string(),
+                size: 12,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data/subdir/subsubdir".to_string(),
+                size: 6,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data/somefile".to_string(),
+                size: 5,
+                is_dir: false,
+            },
+            response::ls::Entry {
+                name: "test-data/subdir/anotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+            response::ls::Entry {
+                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+        ]
+    }
 
     #[async_std::test]
     async fn share_query() {
         let storage = TempDir::new().unwrap();
         let mut shares = Shares::new(storage).await.unwrap();
-        let added = shares.scan("/home/turnip/Hipax").await.unwrap();
-        println!("added {}", added);
+        let added = shares.scan("tests/test-data").await.unwrap();
+        assert_eq!(added, 3);
 
+        let mut test_entries = create_test_entries();
         let mut responses = Box::into_pin(shares.query(None, None, None).unwrap());
         while let Some(res) = responses.next().await {
-            println!("Shareq {:?}", res);
+            match res {
+                Response::Success(Success {
+                    msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                }) => {
+                    for entry in entries {
+                        let i = test_entries.iter().position(|e| e == &entry).unwrap();
+                        test_entries.remove(i);
+                    }
+                }
+                Response::Err(code) => {
+                    panic!("Got error response {}", code);
+                }
+                _ => {}
+            }
         }
+        // Make sure we found every entry
+        assert_eq!(test_entries.len(), 0);
 
         let resolved = shares
-            .resolve_path("Hipax/df/aslkjdsal.asds".to_string())
+            .resolve_path("test-data/df/aslkjdsal.asds".to_string())
             .unwrap();
-        assert_eq!(
-            resolved,
-            PathBuf::from("/home/turnip/Hipax/df/aslkjdsal.asds")
-        );
+        assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
     }
 
     #[async_std::test]
     async fn query_from_thread() {
         let storage = TempDir::new().unwrap();
         let mut shares = Shares::new(storage).await.unwrap();
-        shares.scan("/home/turnip/Hipax").await.unwrap();
+        shares.scan("tests/test-data").await.unwrap();
+
         task::spawn(async move {
+            let mut test_entries = create_test_entries();
             let mut responses = Box::into_pin(shares.query(None, None, None).unwrap());
+
             while let Some(res) = responses.next().await {
-                println!("Shareq {:?}", res);
+                match res {
+                    Response::Success(Success {
+                        msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                    }) => {
+                        for entry in entries {
+                            let i = test_entries.iter().position(|e| e == &entry).unwrap();
+                            test_entries.remove(i);
+                        }
+                    }
+                    Response::Err(code) => {
+                        panic!("Got error response {}", code);
+                    }
+                    _ => {}
+                }
             }
+            // Make sure we found every entry
+            assert_eq!(test_entries.len(), 0);
         });
     }
 }
