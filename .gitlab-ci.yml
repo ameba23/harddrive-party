@@ -1,4 +1,4 @@
-image: "rust:alpine"
+image: "rust:buster"
 
 default:
   before_script:
