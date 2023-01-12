@@ -46,12 +46,13 @@ impl Options {
 pub struct Protocol<IO> {
     io: IO,
     options: Options,
-    // pub handshaked: bool,
     outbound_rx: Receiver<Vec<u8>>,
     outbound_tx: Sender<Vec<u8>>,
     pub request_index: u32,
     open_requests: HashMap<u32, Sender<messages::response::Response>>,
+    /// Used for FusedStream trait
     is_terminated: bool,
+    /// The remote peer's public key. This is only present after handshaking
     pub remote_pk: Option<[u8; 32]>,
 }
 
@@ -81,7 +82,7 @@ where
         &mut self,
         request: crate::run::OutGoingPeerRequest,
     ) -> Result<(), SendError> {
-        info!("Making reqest {:?} {}", request, self.options.is_initiator);
+        info!("Making request {:?} {}", request, self.options.is_initiator);
         let (id, buf) = self.create_request(request.message);
         self.outbound_tx.send(buf).await?;
         self.open_requests.insert(id, request.response_tx);
@@ -100,7 +101,7 @@ where
         Ok(())
     }
 
-    fn write_something(
+    fn write_bytes(
         &mut self,
         cx: &mut Context<'_>,
         buf: Vec<u8>,
@@ -121,7 +122,7 @@ where
             // }
 
             match Pin::new(&mut self.outbound_rx).poll_next(cx) {
-                Poll::Ready(Some(message)) => match self.write_something(cx, message) {
+                Poll::Ready(Some(message)) => match self.write_bytes(cx, message) {
                     Poll::Ready(_) => {}
                     Poll::Pending => return Ok(()),
                 },
@@ -177,7 +178,7 @@ where
                         // TODO replace with real handshake implementation
                         let pk = self.options.public_key;
                         let res = self.create_response(m.id, create_handshake_response(pk));
-                        ready!(self.write_something(cx, res))?;
+                        ready!(self.write_bytes(cx, res))?;
 
                         // TODO reject the handshake if this unwrap fails
                         self.remote_pk = Some(handshake_request.token.try_into().unwrap());
@@ -287,7 +288,7 @@ where
         if self.remote_pk.is_none() && self.options.is_initiator {
             let pk = self.options.public_key;
             let (_, message) = self.create_request(create_handshake(pk));
-            ready!(self.write_something(cx, message))?;
+            ready!(self.write_bytes(cx, message))?;
             return Poll::Pending;
         }
 

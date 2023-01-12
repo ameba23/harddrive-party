@@ -1,7 +1,9 @@
 mod _duplex;
 use _duplex::Duplex;
-use harddrive_party::{messages::response::ls::Entry, run::Run};
+use _testdata::create_test_entries;
+use harddrive_party::run::Run;
 use tempfile::TempDir;
+mod _testdata;
 
 #[async_std::test]
 async fn run() {
@@ -28,44 +30,7 @@ async fn run() {
         peer_a.run().await;
     });
     let entries = peer_b.request_all().await;
-    assert_eq!(
-        entries,
-        vec![
-            Entry {
-                name: "".to_string(),
-                size: 17,
-                is_dir: true
-            },
-            Entry {
-                name: "test-data".to_string(),
-                size: 17,
-                is_dir: true
-            },
-            Entry {
-                name: "test-data/subdir".to_string(),
-                size: 12,
-                is_dir: true
-            },
-            Entry {
-                name: "test-data/subdir/subsubdir".to_string(),
-                size: 6,
-                is_dir: true
-            },
-            Entry {
-                name: "test-data/somefile".to_string(),
-                size: 5,
-                is_dir: false
-            },
-            Entry {
-                name: "test-data/subdir/anotherfile".to_string(),
-                size: 6,
-                is_dir: false
-            },
-            Entry {
-                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
-                size: 6,
-                is_dir: false
-            }
-        ]
-    )
+    assert_eq!(entries, create_test_entries());
+    let file_contents = peer_b.read_file("test-data/somefile").await;
+    assert_eq!(file_contents, "boop\n");
 }

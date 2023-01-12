@@ -1,11 +1,6 @@
 use crate::messages::response;
 use async_std::{fs, io::Read};
-// use futures_lite::AsyncReadExt;
-// use futures_lite::AsyncSeekExt;
-use futures::future::FutureExt;
-use futures::{AsyncReadExt, AsyncSeekExt, Stream, StreamExt};
-// use futures_lite::FutureExt;
-// use futures_lite::StreamExt;
+use futures::{AsyncSeekExt, Stream};
 use std::io::Result;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -59,6 +54,8 @@ impl Stream for ReadStream {
 
 #[cfg(test)]
 mod tests {
+    use futures::StreamExt;
+
     use super::*;
 
     #[async_std::test]

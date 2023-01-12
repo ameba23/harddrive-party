@@ -79,7 +79,7 @@ impl Rpc {
     }
 
     pub async fn run(&mut self, mut requests_rx: Receiver<PeerRequest>) {
-        if let Some(peer_request) = requests_rx.next().await {
+        while let Some(peer_request) = requests_rx.next().await {
             let mut responses = Box::into_pin(self.request(peer_request.message).await);
             while let Some(res) = responses.next().await {
                 info!("*** response");

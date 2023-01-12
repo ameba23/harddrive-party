@@ -1,25 +1,27 @@
-use crate::messages::response::ls::Entry;
-use crate::messages::response::{self, Success};
+use crate::messages::{
+    request,
+    response::{self, ls::Entry, Success},
+};
 use crate::protocol::{Event, Options, Protocol};
 use crate::rpc::Rpc;
-use crate::shares::Shares;
+use crate::shares::{CreateSharesError, Shares};
 use async_channel::{Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::select;
 use futures::StreamExt;
-use log::info;
+use log::{info, warn};
 use rand::Rng;
 use std::path::Path;
 
 #[derive(Debug)]
 pub struct OutGoingPeerRequest {
-    pub message: crate::messages::request::Msg,
-    pub response_tx: Sender<crate::messages::response::Response>,
+    pub message: request::Msg,
+    pub response_tx: Sender<response::Response>,
 }
 
 pub struct PeerRequest {
-    pub message: crate::messages::request::Msg,
+    pub message: request::Msg,
     pub id: u32,
     // peer_id: String,
     pub response_tx: Sender<PeerResponse>,
@@ -27,7 +29,7 @@ pub struct PeerRequest {
 
 pub struct PeerResponse {
     pub id: u32,
-    pub message: crate::messages::response::Response,
+    pub message: response::Response,
 }
 
 pub trait AsyncReadAndWrite: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
@@ -41,7 +43,7 @@ pub struct Run {
 }
 
 impl Run {
-    pub async fn new(storage: impl AsRef<Path>) -> Result<Self, crate::shares::CreateSharesError> {
+    pub async fn new(storage: impl AsRef<Path>) -> Result<Self, CreateSharesError> {
         // TODO this will be replaced by a noise public key
         let mut rng = rand::thread_rng();
         let public_key = rng.gen();
@@ -79,7 +81,6 @@ impl Run {
         ) = async_channel::unbounded();
         self.peers.push(requests_from_us_tx);
         task::spawn(async move {
-            // let peer_connection = peer_connection.fuse();
             let mut response_rx = response_rx.fuse();
             let mut requests_from_us_rx = requests_from_us_rx.fuse();
 
@@ -93,15 +94,19 @@ impl Run {
                         match next_event {
                             Some(Ok(Event::Request(message, id))) => {
                                 info!("got request {:?} {}", message, id);
-                                requests_to_us_tx
+                                match requests_to_us_tx
                                     .send(PeerRequest {
                                         message,
                                         id,
                                         response_tx: response_tx.clone(),
                                         // peer_id: "TODO".to_string(),
                                     })
-                                .await
-                                .unwrap();
+                                    .await {
+                                        Ok(()) => {},
+                                        Err(e) => {
+                                            warn!("Error {}",e);
+                                        }
+                                    }
                             },
                             // Some(Ok(Event::Response(r))) => {
                             //     info!("processing response {:?}", r);
@@ -118,7 +123,10 @@ impl Run {
                                     .await
                                     .unwrap();
                                 },
-                            None => {},
+                            None => {
+                                warn!("got none on response channel");
+                            },
+
                         }
                     },
                     next_req = requests_from_us_rx.next() => {
@@ -127,7 +135,9 @@ impl Run {
                             Some(next_req) => {
                                 peer_connection.request(next_req).await.unwrap();
                             },
-                            None => {},
+                            None => {
+                                warn!("got none on own requests channel!");
+                            },
                         }
                     },
                 }
@@ -135,13 +145,13 @@ impl Run {
         })
     }
 
-    pub async fn request_all(self) -> Vec<Entry> {
+    pub async fn request_all(&self) -> Vec<Entry> {
         let mut ls_entries = Vec::new();
         for peer in self.peers.iter() {
             let (response_tx, mut response_rx) = async_channel::unbounded();
             peer.send(OutGoingPeerRequest {
                 response_tx,
-                message: crate::messages::request::Msg::Ls(crate::messages::request::Ls {
+                message: request::Msg::Ls(request::Ls {
                     path: None,
                     searchterm: None,
                     recursive: None,
@@ -151,7 +161,7 @@ impl Run {
             .unwrap();
             while let Some(res) = response_rx.next().await {
                 // TODO if we get an error, return it
-                if let crate::messages::response::Response::Success(Success {
+                if let response::Response::Success(Success {
                     msg: Some(response::success::Msg::Ls(response::Ls { entries })),
                 }) = res
                 {
@@ -162,6 +172,39 @@ impl Run {
             }
         }
         ls_entries
+    }
+
+    pub async fn read_file(&self, path: &str) -> String {
+        let mut output = Vec::new();
+        if let Some(first_peer) = self.peers.iter().next() {
+            let (response_tx, mut response_rx) = async_channel::unbounded();
+            first_peer
+                .send(OutGoingPeerRequest {
+                    response_tx,
+                    message: request::Msg::Read(request::Read {
+                        start: None,
+                        end: None,
+                        path: path.to_string(),
+                    }),
+                })
+                .await
+                .unwrap();
+
+            while let Some(res) = response_rx.next().await {
+                // TODO if we get an error, return it
+                match res {
+                    response::Response::Success(Success {
+                        msg: Some(response::success::Msg::Read(response::Read { mut data })),
+                    }) => {
+                        output.append(&mut data);
+                    }
+                    thing => {
+                        warn!("thing {:?}", thing);
+                    }
+                }
+            }
+        };
+        String::from_utf8(output).unwrap()
     }
 
     // pub async fn request(&mut self, peer_id: &str, request: Request) {
