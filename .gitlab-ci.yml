@@ -1,4 +1,4 @@
-image: "rust:latest-apline"
+image: "rust:latest-alpine"
 
 default:
   before_script:
