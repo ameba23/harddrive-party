@@ -15,6 +15,7 @@ message HdpMessage {
 message Request {
   message Handshake {
     required bytes token = 1;
+    // TODO make this required
     optional string version = 2;
   }
 
@@ -40,6 +41,7 @@ message Request {
 message Response {
   message Handshake {
     required bytes token = 1;
+    // TODO make this required
     optional string version = 2;
   }
 

@@ -1,4 +1,5 @@
-use futures_lite::{AsyncRead, AsyncWrite};
+use futures::io::{AsyncRead, AsyncWrite};
+use harddrive_party::run::AsyncReadAndWrite;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -26,6 +27,13 @@ where
     pub fn new(reader: R, writer: W) -> Self {
         Self { reader, writer }
     }
+}
+
+impl<R, W> AsyncReadAndWrite for Duplex<R, W>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
 }
 
 impl<R, W> AsyncRead for Duplex<R, W>

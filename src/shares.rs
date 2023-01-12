@@ -2,8 +2,9 @@ use crate::messages::response;
 use crate::messages::response::ls::Entry;
 use crate::messages::response::{Response, Success};
 use async_walkdir::WalkDir;
-use futures_lite::stream::StreamExt;
-use futures_lite::Stream;
+use futures::stream::StreamExt;
+use futures::{stream, Stream};
+use log::{info, warn};
 use sled::IVec;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -52,14 +53,12 @@ impl Shares {
         let path_clone = path.clone();
         let share_name = path_clone
             .file_name()
-            .ok_or_else(|| ScanDirError::GetParentError)?
+            .ok_or(ScanDirError::GetParentError)?
             .to_str()
-            .ok_or_else(|| ScanDirError::OsStringError())?;
+            .ok_or(ScanDirError::OsStringError())?;
 
         let path_os_str = path.clone().into_os_string();
-        let path_str = path_os_str
-            .to_str()
-            .ok_or_else(|| ScanDirError::OsStringError())?;
+        let path_str = path_os_str.to_str().ok_or(ScanDirError::OsStringError())?;
         self.share_names.insert(share_name, path_str)?;
 
         let mut entries = WalkDir::new(path);
@@ -71,34 +70,34 @@ impl Shares {
                         // Remove the 'path' portion of the entry, and join it with share_name
                         let ep = entry.path();
                         let entry_path = ep.strip_prefix(pc)?;
-                        let sn = pc.file_name().ok_or_else(|| ScanDirError::GetParentError)?;
+                        let sn = pc.file_name().ok_or(ScanDirError::GetParentError)?;
                         let entry_path_with_share_name = Path::new(sn).join(entry_path);
                         let filepath = entry_path_with_share_name
                             .to_str()
-                            .ok_or_else(|| ScanDirError::OsStringError())?;
+                            .ok_or(ScanDirError::OsStringError())?;
 
                         let size = metadata.len().to_le_bytes();
 
                         // For each component of the path, add the size into the directory sizes index
                         for sub_path in entry_path_with_share_name
                             .parent()
-                            .ok_or_else(|| ScanDirError::GetParentError)?
+                            .ok_or(ScanDirError::GetParentError)?
                             .ancestors()
                         {
                             let sub_path_bytes = sub_path
                                 .to_str()
-                                .ok_or_else(|| ScanDirError::OsStringError())?
+                                .ok_or(ScanDirError::OsStringError())?
                                 .as_bytes();
                             self.dirs.merge(sub_path_bytes, size)?;
                         }
 
                         self.files.insert(filepath.as_bytes(), &size)?;
-                        println!("{:?} {:?}", entry.path(), entry.metadata().await?.is_file());
+                        info!("{:?} {:?}", entry.path(), entry.metadata().await?.is_file());
                         added_entries += 1;
                     }
                 }
                 Some(Err(e)) => {
-                    eprintln!("Error {}", e);
+                    warn!("Error {}", e);
                     break;
                 }
                 None => break,
@@ -111,10 +110,16 @@ impl Shares {
     pub fn query(
         &self,
         path_option: Option<String>,
-        _searchterm: Option<String>,
-        _recursive: Option<bool>,
+        _searchterm: Option<String>, // TODO
+        _recursive: Option<bool>,    // TODO
     ) -> Result<Box<dyn Stream<Item = Response> + Send + '_>, EntryParseError> {
-        let path = path_option.unwrap_or("".to_string());
+        let path = path_option.unwrap_or_else(|| "".to_string());
+
+        // Check that the given subdir exists
+        if let Ok(None) = self.dirs.get(&path) {
+            return Err(EntryParseError::PathNotFound);
+        }
+
         let dirs_iter = self
             .dirs
             .scan_prefix(&path)
@@ -133,12 +138,11 @@ impl Shares {
         };
 
         let response_iter = chunked.map(|entries| {
-            let response = Response::Success(Success {
+            Response::Success(Success {
                 msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-            });
-            response
+            })
         });
-        let is = futures_lite::stream::iter(response_iter);
+        let is = stream::iter(response_iter);
         Ok(Box::new(is))
     }
 
@@ -199,7 +203,7 @@ impl Iterator for Chunker {
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut entries = Vec::new();
-        while let Some(e) = self.inner.next() {
+        for e in self.inner.by_ref() {
             entries.push(e);
             if entries.len() == self.chunk_size {
                 return Some(entries);
@@ -254,6 +258,8 @@ pub enum EntryParseError {
     Utf8Error(#[from] std::str::Utf8Error),
     #[error("Error converting database value to u64")]
     U64ConversionError(),
+    #[error("Path not found")]
+    PathNotFound,
 }
 
 /// Error when resolving a path from a request
