@@ -4,7 +4,7 @@ default:
   before_script:
     - rustc --version
     - cargo --version
-    - apt install -y protobuf-compiler
+    - apt-get install protobuf-compiler
     # - apk add protoc
 
 stages:
