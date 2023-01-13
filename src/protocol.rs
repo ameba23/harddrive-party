@@ -161,7 +161,7 @@ where
 {
     type Item = Result<Event, PeerConnectionError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE as usize];
+        let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE];
         info!("poll next called {}", self.options.is_initiator);
         match &Pin::new(&mut self.io).poll_read(cx, &mut buf) {
             Poll::Ready(Ok(n)) => {

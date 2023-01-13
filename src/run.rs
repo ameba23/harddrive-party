@@ -1,10 +1,13 @@
-use crate::messages::{
-    request,
-    response::{self, ls::Entry, Success},
-};
 use crate::protocol::{Event, Options, Protocol};
 use crate::rpc::Rpc;
 use crate::shares::{CreateSharesError, Shares};
+use crate::{
+    messages::{
+        request,
+        response::{self, ls::Entry, Success},
+    },
+    protocol::PeerConnectionError,
+};
 use async_channel::{Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 use futures::io::{AsyncRead, AsyncWrite};
@@ -111,6 +114,12 @@ impl Run {
                             // Some(Ok(Event::Response(r))) => {
                             //     info!("processing response {:?}", r);
                             // },
+                            Some(Err(PeerConnectionError::BadMessageError)) => {
+                                warn!("Bad message from peer");
+                            },
+                            Some(Err(PeerConnectionError::ConnectionError)) => {
+                                break;
+                            },
                             _ => {}
                         }
                     },
@@ -142,6 +151,7 @@ impl Run {
                     },
                 }
             }
+            // remove peer from self.peers
         })
     }
 
@@ -176,7 +186,7 @@ impl Run {
 
     pub async fn read_file(&self, path: &str) -> String {
         let mut output = Vec::new();
-        if let Some(first_peer) = self.peers.iter().next() {
+        if let Some(first_peer) = self.peers.first() {
             let (response_tx, mut response_rx) = async_channel::unbounded();
             first_peer
                 .send(OutGoingPeerRequest {

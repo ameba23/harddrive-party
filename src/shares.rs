@@ -113,7 +113,7 @@ impl Shares {
         _searchterm: Option<String>, // TODO
         _recursive: Option<bool>,    // TODO
     ) -> Result<Box<dyn Stream<Item = Response> + Send + '_>, EntryParseError> {
-        let path = path_option.unwrap_or_else(|| "".to_string());
+        let path = path_option.unwrap_or_default();
 
         // Check that the given subdir exists
         if let Ok(None) = self.dirs.get(&path) {
