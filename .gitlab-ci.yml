@@ -5,7 +5,7 @@ default:
     - rustc --version
     - cargo --version
     - apt-get update
-    - apt-get install protobuf-compiler
+    - apt-get -y install protobuf-compiler
     # - apk add protoc
 
 stages:
