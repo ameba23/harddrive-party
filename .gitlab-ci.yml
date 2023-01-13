@@ -1,10 +1,10 @@
-image: "rust:buster"
+image: "rust:bullseye"
 
 default:
   before_script:
     - rustc --version
     - cargo --version
-    - apt-get install protobuf-compiler
+    - apt-get install protobuf
     # - apk add protoc
 
 stages:
