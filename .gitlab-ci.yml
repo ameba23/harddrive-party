@@ -4,8 +4,7 @@ default:
   before_script:
     - rustc --version
     - cargo --version
-    - apt-cache --quiet=0 search protobuf
-    - apt-get install protocol-buffers
+    - apt-get install protobuf-compiler libprotobuf-dev
     # - apk add protoc
 
 stages:
