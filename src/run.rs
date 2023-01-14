@@ -14,6 +14,7 @@ use futures::io::{AsyncRead, AsyncWrite};
 use futures::{select, StreamExt};
 use log::{info, warn};
 use rand::Rng;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug)]
@@ -37,11 +38,12 @@ pub struct PeerResponse {
 pub trait AsyncReadAndWrite: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
 pub struct Run {
-    peers: Vec<Sender<OutGoingPeerRequest>>,
+    peers: HashMap<String, Sender<OutGoingPeerRequest>>,
     pub rpc: Rpc,
     requests_to_us_tx: Sender<PeerRequest>,
     requests_to_us_rx: Receiver<PeerRequest>,
     pub public_key: [u8; 32],
+    pub name: String,
 }
 
 impl Run {
@@ -50,14 +52,14 @@ impl Run {
         let mut rng = rand::thread_rng();
         let public_key = rng.gen();
         let shares = Shares::new(storage).await?;
-        let rpc = Rpc::new(shares);
         let (requests_tx, requests_rx) = async_channel::unbounded();
         Ok(Self {
             peers: Default::default(),
-            rpc,
+            rpc: Rpc::new(shares),
             requests_to_us_tx: requests_tx,
             requests_to_us_rx: requests_rx,
             public_key,
+            name: to_hex_string(public_key),
         })
     }
 
@@ -84,7 +86,10 @@ impl Run {
             async_channel::Sender<OutGoingPeerRequest>,
             async_channel::Receiver<OutGoingPeerRequest>,
         ) = async_channel::unbounded();
-        self.peers.push(requests_from_us_tx);
+        self.peers.insert(
+            to_hex_string(peer_connection.remote_pk.unwrap()),
+            requests_from_us_tx,
+        );
         task::spawn(async move {
             let mut response_rx = response_rx.fuse();
             let mut requests_from_us_rx = requests_from_us_rx.fuse();
@@ -159,7 +164,7 @@ impl Run {
 
     pub async fn request_all(&self) -> Vec<Entry> {
         let mut ls_entries = Vec::new();
-        for peer in self.peers.iter() {
+        for (_name, peer) in self.peers.iter() {
             let (response_tx, mut response_rx) = async_channel::unbounded();
             peer.send(OutGoingPeerRequest {
                 response_tx,
@@ -188,7 +193,7 @@ impl Run {
 
     pub async fn read_file(&self, path: &str) -> String {
         let mut output = Vec::new();
-        if let Some(first_peer) = self.peers.first() {
+        if let Some(first_peer) = self.peers.values().next() {
             let (response_tx, mut response_rx) = async_channel::unbounded();
             first_peer
                 .send(OutGoingPeerRequest {
@@ -226,4 +231,9 @@ impl Run {
     pub async fn run(mut self) {
         self.rpc.run(self.requests_to_us_rx).await;
     }
+}
+
+fn to_hex_string(bytes: [u8; 32]) -> String {
+    let strs: Vec<String> = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+    strs.join("")
 }
