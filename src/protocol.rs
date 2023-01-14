@@ -2,8 +2,11 @@ use crate::messages;
 use crate::messages::response::EndResponse;
 use async_channel::{Receiver, Sender, TrySendError};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::ready;
-use futures::stream::{FusedStream, Stream};
+use futures::{
+    ready,
+    stream::{FusedStream, Stream},
+    StreamExt,
+};
 use log::{info, warn};
 use prost::Message;
 use std::collections::HashMap;
@@ -67,7 +70,6 @@ where
         Protocol {
             io,
             options,
-            // handshaked: false,
             remote_pk: None,
             outbound_tx,
             outbound_rx,
@@ -75,6 +77,13 @@ where
             open_requests: HashMap::new(),
             is_terminated: false,
         }
+    }
+
+    pub async fn with_handshake(io: IO, options: Options) -> Self {
+        let mut protocol = Protocol::new(io, options);
+        let event = protocol.next().await;
+        info!("GOt event {:?}", event);
+        protocol
     }
 
     /// Send a request and return a Receiver for the responses

@@ -4,6 +4,8 @@ use _testdata::create_test_entries;
 use harddrive_party::run::Run;
 use tempfile::TempDir;
 mod _testdata;
+// use async_std::prelude::FutureExt;
+use futures::future::join_all;
 
 #[async_std::test]
 async fn run() {
@@ -18,13 +20,12 @@ async fn run() {
     let (ar, bw) = sluice::pipe::pipe();
     let (br, aw) = sluice::pipe::pipe();
 
-    peer_a
-        .handle_peer(Box::new(Duplex::new(br, bw)), true)
-        .await;
-
-    peer_b
-        .handle_peer(Box::new(Duplex::new(ar, aw)), false)
-        .await;
+    // wait for peers to handshake
+    join_all(vec![
+        peer_a.handle_peer(Box::new(Duplex::new(br, bw)), true),
+        peer_b.handle_peer(Box::new(Duplex::new(ar, aw)), false),
+    ])
+    .await;
 
     async_std::task::spawn(async move {
         peer_a.run().await;

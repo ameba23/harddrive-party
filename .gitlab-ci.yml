@@ -17,21 +17,27 @@ test-code:
     - cargo test
     - cargo install cargo-tarpaulin
     - cargo tarpaulin --ignore-tests
-
-lint-code:
-  stage: test
-  script:
     - rustup component add clippy
     - cargo clippy -- -D warnings
-
-format-code:
-  stage: test
-  script:
     - rustup component add rustfmt
     - cargo fmt -- --check
-
-audit-code:
-  stage: test
-  script:
     - cargo install cargo-audit
     - cargo audit
+
+# lint-code:
+#   stage: test
+#   script:
+#     - rustup component add clippy
+#     - cargo clippy -- -D warnings
+#
+# format-code:
+#   stage: test
+#   script:
+#     - rustup component add rustfmt
+#     - cargo fmt -- --check
+#
+# audit-code:
+#   stage: test
+#   script:
+#     - cargo install cargo-audit
+#     - cargo audit

@@ -11,8 +11,7 @@ use crate::{
 use async_channel::{Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 use futures::io::{AsyncRead, AsyncWrite};
-use futures::select;
-use futures::StreamExt;
+use futures::{select, StreamExt};
 use log::{info, warn};
 use rand::Rng;
 use std::path::Path;
@@ -67,10 +66,13 @@ impl Run {
         peer_stream: Box<dyn AsyncReadAndWrite>,
         is_initiator: bool,
     ) -> JoinHandle<()> {
-        let mut peer_connection = Protocol::new(
+        let mut peer_connection = Protocol::with_handshake(
             Box::into_pin(peer_stream),
             Options::new(is_initiator, self.public_key),
-        );
+        )
+        .await;
+        info!("Remote pk {:?}", peer_connection.remote_pk.unwrap());
+
         let requests_to_us_tx = self.requests_to_us_tx.clone();
 
         let (response_tx, response_rx): (
