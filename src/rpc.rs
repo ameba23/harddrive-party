@@ -1,7 +1,7 @@
 use crate::fs::ReadStream;
 use crate::messages::response::{success, EndResponse, Success};
 use crate::messages::{request, response};
-use crate::run::{PeerRequest, PeerResponse};
+use crate::run::{IncomingPeerRequest, OutgoingPeerResponse};
 use crate::shares::Shares;
 use async_channel::Receiver;
 use async_std::fs;
@@ -29,7 +29,7 @@ impl Rpc {
         &mut self,
         path: Option<String>,
         searchterm: Option<String>,
-        recursive: Option<bool>,
+        recursive: bool,
     ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
         match self.shares.query(path, searchterm, recursive) {
             Ok(e) => e,
@@ -69,7 +69,7 @@ impl Rpc {
             request::Msg::Read(request::Read { path, start, end }) => {
                 self.read(path, start, end).await
             }
-            request::Msg::Handshake(_) => self.ls(None, None, None).await,
+            request::Msg::Handshake(_) => self.ls(None, None, true).await,
         }
         // let (tx, rx) = async_channel::unbounded();
         // self.command_queue.push_back(Command { req, sender: tx });
@@ -78,14 +78,14 @@ impl Rpc {
         // rx
     }
 
-    pub async fn run(&mut self, mut requests_rx: Receiver<PeerRequest>) {
+    pub async fn run(&mut self, mut requests_rx: Receiver<IncomingPeerRequest>) {
         while let Some(peer_request) = requests_rx.next().await {
             let mut responses = Box::into_pin(self.request(peer_request.message).await);
             while let Some(res) = responses.next().await {
                 info!("*** response");
                 peer_request
                     .response_tx
-                    .send(PeerResponse {
+                    .send(OutgoingPeerResponse {
                         message: res,
                         id: peer_request.id,
                     })
@@ -95,7 +95,7 @@ impl Rpc {
             // Finally send an endresponse
             peer_request
                 .response_tx
-                .send(PeerResponse {
+                .send(OutgoingPeerResponse {
                     id: peer_request.id,
                     message: crate::messages::response::Response::Success(Success {
                         msg: Some(success::Msg::EndResponse(EndResponse {})),

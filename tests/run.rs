@@ -27,11 +27,16 @@ async fn run() {
     ])
     .await;
 
+    let peer_a_name = peer_a.name.clone();
+
     async_std::task::spawn(async move {
         peer_a.run().await;
     });
     let entries = peer_b.request_all().await;
     assert_eq!(entries, create_test_entries());
-    let file_contents = peer_b.read_file("test-data/somefile").await;
+
+    let file_contents = peer_b
+        .read_file(&format!("{}/test-data/somefile", peer_a_name))
+        .await;
     assert_eq!(file_contents, "boop\n");
 }

@@ -25,7 +25,7 @@ async fn basic_rpc() -> anyhow::Result<()> {
         let req = request::Msg::Ls(request::Ls {
             path: None,
             searchterm: None,
-            recursive: None,
+            recursive: true,
         });
         let mut responses = Box::into_pin(rpc.request(req).await);
 
@@ -54,7 +54,7 @@ async fn basic_rpc() -> anyhow::Result<()> {
         let req = request::Msg::Ls(request::Ls {
             path: Some("badpath".to_string()),
             searchterm: None,
-            recursive: None,
+            recursive: true,
         });
         let mut responses = Box::into_pin(rpc.request(req).await);
 

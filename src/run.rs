@@ -1,4 +1,5 @@
-use crate::protocol::{Event, Options, Protocol};
+use crate::messages::response::Response;
+use crate::protocol::{Event, Protocol};
 use crate::rpc::Rpc;
 use crate::shares::{CreateSharesError, Shares};
 use crate::{
@@ -15,22 +16,27 @@ use futures::{select, StreamExt};
 use log::{info, warn};
 use rand::Rng;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct OutGoingPeerRequest {
     pub message: request::Msg,
-    pub response_tx: Sender<response::Response>,
+    pub response_tx: Sender<IncomingPeerResponse>,
 }
 
-pub struct PeerRequest {
+#[derive(Debug)]
+pub struct IncomingPeerResponse {
+    pub message: response::Response,
+    pub public_key: [u8; 32],
+}
+
+pub struct IncomingPeerRequest {
     pub message: request::Msg,
     pub id: u32,
-    // peer_id: String,
-    pub response_tx: Sender<PeerResponse>,
+    pub response_tx: Sender<OutgoingPeerResponse>,
 }
 
-pub struct PeerResponse {
+pub struct OutgoingPeerResponse {
     pub id: u32,
     pub message: response::Response,
 }
@@ -40,8 +46,8 @@ pub trait AsyncReadAndWrite: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 pub struct Run {
     peers: HashMap<String, Sender<OutGoingPeerRequest>>,
     pub rpc: Rpc,
-    requests_to_us_tx: Sender<PeerRequest>,
-    requests_to_us_rx: Receiver<PeerRequest>,
+    requests_to_us_tx: Sender<IncomingPeerRequest>,
+    requests_to_us_rx: Receiver<IncomingPeerRequest>,
     pub public_key: [u8; 32],
     pub name: String,
 }
@@ -68,18 +74,16 @@ impl Run {
         peer_stream: Box<dyn AsyncReadAndWrite>,
         is_initiator: bool,
     ) -> JoinHandle<()> {
-        let mut peer_connection = Protocol::with_handshake(
-            Box::into_pin(peer_stream),
-            Options::new(is_initiator, self.public_key),
-        )
-        .await;
+        let mut peer_connection =
+            Protocol::with_handshake(Box::into_pin(peer_stream), self.public_key, is_initiator)
+                .await;
         info!("Remote pk {:?}", peer_connection.remote_pk.unwrap());
 
         let requests_to_us_tx = self.requests_to_us_tx.clone();
 
         let (response_tx, response_rx): (
-            async_channel::Sender<PeerResponse>,
-            async_channel::Receiver<PeerResponse>,
+            async_channel::Sender<OutgoingPeerResponse>,
+            async_channel::Receiver<OutgoingPeerResponse>,
         ) = async_channel::unbounded();
 
         let (requests_from_us_tx, requests_from_us_rx): (
@@ -105,7 +109,7 @@ impl Run {
                             Some(Ok(Event::Request(message, id))) => {
                                 info!("got request {:?} {}", message, id);
                                 match requests_to_us_tx
-                                    .send(PeerRequest {
+                                    .send(IncomingPeerRequest {
                                         message,
                                         id,
                                         response_tx: response_tx.clone(),
@@ -118,9 +122,6 @@ impl Run {
                                         }
                                     }
                             },
-                            // Some(Ok(Event::Response(r))) => {
-                            //     info!("processing response {:?}", r);
-                            // },
                             Some(Err(PeerConnectionError::BadMessageError)) => {
                                 warn!("Bad message from peer");
                             },
@@ -131,7 +132,7 @@ impl Run {
                         }
                     },
                     next_res = response_rx.next() => {
-                        info!("next res");
+                        info!("Sending outgoing response");
                         match next_res {
                             Some(next_res) => {
                                 peer_connection
@@ -146,7 +147,7 @@ impl Run {
                         }
                     },
                     next_req = requests_from_us_rx.next() => {
-                        info!("next req {:?} {}", next_req, is_initiator);
+                        info!("Sending outgoing req {:?} {}", next_req, is_initiator);
                         match next_req {
                             Some(next_req) => {
                                 peer_connection.request(next_req).await.unwrap();
@@ -162,6 +163,74 @@ impl Run {
         })
     }
 
+    pub async fn ls(&self, path: Option<String>, searchterm: Option<String>, recursive: bool) {
+        let path_buf = match path {
+            Some(path_string) => match path_string.as_str() {
+                "" => None,
+                ps => Some(PathBuf::from(ps)),
+            },
+            None => None,
+        };
+        // if we have no pathbuf and recursive is false, get list of peers
+        // if we have no pathbuf, and recursive is true, get list of peers and use it as input
+        // if we have a pathbuf, take the root as we do with read_file
+        if path_buf.is_none() && !recursive {
+            //get list of peers and return
+            let entries = self
+                .peers
+                .keys()
+                .map(|name| Entry {
+                    name: name.to_string(),
+                    size: 0, // TODO get total size of peers shares
+                    is_dir: true,
+                })
+                .collect();
+            Response::Success(Success {
+                msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+            });
+        }
+        let (response_tx, mut response_rx) = async_channel::unbounded();
+        match path_buf {
+            Some(puf) => {
+                let peer_name = puf.iter().next().unwrap().to_str().unwrap();
+                let remaining_path = puf
+                    .strip_prefix(peer_name)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                // let peer = self.peers.get(peer_name).unwrap(); // .ok_or(error);
+                // do as in read_file
+
+                let peer = self.peers.get(peer_name).unwrap();
+                peer.send(OutGoingPeerRequest {
+                    response_tx,
+                    message: request::Msg::Ls(request::Ls {
+                        path: Some(remaining_path),
+                        searchterm,
+                        recursive,
+                    }),
+                })
+                .await
+                .unwrap();
+            }
+            None => {
+                for (_name, peer) in self.peers.iter() {
+                    peer.send(OutGoingPeerRequest {
+                        response_tx: response_tx.clone(),
+                        message: request::Msg::Ls(request::Ls {
+                            path: None,
+                            searchterm: searchterm.clone(),
+                            recursive,
+                        }),
+                    })
+                    .await
+                    .unwrap();
+                }
+            }
+        };
+    }
+
     pub async fn request_all(&self) -> Vec<Entry> {
         let mut ls_entries = Vec::new();
         for (_name, peer) in self.peers.iter() {
@@ -171,16 +240,20 @@ impl Run {
                 message: request::Msg::Ls(request::Ls {
                     path: None,
                     searchterm: None,
-                    recursive: None,
+                    recursive: true,
                 }),
             })
             .await
             .unwrap();
             while let Some(res) = response_rx.next().await {
                 // TODO if we get an error, return it
-                if let response::Response::Success(Success {
-                    msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-                }) = res
+                if let IncomingPeerResponse {
+                    public_key: _,
+                    message:
+                        response::Response::Success(Success {
+                            msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                        }),
+                } = res
                 {
                     for entry in entries.iter() {
                         ls_entries.push(entry.clone());
@@ -191,42 +264,65 @@ impl Run {
         ls_entries
     }
 
-    pub async fn read_file(&self, path: &str) -> String {
-        let mut output = Vec::new();
-        if let Some(first_peer) = self.peers.values().next() {
-            let (response_tx, mut response_rx) = async_channel::unbounded();
-            first_peer
-                .send(OutGoingPeerRequest {
-                    response_tx,
-                    message: request::Msg::Read(request::Read {
-                        start: None,
-                        end: None,
-                        path: path.to_string(),
-                    }),
-                })
-                .await
-                .unwrap();
+    // fn peer_name_from_path(&self, path_buf: PathBuf) -> (&str, &Sender<OutGoingPeerRequest>) {
+    //     let peer_name = &path_buf.iter().next().unwrap().to_str().unwrap();
+    //     // let remaining_path = path_buf.strip_prefix(peer_name).unwrap();
+    //     let peer = self.peers.get(*peer_name).unwrap(); // .ok_or(error);
+    //     (peer_name, peer)
+    // }
 
-            while let Some(res) = response_rx.next().await {
-                // TODO if we get an error, return it
-                match res {
-                    response::Response::Success(Success {
-                        msg: Some(response::success::Msg::Read(response::Read { mut data })),
-                    }) => {
-                        output.append(&mut data);
-                    }
-                    thing => {
-                        warn!("thing {:?}", thing);
-                    }
+    pub async fn read_file(&self, path: &str) -> String {
+        let path_buf = PathBuf::from(path);
+        let peer_name = path_buf.iter().next().unwrap().to_str().unwrap();
+        let remaining_path = path_buf.strip_prefix(peer_name).unwrap();
+        let peer = self.peers.get(peer_name).unwrap(); // .ok_or(error);
+
+        let mut output = Vec::new();
+        let (response_tx, mut response_rx) = async_channel::unbounded();
+        peer.send(OutGoingPeerRequest {
+            response_tx,
+            message: request::Msg::Read(request::Read {
+                start: None,
+                end: None,
+                path: remaining_path.to_str().unwrap().to_string(),
+            }),
+        })
+        .await
+        .unwrap();
+
+        while let Some(res) = response_rx.next().await {
+            // TODO if we get an error, return it
+            match res {
+                IncomingPeerResponse {
+                    public_key: _,
+                    message:
+                        response::Response::Success(Success {
+                            msg: Some(response::success::Msg::Read(response::Read { mut data })),
+                        }),
+                } => {
+                    output.append(&mut data);
+                }
+                thing => {
+                    warn!("thing {:?}", thing);
                 }
             }
-        };
+        }
         String::from_utf8(output).unwrap()
     }
 
-    // pub async fn request(&mut self, peer_id: &str, request: Request) {
-    // find which peer_connection, call peer.request(), do something with the reciever
-    // }
+    pub async fn request(
+        &mut self,
+        peer: Sender<OutGoingPeerRequest>,
+        request: request::Msg,
+    ) -> Result<Receiver<IncomingPeerResponse>, async_channel::SendError<OutGoingPeerRequest>> {
+        let (response_tx, response_rx) = async_channel::unbounded();
+        peer.send(OutGoingPeerRequest {
+            response_tx,
+            message: request,
+        })
+        .await?;
+        Ok(response_rx)
+    }
 
     pub async fn run(mut self) {
         self.rpc.run(self.requests_to_us_rx).await;

@@ -111,7 +111,7 @@ impl Shares {
         &self,
         path_option: Option<String>,
         _searchterm: Option<String>, // TODO
-        _recursive: Option<bool>,    // TODO
+        _recursive: bool,            // TODO
     ) -> Result<Box<dyn Stream<Item = Response> + Send + '_>, EntryParseError> {
         let path = path_option.unwrap_or_default();
 
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(added, 3);
 
         let mut test_entries = create_test_entries();
-        let mut responses = Box::into_pin(shares.query(None, None, None).unwrap());
+        let mut responses = Box::into_pin(shares.query(None, None, true).unwrap());
         while let Some(res) = responses.next().await {
             match res {
                 Response::Success(Success {
@@ -363,7 +363,7 @@ mod tests {
 
         task::spawn(async move {
             let mut test_entries = create_test_entries();
-            let mut responses = Box::into_pin(shares.query(None, None, None).unwrap());
+            let mut responses = Box::into_pin(shares.query(None, None, true).unwrap());
 
             while let Some(res) = responses.next().await {
                 match res {

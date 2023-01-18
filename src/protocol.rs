@@ -1,5 +1,6 @@
 use crate::messages;
 use crate::messages::response::EndResponse;
+use crate::run::IncomingPeerResponse;
 use async_channel::{Receiver, Sender, TrySendError};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{
@@ -31,28 +32,14 @@ pub enum Event {
 }
 
 #[derive(Debug)]
-pub struct Options {
-    pub is_initiator: bool,
-    public_key: [u8; 32],
-}
-
-impl Options {
-    pub fn new(is_initiator: bool, public_key: [u8; 32]) -> Self {
-        Self {
-            is_initiator,
-            public_key,
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct Protocol<IO> {
     io: IO,
-    options: Options,
+    pub is_initiator: bool,
+    public_key: [u8; 32],
     outbound_rx: Receiver<Vec<u8>>,
     outbound_tx: Sender<Vec<u8>>,
     pub request_index: u32,
-    open_requests: HashMap<u32, Sender<messages::response::Response>>,
+    open_requests: HashMap<u32, Sender<IncomingPeerResponse>>,
     /// Used for FusedStream trait
     is_terminated: bool,
     /// The remote peer's public key. This is only present after handshaking
@@ -64,12 +51,13 @@ where
     IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
 {
     /// Create a new protocol instance.
-    pub fn new(io: IO, options: Options) -> Self {
+    pub fn new(io: IO, public_key: [u8; 32], is_initiator: bool) -> Self {
         info!("new protocol");
         let (outbound_tx, outbound_rx) = async_channel::unbounded();
         Protocol {
             io,
-            options,
+            is_initiator,
+            public_key,
             remote_pk: None,
             outbound_tx,
             outbound_rx,
@@ -79,8 +67,8 @@ where
         }
     }
 
-    pub async fn with_handshake(io: IO, options: Options) -> Self {
-        let mut protocol = Protocol::new(io, options);
+    pub async fn with_handshake(io: IO, public_key: [u8; 32], is_initiator: bool) -> Self {
+        let mut protocol = Protocol::new(io, public_key, is_initiator);
         let event = protocol.next().await;
         info!("GOt event {:?}", event);
         protocol
@@ -91,7 +79,7 @@ where
         &mut self,
         request: crate::run::OutGoingPeerRequest,
     ) -> Result<(), SendError> {
-        info!("Making request {:?} {}", request, self.options.is_initiator);
+        info!("Making request {:?} {}", request, self.is_initiator);
         let (id, buf) = self.create_request(request.message);
         self.outbound_tx.send(buf).await?;
         self.open_requests.insert(id, request.response_tx);
@@ -171,7 +159,7 @@ where
     type Item = Result<Event, PeerConnectionError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE];
-        info!("poll next called {}", self.options.is_initiator);
+        info!("poll next called {}", self.is_initiator);
         match &Pin::new(&mut self.io).poll_read(cx, &mut buf) {
             Poll::Ready(Ok(n)) => {
                 info!("processing msg {}", n);
@@ -185,7 +173,7 @@ where
 
                         // TODO check protocol version number
                         // TODO replace with real handshake implementation
-                        let pk = self.options.public_key;
+                        let pk = self.public_key;
                         let res = self.create_response(m.id, create_handshake_response(pk));
                         ready!(self.write_bytes(cx, res))?;
 
@@ -208,32 +196,28 @@ where
                         return Poll::Ready(Some(Ok(Event::HandshakeResponse)));
                     }
                     Some(messages::hdp_message::Msg::Request(messages::Request {
-                        msg: Some(r),
+                        msg: Some(req),
                     })) => {
-                        info!("Got a request {:?}", r);
+                        info!("Got a request {:?}", req);
                         return Poll::Ready(Some(if self.remote_pk.is_some() {
-                            Ok(Event::Request(r, m.id))
+                            Ok(Event::Request(req, m.id))
                         } else {
                             warn!("Got a request before handshake completed");
                             Err(PeerConnectionError::BadMessageError)
                         }));
                     }
                     Some(messages::hdp_message::Msg::Response(messages::Response {
-                        response: Some(r),
+                        response: Some(res),
                     })) => {
-                        info!("{} got a response {:?}", self.options.is_initiator, r);
+                        info!("{} got a response {:?}", self.is_initiator, res);
                         if self.remote_pk.is_none() {
                             warn!("Got response message before handshake completed");
                             return Poll::Ready(Some(Err(PeerConnectionError::BadMessageError)));
                         }
-                        // TODO if the response is endResponse, close the channel (eg: with .drop())
                         match self.open_requests.get(&m.id) {
                             Some(sender) => {
                                 // return Poll::Ready(Some(Ok(Event::Response(r))));
-                                match r {
-                                    // message: crate::messages::response::Response::Success(Success {
-                                    //     msg: Some(success::Msg::EndResponse(EndResponse {})),
-                                    // }),
+                                match res {
                                     crate::messages::response::Response::Success(
                                         messages::response::Success {
                                             msg:
@@ -244,10 +228,26 @@ where
                                     ) => {
                                         sender.close();
                                     }
+                                    // crate::messages::response::Response::Err(err_message) => {}
                                     _ => {
-                                        match sender.try_send(r) {
+                                        // TODO we should identify the remote pk in the message
+                                        //
+                                        let close_channel =
+                                            if let crate::messages::response::Response::Err(_) = res
+                                            {
+                                                true
+                                            } else {
+                                                false
+                                            };
+                                        match sender.try_send(IncomingPeerResponse {
+                                            message: res,
+                                            public_key: self.remote_pk.unwrap(),
+                                        }) {
                                             Ok(()) => {
-                                                info!("Sending response on channel");
+                                                info!("Sent response on channel");
+                                                if close_channel {
+                                                    sender.close();
+                                                };
                                                 return Poll::Ready(Some(Ok(Event::Responded)));
                                             }
                                             Err(TrySendError::Full(_)) => {
@@ -294,18 +294,18 @@ where
             }
         };
 
-        if self.remote_pk.is_none() && self.options.is_initiator {
-            let pk = self.options.public_key;
+        if self.remote_pk.is_none() && self.is_initiator {
+            let pk = self.public_key;
             let (_, message) = self.create_request(create_handshake(pk));
             ready!(self.write_bytes(cx, message))?;
             return Poll::Pending;
         }
 
         if self.remote_pk.is_some() {
-            info!("polling outbound write {}", self.options.is_initiator);
+            info!("polling outbound write {}", self.is_initiator);
             self.poll_outbound_write(cx)?;
         } else {
-            warn!("not polling {}", self.options.is_initiator);
+            warn!("not polling {}", self.is_initiator);
         };
 
         Poll::Pending
@@ -343,7 +343,7 @@ pub fn create_handshake(token: [u8; 32]) -> messages::request::Msg {
     // TODO token will be random 32 bytes
     messages::request::Msg::Handshake(messages::request::Handshake {
         token: Vec::from(token),
-        version: None,
+        version: "0".to_string(),
     })
 }
 
@@ -352,7 +352,7 @@ pub fn create_handshake_response(token: [u8; 32]) -> messages::response::Respons
         msg: Some(messages::response::success::Msg::Handshake(
             messages::response::Handshake {
                 token: Vec::from(token),
-                version: None,
+                version: "0".to_string(),
             },
         )),
     })

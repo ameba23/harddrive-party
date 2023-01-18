@@ -1,7 +1,7 @@
 use async_std::prelude::*;
 use harddrive_party::{
     messages,
-    protocol::{Event, Options, Protocol},
+    protocol::{Event, Protocol},
     run::OutGoingPeerRequest,
 };
 use rand::Rng;
@@ -16,8 +16,8 @@ async fn basic_protocol() -> anyhow::Result<()> {
     let (br, aw) = sluice::pipe::pipe();
 
     let mut rng = rand::thread_rng();
-    let mut a = Protocol::new(Duplex::new(ar, aw), Options::new(true, rng.gen()));
-    let mut b = Protocol::new(Duplex::new(br, bw), Options::new(false, rng.gen()));
+    let mut a = Protocol::new(Duplex::new(ar, aw), rng.gen(), true);
+    let mut b = Protocol::new(Duplex::new(br, bw), rng.gen(), false);
 
     let (response_tx, response_rx) = async_channel::unbounded();
     a.request(OutGoingPeerRequest {
@@ -25,7 +25,7 @@ async fn basic_protocol() -> anyhow::Result<()> {
         message: messages::request::Msg::Ls(messages::request::Ls {
             path: None,
             searchterm: None,
-            recursive: None,
+            recursive: true,
         }),
     })
     .await?;
