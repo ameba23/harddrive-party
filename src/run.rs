@@ -8,7 +8,7 @@ use crate::{
     },
     protocol::PeerConnectionError,
 };
-use async_channel::{Receiver, Sender};
+use async_channel::{Receiver, SendError, Sender};
 use async_std::task::{self, JoinHandle};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{select, StreamExt};
@@ -42,6 +42,7 @@ pub struct OutgoingPeerResponse {
 
 pub trait AsyncReadAndWrite: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
+/// Main loop
 pub struct Run {
     peers: HashMap<String, Sender<OutGoingPeerRequest>>,
     pub rpc: Rpc,
@@ -68,14 +69,17 @@ impl Run {
         })
     }
 
+    /// Loop for IO for a connected peer
     pub async fn handle_peer(
         &mut self,
         peer_stream: Box<dyn AsyncReadAndWrite>,
         is_initiator: bool,
     ) -> JoinHandle<()> {
+        // TODO handle the case that the handshake fails
         let mut peer_connection =
             Protocol::with_handshake(Box::into_pin(peer_stream), self.public_key, is_initiator)
-                .await;
+                .await
+                .unwrap();
         info!("Remote pk {:?}", peer_connection.remote_pk.unwrap());
 
         let requests_to_us_tx = self.requests_to_us_tx.clone();
@@ -134,6 +138,7 @@ impl Run {
                         info!("Sending outgoing response");
                         match next_res {
                             Some(next_res) => {
+                                // TODO this will panic if the channel is closed
                                 peer_connection
                                     .respond(next_res.message, next_res.id)
                                     .await
@@ -162,6 +167,8 @@ impl Run {
         })
     }
 
+    /// Make a query to connected peers
+    // TODO this will take a channel tx and send responses over it
     pub async fn ls(
         &self,
         path: Option<String>,
@@ -175,25 +182,8 @@ impl Run {
             },
             None => None,
         };
-        // if we have no pathbuf and recursive is false, get list of peers
-        // if we have no pathbuf, and recursive is true, get list of peers and use it as input
-        // if we have a pathbuf, take the root as we do with read_file
-        // if path_buf.is_none() && !recursive {
-        //     //get list of peers and return
-        //     let entries = self
-        //         .peers
-        //         .keys()
-        //         .map(|name| Entry {
-        //             name: name.to_string(),
-        //             size: 0, // TODO get total size of peers shares
-        //             is_dir: true,
-        //         })
-        //         .collect();
-        //     Response::Success(Success {
-        //         msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-        //     });
-        //     // TODO finish
-        // }
+        let path_given = path_buf.is_some();
+
         let (response_tx, mut response_rx) = async_channel::unbounded();
         match path_buf {
             Some(puf) => {
@@ -204,8 +194,6 @@ impl Run {
                     .to_str()
                     .unwrap()
                     .to_string();
-                // let peer = self.peers.get(peer_name).unwrap(); // .ok_or(error);
-                // do as in read_file
 
                 let peer = self.peers.get(peer_name).unwrap();
                 peer.send(OutGoingPeerRequest {
@@ -247,57 +235,23 @@ impl Run {
             } = res
             {
                 for entry in entries.iter() {
-                    ls_entries.push(Entry {
-                        name: format!("{}/{}", to_hex_string(public_key), entry.name.clone()),
-                        size: entry.size,
-                        is_dir: entry.is_dir,
-                    });
+                    // Only output the top level entry if no path is given and not recursive
+                    if path_given || recursive || entry.name.is_empty() {
+                        ls_entries.push(Entry {
+                            name: format!("{}/{}", to_hex_string(public_key), entry.name.clone()),
+                            size: entry.size,
+                            is_dir: entry.is_dir,
+                        });
+                    };
                 }
+                // TODO here we would send ls_entries over a channel
             };
         }
         ls_entries
     }
 
-    pub async fn request_all(&self) -> Vec<Entry> {
-        let mut ls_entries = Vec::new();
-        for (_name, peer) in self.peers.iter() {
-            let (response_tx, mut response_rx) = async_channel::unbounded();
-            peer.send(OutGoingPeerRequest {
-                response_tx,
-                message: request::Msg::Ls(request::Ls {
-                    path: None,
-                    searchterm: None,
-                    recursive: true,
-                }),
-            })
-            .await
-            .unwrap();
-            while let Some(res) = response_rx.next().await {
-                // TODO if we get an error, return it
-                if let IncomingPeerResponse {
-                    public_key: _,
-                    message:
-                        response::Response::Success(Success {
-                            msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-                        }),
-                } = res
-                {
-                    for entry in entries.iter() {
-                        ls_entries.push(entry.clone());
-                    }
-                };
-            }
-        }
-        ls_entries
-    }
-
-    // fn peer_name_from_path(&self, path_buf: PathBuf) -> (&str, &Sender<OutGoingPeerRequest>) {
-    //     let peer_name = &path_buf.iter().next().unwrap().to_str().unwrap();
-    //     // let remaining_path = path_buf.strip_prefix(peer_name).unwrap();
-    //     let peer = self.peers.get(*peer_name).unwrap(); // .ok_or(error);
-    //     (peer_name, peer)
-    // }
-
+    /// Read a file from a particular peer, giving "peername/pathtofile"
+    // TODO this will take a channel tx and send the responses over it
     pub async fn read_file(&self, path: &str) -> String {
         let path_buf = PathBuf::from(path);
         let peer_name = path_buf.iter().next().unwrap().to_str().unwrap();
@@ -337,25 +291,13 @@ impl Run {
         String::from_utf8(output).unwrap()
     }
 
-    pub async fn request(
-        &mut self,
-        peer: Sender<OutGoingPeerRequest>,
-        request: request::Msg,
-    ) -> Result<Receiver<IncomingPeerResponse>, async_channel::SendError<OutGoingPeerRequest>> {
-        let (response_tx, response_rx) = async_channel::unbounded();
-        peer.send(OutGoingPeerRequest {
-            response_tx,
-            message: request,
-        })
-        .await?;
-        Ok(response_rx)
-    }
-
-    pub async fn run(mut self) {
-        self.rpc.run(self.requests_to_us_rx).await;
+    /// Run the internal RPC loop
+    pub async fn run(mut self) -> Result<(), SendError<OutgoingPeerResponse>> {
+        self.rpc.run(self.requests_to_us_rx).await
     }
 }
 
+// TODO this will be replaced by 'key to animal', deriving a silly name from peer public keys
 fn to_hex_string(bytes: [u8; 32]) -> String {
     let strs: Vec<String> = bytes.iter().take(2).map(|b| format!("{:02x}", b)).collect();
     strs.join("")

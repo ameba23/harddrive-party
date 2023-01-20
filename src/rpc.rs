@@ -2,8 +2,8 @@ use crate::fs::ReadStream;
 use crate::messages::response::{success, EndResponse, Success};
 use crate::messages::{request, response};
 use crate::run::{IncomingPeerRequest, OutgoingPeerResponse};
-use crate::shares::Shares;
-use async_channel::Receiver;
+use crate::shares::{EntryParseError, Shares};
+use async_channel::{Receiver, SendError};
 use async_std::fs;
 use futures::{stream, Stream, StreamExt};
 use log::info;
@@ -12,16 +12,11 @@ use log::info;
 /// share index)
 pub struct Rpc {
     pub shares: Shares,
-    // command_queue: VecDeque<Command>,
 }
 
 impl Rpc {
     pub fn new(shares: Shares) -> Rpc {
-        Rpc {
-            shares,
-            // command_queue: VecDeque::new(),
-            // requests_rx: Reciever<PeerRequest>
-        }
+        Rpc { shares }
     }
 
     /// Query the filepath index
@@ -33,7 +28,10 @@ impl Rpc {
     ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
         match self.shares.query(path, searchterm, recursive) {
             Ok(e) => e,
-            Err(_) => create_error_stream(1),
+            Err(entry_parse_error) => create_error_stream(match entry_parse_error {
+                EntryParseError::PathNotFound => RpcError::PathNotFound,
+                _ => RpcError::DbError,
+            }),
         }
     }
 
@@ -44,18 +42,32 @@ impl Rpc {
         start: Option<u64>,
         end: Option<u64>,
     ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
-        // TODO this error for cannot resolve path
-        let resolved_path = self.shares.resolve_path(path).unwrap();
+        let start = start.unwrap_or(0);
 
-        // TODO return an error if start > end
+        if let Some(end_offset) = end {
+            if start > end_offset {
+                return create_error_stream(RpcError::BadOffset);
+            }
+        }
 
-        // TODO this error for file doesnt exist
-        let file = fs::File::open(resolved_path).await.unwrap();
-
-        // TODO this error if the initial seek fails because start > filesize
-        Box::new(ReadStream::new(file, start, end).await.unwrap())
+        match self.shares.resolve_path(path) {
+            Ok(resolved_path) => {
+                match fs::File::open(resolved_path).await {
+                    Ok(file) => {
+                        match ReadStream::new(file, start, end).await {
+                            Ok(rs) => Box::new(rs),
+                            // If the initial seek fails because start > filesize
+                            Err(_) => create_error_stream(RpcError::BadOffset),
+                        }
+                    }
+                    Err(_) => create_error_stream(RpcError::PathNotFound),
+                }
+            }
+            Err(_) => create_error_stream(RpcError::PathNotFound),
+        }
     }
 
+    // TODO this should be private, but it is used in the test
     pub async fn request(
         &mut self,
         req: request::Msg,
@@ -71,52 +83,60 @@ impl Rpc {
             }
             request::Msg::Handshake(_) => self.ls(None, None, true).await,
         }
-        // let (tx, rx) = async_channel::unbounded();
-        // self.command_queue.push_back(Command { req, sender: tx });
-        //
-        // // self.ls(None, None, None, tx);
-        // rx
     }
 
-    pub async fn run(&mut self, mut requests_rx: Receiver<IncomingPeerRequest>) {
+    /// Loop serving requests
+    /// Will return an error it gets a channel which is no longer open
+    pub async fn run(
+        &mut self,
+        mut requests_rx: Receiver<IncomingPeerRequest>,
+    ) -> Result<(), SendError<OutgoingPeerResponse>> {
         while let Some(peer_request) = requests_rx.next().await {
             let mut responses = Box::into_pin(self.request(peer_request.message).await);
+            let mut is_error = false;
             while let Some(res) = responses.next().await {
-                info!("*** response");
+                info!("Sending response");
+                is_error = matches!(res, response::Response::Err(_));
                 peer_request
                     .response_tx
                     .send(OutgoingPeerResponse {
                         message: res,
                         id: peer_request.id,
                     })
-                    .await
-                    .unwrap();
+                    .await?;
             }
-            // Finally send an endresponse
-            peer_request
-                .response_tx
-                .send(OutgoingPeerResponse {
-                    id: peer_request.id,
-                    message: crate::messages::response::Response::Success(Success {
-                        msg: Some(success::Msg::EndResponse(EndResponse {})),
-                    }),
-                })
-                .await
-                .unwrap();
+            // Finally send an endresponse, unless we already sent an error
+            if !is_error {
+                peer_request
+                    .response_tx
+                    .send(OutgoingPeerResponse {
+                        id: peer_request.id,
+                        message: crate::messages::response::Response::Success(Success {
+                            msg: Some(success::Msg::EndResponse(EndResponse {})),
+                        }),
+                    })
+                    .await?;
+            }
         }
+        Ok(())
     }
 }
 
-fn create_error_stream(err: i32) -> Box<dyn Stream<Item = response::Response> + Send> {
-    let response = response::Response::Err(err);
-    Box::new(stream::iter(vec![response]))
+// ENOENT: -2,
+// ENOTDIR: -20,
+// EHOSTUNREACH: -113,
+// EEXIST: -17,
+// EBUSY: -16,
+// ENOLCK: -39
+/// Error code to be send as a wire message
+#[repr(i32)]
+enum RpcError {
+    DbError = 1,
+    PathNotFound = -2,
+    BadOffset = 2,
 }
 
-// pub struct Command {
-//     req: messages::request::Msg,
-//     sender: Sender<messages::response::Response>,
-// }
-
-// poll poll_next
-// for each active command, call poll_next
-// on finishing a command, make the next one on the queue active
+fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {
+    let response = response::Response::Err(err as i32);
+    Box::new(stream::iter(vec![response]))
+}

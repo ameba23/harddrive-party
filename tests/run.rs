@@ -30,11 +30,10 @@ async fn run() {
     let peer_a_name = peer_a.name.clone();
 
     async_std::task::spawn(async move {
-        peer_a.run().await;
+        assert!(peer_a.run().await.is_ok());
     });
-    let entries = peer_b.request_all().await;
-    assert_eq!(entries, create_test_entries());
 
+    // Top level recursive query
     let entries = peer_b.ls(None, None, true).await;
     let test_entries: Vec<Entry> = create_test_entries()
         .iter()
@@ -46,6 +45,18 @@ async fn run() {
         .collect();
 
     assert_eq!(entries, test_entries);
+
+    // Top level non-recursive query
+    let entries = peer_b.ls(None, None, false).await;
+
+    assert_eq!(
+        entries,
+        vec![Entry {
+            name: format!("{}/", peer_a_name),
+            size: 17,
+            is_dir: true,
+        }]
+    );
 
     let file_contents = peer_b
         .read_file(&format!("{}/test-data/somefile", peer_a_name))

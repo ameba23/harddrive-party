@@ -19,6 +19,7 @@ use thiserror::Error;
 // TODO do we need a length prefix?
 
 const READ_BUF_INITIAL_SIZE: usize = 1024 * 128;
+const PROTOCOL_VERSION: &str = "0";
 
 /// A protocol event.
 #[non_exhaustive]
@@ -67,11 +68,19 @@ where
         }
     }
 
-    pub async fn with_handshake(io: IO, public_key: [u8; 32], is_initiator: bool) -> Self {
+    /// Wait for the handshake before returning a new protocol instance
+    pub async fn with_handshake(
+        io: IO,
+        public_key: [u8; 32],
+        is_initiator: bool,
+    ) -> Result<Self, HandshakeError> {
         let mut protocol = Protocol::new(io, public_key, is_initiator);
         let event = protocol.next().await;
-        info!("GOt event {:?}", event);
-        protocol
+        match event {
+            Some(Ok(Event::HandshakeRequest)) => Ok(protocol),
+            Some(Ok(Event::HandshakeResponse)) => Ok(protocol),
+            _ => Err(HandshakeError::BadHandshake),
+        }
     }
 
     /// Send a request and return a Receiver for the responses
@@ -159,27 +168,35 @@ where
     type Item = Result<Event, PeerConnectionError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE];
-        info!("poll next called {}", self.is_initiator);
         match &Pin::new(&mut self.io).poll_read(cx, &mut buf) {
             Poll::Ready(Ok(n)) => {
-                info!("processing msg {}", n);
+                info!("Processing msg {}", n);
                 let message_buf = &buf[0..*n];
                 let m = deserialize_message(message_buf)?;
                 match m.msg {
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(messages::request::Msg::Handshake(handshake_request)),
                     })) => {
-                        info!("got handshake request");
+                        info!("Got handshake request");
 
-                        // TODO check protocol version number
-                        // TODO replace with real handshake implementation
-                        let pk = self.public_key;
-                        let res = self.create_response(m.id, create_handshake_response(pk));
-                        ready!(self.write_bytes(cx, res))?;
+                        // Check protocol version number
+                        if handshake_request.version != PROTOCOL_VERSION {
+                            return Poll::Ready(Some(Err(
+                                PeerConnectionError::VersionCompatibilityError,
+                            )));
+                        }
 
-                        // TODO reject the handshake if this unwrap fails
-                        self.remote_pk = Some(handshake_request.token.try_into().unwrap());
-                        return Poll::Ready(Some(Ok(Event::HandshakeRequest)));
+                        if let Ok(remote_pk) = handshake_request.token.try_into() {
+                            self.remote_pk = Some(remote_pk);
+
+                            // TODO replace with real handshake implementation
+                            let pk = self.public_key;
+                            let res = self.create_response(m.id, create_handshake_response(pk));
+                            ready!(self.write_bytes(cx, res))?;
+                            return Poll::Ready(Some(Ok(Event::HandshakeRequest)));
+                        } else {
+                            return Poll::Ready(Some(Err(PeerConnectionError::HandshakeError)));
+                        };
                     }
                     Some(messages::hdp_message::Msg::Response(messages::Response {
                         response:
@@ -191,9 +208,21 @@ where
                             })),
                     })) => {
                         info!("Got handshake response");
+
+                        // Check protocol version number
+                        if handshake_response.version != PROTOCOL_VERSION {
+                            return Poll::Ready(Some(Err(
+                                PeerConnectionError::VersionCompatibilityError,
+                            )));
+                        }
+
                         // TODO replace with real handshake implementation
-                        self.remote_pk = Some(handshake_response.token.try_into().unwrap());
-                        return Poll::Ready(Some(Ok(Event::HandshakeResponse)));
+                        if let Ok(remote_pk) = handshake_response.token.try_into() {
+                            self.remote_pk = Some(remote_pk);
+                            return Poll::Ready(Some(Ok(Event::HandshakeResponse)));
+                        } else {
+                            return Poll::Ready(Some(Err(PeerConnectionError::HandshakeError)));
+                        };
                     }
                     Some(messages::hdp_message::Msg::Request(messages::Request {
                         msg: Some(req),
@@ -228,20 +257,11 @@ where
                                     ) => {
                                         sender.close();
                                     }
-                                    // crate::messages::response::Response::Err(err_message) => {}
                                     _ => {
-                                        // TODO we should identify the remote pk in the message
-                                        //
                                         let close_channel = matches!(
                                             res,
                                             crate::messages::response::Response::Err(_)
                                         );
-                                        // if let crate::messages::response::Response::Err(_) = res
-                                        // {
-                                        //     true
-                                        // } else {
-                                        //     false
-                                        // };
                                         match sender.try_send(IncomingPeerResponse {
                                             message: res,
                                             public_key: self.remote_pk.unwrap(),
@@ -262,7 +282,7 @@ where
                                             }
                                             Err(TrySendError::Closed(_)) => {
                                                 warn!("Response channel closed");
-                                                // unreachable!("Channel sender closed")
+                                                // TODO unreachable!("Channel sender closed")
                                                 return Poll::Ready(Some(Ok(Event::Responded)));
                                             }
                                         }
@@ -305,10 +325,13 @@ where
         }
 
         if self.remote_pk.is_some() {
-            info!("polling outbound write {}", self.is_initiator);
+            info!("Polling outbound write {}", self.is_initiator);
             self.poll_outbound_write(cx)?;
         } else {
-            warn!("not polling {}", self.is_initiator);
+            warn!(
+                "Not polling outbound write, because handshake not made {}",
+                self.is_initiator
+            );
         };
 
         Poll::Pending
@@ -346,7 +369,7 @@ pub fn create_handshake(token: [u8; 32]) -> messages::request::Msg {
     // TODO token will be random 32 bytes
     messages::request::Msg::Handshake(messages::request::Handshake {
         token: Vec::from(token),
-        version: "0".to_string(),
+        version: PROTOCOL_VERSION.to_string(),
     })
 }
 
@@ -355,10 +378,18 @@ pub fn create_handshake_response(token: [u8; 32]) -> messages::response::Respons
         msg: Some(messages::response::success::Msg::Handshake(
             messages::response::Handshake {
                 token: Vec::from(token),
-                version: "0".to_string(),
+                version: PROTOCOL_VERSION.to_string(),
             },
         )),
     })
+}
+
+/// Error when handshaking
+#[derive(Error, Debug)]
+pub enum HandshakeError {
+    // TODO this will be more elaborate
+    #[error("Error making handshake")]
+    BadHandshake,
 }
 
 /// Error when communicating with peer
@@ -372,6 +403,10 @@ pub enum PeerConnectionError {
     BadMessageError,
     #[error(transparent)]
     DeserializationError(#[from] prost::DecodeError),
+    #[error("Handshake error")]
+    HandshakeError,
+    #[error("Remote peer has incompatible protocol version")]
+    VersionCompatibilityError,
 }
 
 /// Error when making a request or response

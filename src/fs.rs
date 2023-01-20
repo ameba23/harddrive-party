@@ -14,9 +14,8 @@ pub struct ReadStream {
 }
 
 impl ReadStream {
-    pub async fn new(mut file: fs::File, start: Option<u64>, _end: Option<u64>) -> Result<Self> {
+    pub async fn new(mut file: fs::File, start: u64, _end: Option<u64>) -> Result<Self> {
         // TODO implement `end`
-        let start = start.unwrap_or(0);
         file.seek(std::io::SeekFrom::Start(start)).await?;
 
         Ok(ReadStream {
@@ -61,7 +60,7 @@ mod tests {
     #[async_std::test]
     async fn test_read() {
         let file = fs::File::open("tests/test-data/somefile").await.unwrap();
-        let mut rs = ReadStream::new(file, Some(2), None).await.unwrap();
+        let mut rs = ReadStream::new(file, 2, None).await.unwrap();
         assert_eq!(
             Some(response::Response::Success(response::Success {
                 msg: Some(response::success::Msg::Read(response::Read {

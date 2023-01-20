@@ -58,7 +58,7 @@ async fn basic_rpc() -> anyhow::Result<()> {
         });
         let mut responses = Box::into_pin(rpc.request(req).await);
 
-        assert_eq!(Some(Response::Err(1)), responses.next().await);
+        assert_eq!(Some(Response::Err(-2)), responses.next().await);
         assert_eq!(None, responses.next().await);
     }
 
