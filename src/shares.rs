@@ -6,7 +6,7 @@ use futures::stream::StreamExt;
 use futures::{stream, Stream};
 use log::{info, warn};
 use sled::IVec;
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use thiserror::Error;
 
 pub const FILES: &[u8; 1] = b"f";
@@ -110,8 +110,8 @@ impl Shares {
     pub fn query(
         &self,
         path_option: Option<String>,
-        _searchterm: Option<String>, // TODO
-        _recursive: bool,            // TODO
+        searchterm: Option<String>,
+        recursive: bool,
     ) -> Result<Box<dyn Stream<Item = Response> + Send + '_>, EntryParseError> {
         let path = path_option.unwrap_or_default();
 
@@ -120,15 +120,16 @@ impl Shares {
             return Err(EntryParseError::PathNotFound);
         }
 
-        let dirs_iter = self
-            .dirs
-            .scan_prefix(&path)
-            .map_while(|kv_result| kv_to_entry(kv_result, true).ok());
+        let path_len = path.len();
+        let searchterm_clone = searchterm.clone();
 
-        let files_iter = self
-            .files
-            .scan_prefix(&path)
-            .map_while(|kv_result| kv_to_entry(kv_result, false).ok());
+        let dirs_iter = self.dirs.scan_prefix(&path).filter_map(move |kv_result| {
+            kv_filter_map(kv_result, true, recursive, path_len, &searchterm)
+        });
+
+        let files_iter = self.files.scan_prefix(&path).filter_map(move |kv_result| {
+            kv_filter_map(kv_result, false, recursive, path_len, &searchterm_clone)
+        });
 
         let entries_iter = dirs_iter.chain(files_iter);
 
@@ -142,8 +143,9 @@ impl Shares {
                 msg: Some(response::success::Msg::Ls(response::Ls { entries })),
             })
         });
-        let is = stream::iter(response_iter);
-        Ok(Box::new(is))
+
+        let output_stream = stream::iter(response_iter);
+        Ok(Box::new(output_stream))
     }
 
     /// Resolve a path from a request by looking up the absolute path associated with its share name
@@ -173,19 +175,46 @@ impl Shares {
     }
 }
 
-/// Convert a key/value database entry into a struct
-fn kv_to_entry(
+/// Filter a key/value database entry based on query and if selected convert to a struct
+fn kv_filter_map(
     kv_result: Result<(IVec, IVec), sled::Error>,
     is_dir: bool,
-) -> Result<Entry, EntryParseError> {
-    let (name, size) = kv_result?;
-    let name = std::str::from_utf8(&name)?;
+    recursive: bool,
+    path_len: usize,
+    searchterm: &Option<String>,
+) -> Option<Entry> {
+    let (name, size) = kv_result.unwrap();
+    let name = std::str::from_utf8(&name).unwrap();
+
+    if !recursive {
+        // TODO should we use pathbuf for this?
+        //
+        let full_suffix = &name[path_len..];
+        let suffix = if full_suffix.starts_with(MAIN_SEPARATOR) {
+            &full_suffix[1..]
+        } else {
+            full_suffix
+        };
+        if suffix.contains(MAIN_SEPARATOR) {
+            println!("skipping entry {}", suffix);
+            return None;
+        }
+    }
+
+    if let Some(search) = searchterm {
+        if !name.contains(search) {
+            return None;
+        };
+    }
+
     let size = u64::from_le_bytes(
         size.to_vec()
             .try_into()
-            .map_err(|_| EntryParseError::U64ConversionError())?,
+            .map_err(|_| EntryParseError::U64ConversionError())
+            .unwrap(),
     );
-    Ok(Entry {
+
+    Some(Entry {
         name: name.to_string(),
         size,
         is_dir,
@@ -343,7 +372,9 @@ mod tests {
                 Response::Err(code) => {
                     panic!("Got error response {}", code);
                 }
-                _ => {}
+                something_else => {
+                    panic!("Got unexpected response {:?}", something_else);
+                }
             }
         }
         // Make sure we found every entry
@@ -356,7 +387,97 @@ mod tests {
     }
 
     #[async_std::test]
-    async fn query_from_thread() {
+    async fn share_query_non_recursive() {
+        let storage = TempDir::new().unwrap();
+        let mut shares = Shares::new(storage).await.unwrap();
+        let added = shares.scan("tests/test-data").await.unwrap();
+        assert_eq!(added, 3);
+
+        // Get only the top level entries
+        let all_test_entries = create_test_entries();
+        let mut test_entries: Vec<&Entry> = all_test_entries
+            .iter()
+            .filter(|entry| !entry.name.contains('/'))
+            .collect();
+
+        let mut responses = Box::into_pin(shares.query(None, None, false).unwrap());
+        while let Some(res) = responses.next().await {
+            match res {
+                Response::Success(Success {
+                    msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                }) => {
+                    for entry in entries {
+                        println!("{:?}", entry);
+                        let i = test_entries.iter().position(|e| **e == entry).unwrap();
+                        test_entries.remove(i);
+                    }
+                }
+                Response::Err(code) => {
+                    panic!("Got error response {}", code);
+                }
+                something_else => {
+                    panic!("Got unexpected response {:?}", something_else);
+                }
+            }
+        }
+        // Make sure we found every entry
+        assert_eq!(test_entries.len(), 0);
+    }
+
+    #[async_std::test]
+    async fn share_query_non_recursive_with_given_path() {
+        let storage = TempDir::new().unwrap();
+        let mut shares = Shares::new(storage).await.unwrap();
+        let added = shares.scan("tests/test-data").await.unwrap();
+        assert_eq!(added, 3);
+
+        let mut test_entries = vec![
+            response::ls::Entry {
+                name: "test-data".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data/subdir".to_string(),
+                size: 12,
+                is_dir: true,
+            },
+            response::ls::Entry {
+                name: "test-data/somefile".to_string(),
+                size: 5,
+                is_dir: false,
+            },
+        ];
+
+        let mut responses = Box::into_pin(
+            shares
+                .query(Some("test-data".to_string()), None, false)
+                .unwrap(),
+        );
+        while let Some(res) = responses.next().await {
+            match res {
+                Response::Success(Success {
+                    msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                }) => {
+                    for entry in entries {
+                        let i = test_entries.iter().position(|e| e == &entry).unwrap();
+                        test_entries.remove(i);
+                    }
+                }
+                Response::Err(code) => {
+                    panic!("Got error response {}", code);
+                }
+                something_else => {
+                    panic!("Got unexpected response {:?}", something_else);
+                }
+            }
+        }
+        // Make sure we found every entry
+        assert_eq!(test_entries.len(), 0);
+    }
+
+    #[async_std::test]
+    async fn share_query_from_thread() {
         let storage = TempDir::new().unwrap();
         let mut shares = Shares::new(storage).await.unwrap();
         shares.scan("tests/test-data").await.unwrap();

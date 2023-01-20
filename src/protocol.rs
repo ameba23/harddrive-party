@@ -232,13 +232,16 @@ where
                                     _ => {
                                         // TODO we should identify the remote pk in the message
                                         //
-                                        let close_channel =
-                                            if let crate::messages::response::Response::Err(_) = res
-                                            {
-                                                true
-                                            } else {
-                                                false
-                                            };
+                                        let close_channel = matches!(
+                                            res,
+                                            crate::messages::response::Response::Err(_)
+                                        );
+                                        // if let crate::messages::response::Response::Err(_) = res
+                                        // {
+                                        //     true
+                                        // } else {
+                                        //     false
+                                        // };
                                         match sender.try_send(IncomingPeerResponse {
                                             message: res,
                                             public_key: self.remote_pk.unwrap(),

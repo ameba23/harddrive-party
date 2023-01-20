@@ -1,4 +1,3 @@
-use crate::messages::response::Response;
 use crate::protocol::{Event, Protocol};
 use crate::rpc::Rpc;
 use crate::shares::{CreateSharesError, Shares};
@@ -163,7 +162,12 @@ impl Run {
         })
     }
 
-    pub async fn ls(&self, path: Option<String>, searchterm: Option<String>, recursive: bool) {
+    pub async fn ls(
+        &self,
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: bool,
+    ) -> Vec<Entry> {
         let path_buf = match path {
             Some(path_string) => match path_string.as_str() {
                 "" => None,
@@ -174,21 +178,22 @@ impl Run {
         // if we have no pathbuf and recursive is false, get list of peers
         // if we have no pathbuf, and recursive is true, get list of peers and use it as input
         // if we have a pathbuf, take the root as we do with read_file
-        if path_buf.is_none() && !recursive {
-            //get list of peers and return
-            let entries = self
-                .peers
-                .keys()
-                .map(|name| Entry {
-                    name: name.to_string(),
-                    size: 0, // TODO get total size of peers shares
-                    is_dir: true,
-                })
-                .collect();
-            Response::Success(Success {
-                msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-            });
-        }
+        // if path_buf.is_none() && !recursive {
+        //     //get list of peers and return
+        //     let entries = self
+        //         .peers
+        //         .keys()
+        //         .map(|name| Entry {
+        //             name: name.to_string(),
+        //             size: 0, // TODO get total size of peers shares
+        //             is_dir: true,
+        //         })
+        //         .collect();
+        //     Response::Success(Success {
+        //         msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+        //     });
+        //     // TODO finish
+        // }
         let (response_tx, mut response_rx) = async_channel::unbounded();
         match path_buf {
             Some(puf) => {
@@ -229,6 +234,28 @@ impl Run {
                 }
             }
         };
+
+        let mut ls_entries = Vec::new();
+        while let Some(res) = response_rx.next().await {
+            // TODO if we get an error, return it
+            if let IncomingPeerResponse {
+                public_key,
+                message:
+                    response::Response::Success(Success {
+                        msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+                    }),
+            } = res
+            {
+                for entry in entries.iter() {
+                    ls_entries.push(Entry {
+                        name: format!("{}/{}", to_hex_string(public_key), entry.name.clone()),
+                        size: entry.size,
+                        is_dir: entry.is_dir,
+                    });
+                }
+            };
+        }
+        ls_entries
     }
 
     pub async fn request_all(&self) -> Vec<Entry> {
@@ -330,6 +357,6 @@ impl Run {
 }
 
 fn to_hex_string(bytes: [u8; 32]) -> String {
-    let strs: Vec<String> = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+    let strs: Vec<String> = bytes.iter().take(2).map(|b| format!("{:02x}", b)).collect();
     strs.join("")
 }

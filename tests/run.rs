@@ -1,7 +1,7 @@
 mod _duplex;
 use _duplex::Duplex;
 use _testdata::create_test_entries;
-use harddrive_party::run::Run;
+use harddrive_party::{messages::response::ls::Entry, run::Run};
 use tempfile::TempDir;
 mod _testdata;
 // use async_std::prelude::FutureExt;
@@ -34,6 +34,18 @@ async fn run() {
     });
     let entries = peer_b.request_all().await;
     assert_eq!(entries, create_test_entries());
+
+    let entries = peer_b.ls(None, None, true).await;
+    let test_entries: Vec<Entry> = create_test_entries()
+        .iter()
+        .map(|e| Entry {
+            name: format!("{}/{}", peer_a_name, e.name.clone()),
+            size: e.size,
+            is_dir: e.is_dir,
+        })
+        .collect();
+
+    assert_eq!(entries, test_entries);
 
     let file_contents = peer_b
         .read_file(&format!("{}/test-data/somefile", peer_a_name))
