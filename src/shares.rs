@@ -1,6 +1,3 @@
-// use crate::messages::response;
-// use crate::messages::response::ls::Entry;
-// use crate::messages::response::{Response, Success};
 use crate::messages::{Entry, LsResponse};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;
@@ -9,9 +6,9 @@ use sled::IVec;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use thiserror::Error;
 
-pub const FILES: &[u8; 1] = b"f";
-pub const DIRS: &[u8; 1] = b"d";
-pub const SHARE_NAMES: &[u8; 1] = b"s";
+const FILES: &[u8; 1] = b"f";
+const DIRS: &[u8; 1] = b"d";
+const SHARE_NAMES: &[u8; 1] = b"s";
 
 // This will be a higher value - but keeping it small to test chunking
 pub const MAX_ENTRIES_PER_MESSAGE: usize = 3;
@@ -299,206 +296,203 @@ pub enum ResolvePathError {
     Utf8Error(#[from] std::str::Utf8Error),
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use async_std::task;
-//     use tempfile::TempDir;
-//
-//     fn create_test_entries() -> Vec<response::ls::Entry> {
-//         vec![
-//             response::ls::Entry {
-//                 name: "".to_string(),
-//                 size: 17,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data".to_string(),
-//                 size: 17,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/subdir".to_string(),
-//                 size: 12,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/subdir/subsubdir".to_string(),
-//                 size: 6,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/somefile".to_string(),
-//                 size: 5,
-//                 is_dir: false,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/subdir/anotherfile".to_string(),
-//                 size: 6,
-//                 is_dir: false,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
-//                 size: 6,
-//                 is_dir: false,
-//             },
-//         ]
-//     }
-//
-//     #[async_std::test]
-//     async fn share_query() {
-//         let storage = TempDir::new().unwrap();
-//         let mut shares = Shares::new(storage).await.unwrap();
-//         let added = shares.scan("tests/test-data").await.unwrap();
-//         assert_eq!(added, 3);
-//
-//         let mut test_entries = create_test_entries();
-//         let mut responses = Box::into_pin(shares.query(None, None, true).unwrap());
-//         while let Some(res) = responses.next().await {
-//             match res {
-//                 Response::Success(Success {
-//                     msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-//                 }) => {
-//                     for entry in entries {
-//                         let i = test_entries.iter().position(|e| e == &entry).unwrap();
-//                         test_entries.remove(i);
-//                     }
-//                 }
-//                 Response::Err(code) => {
-//                     panic!("Got error response {}", code);
-//                 }
-//                 something_else => {
-//                     panic!("Got unexpected response {:?}", something_else);
-//                 }
-//             }
-//         }
-//         // Make sure we found every entry
-//         assert_eq!(test_entries.len(), 0);
-//
-//         let resolved = shares
-//             .resolve_path("test-data/df/aslkjdsal.asds".to_string())
-//             .unwrap();
-//         assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
-//     }
-//
-//     #[async_std::test]
-//     async fn share_query_non_recursive() {
-//         let storage = TempDir::new().unwrap();
-//         let mut shares = Shares::new(storage).await.unwrap();
-//         let added = shares.scan("tests/test-data").await.unwrap();
-//         assert_eq!(added, 3);
-//
-//         // Get only the top level entries
-//         let all_test_entries = create_test_entries();
-//         let mut test_entries: Vec<&Entry> = all_test_entries
-//             .iter()
-//             .filter(|entry| !entry.name.contains('/'))
-//             .collect();
-//
-//         let mut responses = Box::into_pin(shares.query(None, None, false).unwrap());
-//         while let Some(res) = responses.next().await {
-//             match res {
-//                 Response::Success(Success {
-//                     msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-//                 }) => {
-//                     for entry in entries {
-//                         println!("{:?}", entry);
-//                         let i = test_entries.iter().position(|e| **e == entry).unwrap();
-//                         test_entries.remove(i);
-//                     }
-//                 }
-//                 Response::Err(code) => {
-//                     panic!("Got error response {}", code);
-//                 }
-//                 something_else => {
-//                     panic!("Got unexpected response {:?}", something_else);
-//                 }
-//             }
-//         }
-//         // Make sure we found every entry
-//         assert_eq!(test_entries.len(), 0);
-//     }
-//
-//     #[async_std::test]
-//     async fn share_query_non_recursive_with_given_path() {
-//         let storage = TempDir::new().unwrap();
-//         let mut shares = Shares::new(storage).await.unwrap();
-//         let added = shares.scan("tests/test-data").await.unwrap();
-//         assert_eq!(added, 3);
-//
-//         let mut test_entries = vec![
-//             response::ls::Entry {
-//                 name: "test-data".to_string(),
-//                 size: 17,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/subdir".to_string(),
-//                 size: 12,
-//                 is_dir: true,
-//             },
-//             response::ls::Entry {
-//                 name: "test-data/somefile".to_string(),
-//                 size: 5,
-//                 is_dir: false,
-//             },
-//         ];
-//
-//         let mut responses = Box::into_pin(
-//             shares
-//                 .query(Some("test-data".to_string()), None, false)
-//                 .unwrap(),
-//         );
-//         while let Some(res) = responses.next().await {
-//             match res {
-//                 Response::Success(Success {
-//                     msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-//                 }) => {
-//                     for entry in entries {
-//                         let i = test_entries.iter().position(|e| e == &entry).unwrap();
-//                         test_entries.remove(i);
-//                     }
-//                 }
-//                 Response::Err(code) => {
-//                     panic!("Got error response {}", code);
-//                 }
-//                 something_else => {
-//                     panic!("Got unexpected response {:?}", something_else);
-//                 }
-//             }
-//         }
-//         // Make sure we found every entry
-//         assert_eq!(test_entries.len(), 0);
-//     }
-//
-//     #[async_std::test]
-//     async fn share_query_from_thread() {
-//         let storage = TempDir::new().unwrap();
-//         let mut shares = Shares::new(storage).await.unwrap();
-//         shares.scan("tests/test-data").await.unwrap();
-//
-//         task::spawn(async move {
-//             let mut test_entries = create_test_entries();
-//             let mut responses = Box::into_pin(shares.query(None, None, true).unwrap());
-//
-//             while let Some(res) = responses.next().await {
-//                 match res {
-//                     Response::Success(Success {
-//                         msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-//                     }) => {
-//                         for entry in entries {
-//                             let i = test_entries.iter().position(|e| e == &entry).unwrap();
-//                             test_entries.remove(i);
-//                         }
-//                     }
-//                     Response::Err(code) => {
-//                         panic!("Got error response {}", code);
-//                     }
-//                     _ => {}
-//                 }
-//             }
-//             // Make sure we found every entry
-//             assert_eq!(test_entries.len(), 0);
-//         });
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn create_test_entries() -> Vec<Entry> {
+        vec![
+            Entry {
+                name: "".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir".to_string(),
+                size: 12,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir".to_string(),
+                size: 6,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/somefile".to_string(),
+                size: 5,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/anotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn share_query() {
+        let storage = TempDir::new().unwrap();
+        let mut shares = Shares::new(storage).await.unwrap();
+        let added = shares.scan("tests_/test-data").await.unwrap();
+        assert_eq!(added, 3);
+
+        let mut test_entries = create_test_entries();
+        let mut responses = shares.query(None, None, true).unwrap();
+        for res in responses {
+            match res {
+                LsResponse::Success(entries) => {
+                    for entry in entries {
+                        let i = test_entries.iter().position(|e| e == &entry).unwrap();
+                        test_entries.remove(i);
+                    }
+                }
+                LsResponse::Err(err) => {
+                    panic!("Got error response {:?}", err);
+                }
+            }
+        }
+        // Make sure we found every entry
+        assert_eq!(test_entries.len(), 0);
+
+        let resolved = shares
+            .resolve_path("test-data/df/aslkjdsal.asds".to_string())
+            .unwrap();
+        assert_eq!(
+            resolved,
+            PathBuf::from("tests_/test-data/df/aslkjdsal.asds")
+        );
+    }
+
+    // #[tokio::test]
+    // async fn share_query_non_recursive() {
+    //     let storage = TempDir::new().unwrap();
+    //     let mut shares = Shares::new(storage).await.unwrap();
+    //     let added = shares.scan("tests/test-data").await.unwrap();
+    //     assert_eq!(added, 3);
+    //
+    //     // Get only the top level entries
+    //     let all_test_entries = create_test_entries();
+    //     let mut test_entries: Vec<&Entry> = all_test_entries
+    //         .iter()
+    //         .filter(|entry| !entry.name.contains('/'))
+    //         .collect();
+    //
+    //     let mut responses = Box::into_pin(shares.query(None, None, false).unwrap());
+    //     while let Some(res) = responses.next().await {
+    //         match res {
+    //             Response::Success(Success {
+    //                 msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+    //             }) => {
+    //                 for entry in entries {
+    //                     println!("{:?}", entry);
+    //                     let i = test_entries.iter().position(|e| **e == entry).unwrap();
+    //                     test_entries.remove(i);
+    //                 }
+    //             }
+    //             Response::Err(code) => {
+    //                 panic!("Got error response {}", code);
+    //             }
+    //             something_else => {
+    //                 panic!("Got unexpected response {:?}", something_else);
+    //             }
+    //         }
+    //     }
+    //     // Make sure we found every entry
+    //     assert_eq!(test_entries.len(), 0);
+    // }
+    //
+    // #[tokio::test]
+    // async fn share_query_non_recursive_with_given_path() {
+    //     let storage = TempDir::new().unwrap();
+    //     let mut shares = Shares::new(storage).await.unwrap();
+    //     let added = shares.scan("tests/test-data").await.unwrap();
+    //     assert_eq!(added, 3);
+    //
+    //     let mut test_entries = vec![
+    //         Entry {
+    //             name: "test-data".to_string(),
+    //             size: 17,
+    //             is_dir: true,
+    //         },
+    //         Entry {
+    //             name: "test-data/subdir".to_string(),
+    //             size: 12,
+    //             is_dir: true,
+    //         },
+    //         Entry {
+    //             name: "test-data/somefile".to_string(),
+    //             size: 5,
+    //             is_dir: false,
+    //         },
+    //     ];
+    //
+    //     let mut responses = Box::into_pin(
+    //         shares
+    //             .query(Some("test-data".to_string()), None, false)
+    //             .unwrap(),
+    //     );
+    //     while let Some(res) = responses.next().await {
+    //         match res {
+    //             Response::Success(Success {
+    //                 msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+    //             }) => {
+    //                 for entry in entries {
+    //                     let i = test_entries.iter().position(|e| e == &entry).unwrap();
+    //                     test_entries.remove(i);
+    //                 }
+    //             }
+    //             Response::Err(code) => {
+    //                 panic!("Got error response {}", code);
+    //             }
+    //             something_else => {
+    //                 panic!("Got unexpected response {:?}", something_else);
+    //             }
+    //         }
+    //     }
+    //     // Make sure we found every entry
+    //     assert_eq!(test_entries.len(), 0);
+    // }
+    //
+    // #[tokio::test]
+    // async fn share_query_from_thread() {
+    //     let storage = TempDir::new().unwrap();
+    //     let mut shares = Shares::new(storage).await.unwrap();
+    //     shares.scan("tests/test-data").await.unwrap();
+    //
+    //     tokio::spawn(async move {
+    //         let mut test_entries = create_test_entries();
+    //         let mut responses = Box::into_pin(shares.query(None, None, true).unwrap());
+    //
+    //         while let Some(res) = responses.next().await {
+    //             match res {
+    //                 Response::Success(Success {
+    //                     msg: Some(response::success::Msg::Ls(response::Ls { entries })),
+    //                 }) => {
+    //                     for entry in entries {
+    //                         let i = test_entries.iter().position(|e| e == &entry).unwrap();
+    //                         test_entries.remove(i);
+    //                     }
+    //                 }
+    //                 Response::Err(code) => {
+    //                     panic!("Got error response {}", code);
+    //                 }
+    //                 _ => {}
+    //             }
+    //         }
+    //         // Make sure we found every entry
+    //         assert_eq!(test_entries.len(), 0);
+    //     });
+    // }
+}

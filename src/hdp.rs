@@ -91,10 +91,10 @@ mod tests {
         let mut peer_a = Hdp::new(storage_a).await.unwrap();
         peer_a.rpc.shares.scan("tests_/test-data").await.unwrap();
         let server_addr = "127.0.0.1:5000".parse().unwrap();
-        let (endpoint, _server_cert) = make_server_endpoint(server_addr)?;
+        let (endpoint_a, _server_cert) = make_server_endpoint(server_addr)?;
 
         tokio::spawn(async move {
-            if let Some(incoming_conn) = endpoint.accept().await {
+            if let Some(incoming_conn) = endpoint_a.accept().await {
                 let conn = incoming_conn.await.unwrap();
                 info!(
                     "[server] connection accepted: addr={}",
@@ -111,12 +111,12 @@ mod tests {
             }
         });
 
-        let (endpoint, _server_cert) = make_server_endpoint("127.0.0.1:5001".parse().unwrap())?;
+        let (endpoint_b, _server_cert) = make_server_endpoint("127.0.0.1:5001".parse().unwrap())?;
 
         let storage_b = TempDir::new().unwrap();
         let mut peer_b = Hdp::new(storage_b).await.unwrap();
 
-        let client_connection = endpoint
+        let client_connection = endpoint_b
             .connect(server_addr, "localhost")
             .unwrap()
             .await
@@ -144,7 +144,7 @@ mod tests {
         peer_b.request(req).await;
 
         // Make sure the server has a chance to clean up
-        endpoint.wait_idle().await;
+        endpoint_b.wait_idle().await;
         Ok(())
     }
 }
