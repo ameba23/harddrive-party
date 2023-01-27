@@ -1,7 +1,4 @@
-pub mod messages {
-    include!(concat!(env!("OUT_DIR"), "/harddriveparty.messages.rs"));
-}
-
+pub mod messages;
 // pub mod fs;
 // pub mod protocol;
 pub mod rpc;

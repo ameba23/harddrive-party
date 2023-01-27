@@ -1,26 +1,14 @@
 use std::{collections::HashMap, path::Path};
 
 use crate::{
-    messages::{
-        request::{Msg, Read},
-        Request,
-    },
+    messages::Request,
     rpc::Rpc,
     shares::{CreateSharesError, Shares},
 };
+use bincode::{deserialize, serialize};
 use log::debug;
-use prost::Message;
 use quinn::Connection;
 // use tokio::sync::mpsc::unbounded_channel;
-
-fn serialize_request(message: &Request) -> Vec<u8> {
-    let mut buf = Vec::new();
-    buf.reserve(message.encoded_len());
-
-    // Unwrap is safe, since we have reserved sufficient capacity in the vector.
-    message.encode(&mut buf).unwrap();
-    buf
-}
 
 pub struct Hdp {
     peers: HashMap<String, Connection>,
@@ -47,24 +35,22 @@ impl Hdp {
         if let Ok((send, recv)) = connection.accept_bi().await {
             let buf = recv.read_to_end(1024).await.unwrap();
             // request::decode(req);
-            match Request::decode(&*buf) {
+            let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
+            match request {
                 Ok(req) => {
                     println!("{:?}", req);
-                    match req.msg {
-                        Some(Msg::Ls(ls)) => {
-                            // let (tx, rx) = unbounded_channel::<LsResponse>();
-                            // self.rpc
+                    match req {
+                        Request::Ls {
+                            path,
+                            searchterm,
+                            recursive,
+                        } => {
+                            self.rpc.ls(path, searchterm, recursive, send).await;
                         }
-                        Some(Msg::Read(read)) => {
-                            self.rpc
-                                .read(read.path, read.start, read.end, send)
-                                .await
-                                .unwrap();
+                        Request::Read { path, start, end } => {
+                            self.rpc.read(path, start, end, send).await.unwrap();
                         }
-                        None => {}
                     }
-                    // send.write_all(b"h").await.unwrap();
-                    // send.finish().await.unwrap();
                 }
                 Err(_) => {
                     println!("cannot decode");
@@ -80,7 +66,8 @@ impl Hdp {
     pub async fn request(&self, request: Request) {
         let connection = self.peers.get("boop").unwrap();
         if let Ok((mut send, recv)) = connection.open_bi().await {
-            let buf = serialize_request(&request);
+            let buf = serialize(&request).unwrap();
+
             send.write_all(&buf).await.unwrap();
             send.finish().await.unwrap();
 
@@ -144,12 +131,15 @@ mod tests {
 
         peer_b.add_connection(client_connection);
 
-        let req = Request {
-            msg: Some(Msg::Read(Read {
-                path: "test-data/somefile".to_string(),
-                start: None,
-                end: None,
-            })),
+        // let req = Request::Read {
+        //     path: "test-data/somefile".to_string(),
+        //     start: None,
+        //     end: None,
+        // };
+        let req = Request::Ls {
+            path: None,
+            searchterm: None,
+            recursive: true,
         };
         peer_b.request(req).await;
 

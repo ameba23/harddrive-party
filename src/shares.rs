@@ -1,9 +1,9 @@
 // use crate::messages::response;
 // use crate::messages::response::ls::Entry;
 // use crate::messages::response::{Response, Success};
+use crate::messages::{Entry, LsResponse};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;
-use futures::{stream, Stream};
 use log::{info, warn};
 use sled::IVec;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
@@ -106,46 +106,41 @@ impl Shares {
     }
 
     /// ls or search query
-    // pub fn query(
-    //     &self,
-    //     path_option: Option<String>,
-    //     searchterm: Option<String>,
-    //     recursive: bool,
-    // ) -> Result<Box<dyn Stream<Item = Response> + Send + '_>, EntryParseError> {
-    //     let path = path_option.unwrap_or_default();
-    //
-    //     // Check that the given subdir exists
-    //     if let Ok(None) = self.dirs.get(&path) {
-    //         return Err(EntryParseError::PathNotFound);
-    //     }
-    //
-    //     let path_len = path.len();
-    //     let searchterm_clone = searchterm.clone();
-    //
-    //     let dirs_iter = self.dirs.scan_prefix(&path).filter_map(move |kv_result| {
-    //         kv_filter_map(kv_result, true, recursive, path_len, &searchterm)
-    //     });
-    //
-    //     let files_iter = self.files.scan_prefix(&path).filter_map(move |kv_result| {
-    //         kv_filter_map(kv_result, false, recursive, path_len, &searchterm_clone)
-    //     });
-    //
-    //     let entries_iter = dirs_iter.chain(files_iter);
-    //
-    //     let chunked = Chunker {
-    //         inner: Box::new(entries_iter),
-    //         chunk_size: MAX_ENTRIES_PER_MESSAGE,
-    //     };
-    //
-    //     let response_iter = chunked.map(|entries| {
-    //         Response::Success(Success {
-    //             msg: Some(response::success::Msg::Ls(response::Ls { entries })),
-    //         })
-    //     });
-    //
-    //     let output_stream = stream::iter(response_iter);
-    //     Ok(Box::new(output_stream))
-    // }
+    pub fn query(
+        &self,
+        path_option: Option<String>,
+        searchterm: Option<String>,
+        recursive: bool,
+    ) -> Result<Box<dyn Iterator<Item = LsResponse> + Send>, EntryParseError> {
+        let path = path_option.unwrap_or_default();
+
+        // Check that the given subdir exists
+        if let Ok(None) = self.dirs.get(&path) {
+            return Err(EntryParseError::PathNotFound);
+        }
+
+        let path_len = path.len();
+        let searchterm_clone = searchterm.clone();
+
+        let dirs_iter = self.dirs.scan_prefix(&path).filter_map(move |kv_result| {
+            kv_filter_map(kv_result, true, recursive, path_len, &searchterm)
+        });
+
+        let files_iter = self.files.scan_prefix(&path).filter_map(move |kv_result| {
+            kv_filter_map(kv_result, false, recursive, path_len, &searchterm_clone)
+        });
+
+        let entries_iter = dirs_iter.chain(files_iter);
+
+        let chunked = Chunker {
+            inner: Box::new(entries_iter),
+            chunk_size: MAX_ENTRIES_PER_MESSAGE,
+        };
+
+        let response_iter = chunked.map(|entries| LsResponse::Success(entries));
+
+        Ok(Box::new(response_iter))
+    }
 
     /// Resolve a path from a request by looking up the absolute path associated with its share name
     /// component
@@ -175,75 +170,75 @@ impl Shares {
     }
 }
 
-// /// Filter a key/value database entry based on query and if selected convert to a struct
-// fn kv_filter_map(
-//     kv_result: Result<(IVec, IVec), sled::Error>,
-//     is_dir: bool,
-//     recursive: bool,
-//     path_len: usize,
-//     searchterm: &Option<String>,
-// ) -> Option<Entry> {
-//     let (name, size) = kv_result.unwrap();
-//     let name = std::str::from_utf8(&name).unwrap();
-//
-//     if !recursive {
-//         // TODO should we use pathbuf for this?
-//         //
-//         let full_suffix = &name[path_len..];
-//         let suffix = if full_suffix.starts_with(MAIN_SEPARATOR) {
-//             &full_suffix[1..]
-//         } else {
-//             full_suffix
-//         };
-//         if suffix.contains(MAIN_SEPARATOR) {
-//             println!("skipping entry {}", suffix);
-//             return None;
-//         }
-//     }
-//
-//     if let Some(search) = searchterm {
-//         if !name.contains(search) {
-//             return None;
-//         };
-//     }
-//
-//     let size = u64::from_le_bytes(
-//         size.to_vec()
-//             .try_into()
-//             .map_err(|_| EntryParseError::U64ConversionError())
-//             .unwrap(),
-//     );
-//
-//     Some(Entry {
-//         name: name.to_string(),
-//         size,
-//         is_dir,
-//     })
-// }
-//
-// /// Turn an iterator into an iterator containing vectors of chunks of a given size
-// struct Chunker {
-//     inner: Box<dyn Iterator<Item = Entry> + Send>,
-//     chunk_size: usize,
-// }
-//
-// impl Iterator for Chunker {
-//     type Item = Vec<Entry>;
-//
-//     fn next(&mut self) -> Option<Self::Item> {
-//         let mut entries = Vec::new();
-//         for e in self.inner.by_ref() {
-//             entries.push(e);
-//             if entries.len() == self.chunk_size {
-//                 return Some(entries);
-//             }
-//         }
-//         match entries.len() {
-//             0 => None,
-//             _ => Some(entries),
-//         }
-//     }
-// }
+/// Filter a key/value database entry based on query and if selected convert to a struct
+fn kv_filter_map(
+    kv_result: Result<(IVec, IVec), sled::Error>,
+    is_dir: bool,
+    recursive: bool,
+    path_len: usize,
+    searchterm: &Option<String>,
+) -> Option<Entry> {
+    let (name, size) = kv_result.unwrap();
+    let name = std::str::from_utf8(&name).unwrap();
+
+    if !recursive {
+        // TODO should we use pathbuf for this?
+        //
+        let full_suffix = &name[path_len..];
+        let suffix = if full_suffix.starts_with(MAIN_SEPARATOR) {
+            &full_suffix[1..]
+        } else {
+            full_suffix
+        };
+        if suffix.contains(MAIN_SEPARATOR) {
+            println!("skipping entry {}", suffix);
+            return None;
+        }
+    }
+
+    if let Some(search) = searchterm {
+        if !name.contains(search) {
+            return None;
+        };
+    }
+
+    let size = u64::from_le_bytes(
+        size.to_vec()
+            .try_into()
+            .map_err(|_| EntryParseError::U64ConversionError())
+            .unwrap(),
+    );
+
+    Some(Entry {
+        name: name.to_string(),
+        size,
+        is_dir,
+    })
+}
+
+/// Turn an iterator into an iterator containing vectors of chunks of a given size
+struct Chunker {
+    inner: Box<dyn Iterator<Item = Entry> + Send>,
+    chunk_size: usize,
+}
+
+impl Iterator for Chunker {
+    type Item = Vec<Entry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut entries = Vec::new();
+        for e in self.inner.by_ref() {
+            entries.push(e);
+            if entries.len() == self.chunk_size {
+                return Some(entries);
+            }
+        }
+        match entries.len() {
+            0 => None,
+            _ => Some(entries),
+        }
+    }
+}
 
 /// To make cumulative directory sizes by adding the size of their containing files
 fn addition_merge(_key: &[u8], old_value: Option<&[u8]>, merged_bytes: &[u8]) -> Option<Vec<u8>> {

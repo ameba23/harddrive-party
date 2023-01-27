@@ -3,6 +3,7 @@
 // use crate::messages::{request, response};
 // use crate::run::{IncomingPeerRequest, OutgoingPeerResponse};
 use crate::shares::{EntryParseError, Shares};
+use bincode::serialize;
 use tokio::{
     fs,
     io::{self, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
@@ -23,20 +24,24 @@ impl Rpc {
     }
 
     /// Query the filepath index
-    // async fn ls(
-    //     &mut self,
-    //     path: Option<String>,
-    //     searchterm: Option<String>,
-    //     recursive: bool,
-    // ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
-    //     match self.shares.query(path, searchterm, recursive) {
-    //         Ok(e) => e,
-    //         Err(entry_parse_error) => create_error_stream(match entry_parse_error {
-    //             EntryParseError::PathNotFound => RpcError::PathNotFound,
-    //             _ => RpcError::DbError,
-    //         }),
-    //     }
-    // }
+    pub async fn ls(
+        &mut self,
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: bool,
+        mut output: quinn::SendStream,
+    ) -> () {
+        match self.shares.query(path, searchterm, recursive) {
+            Ok(it) => {
+                for res in it {
+                    let buf = serialize(&res).unwrap();
+                    output.write(&buf).await.unwrap();
+                }
+                output.finish().await.unwrap();
+            }
+            Err(_) => {}
+        }
+    }
 
     pub async fn read(
         &mut self,
