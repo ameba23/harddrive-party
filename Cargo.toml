@@ -9,9 +9,9 @@ homepage = "https://gitlab.com/pegpeg"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
 
 [dependencies]
-async-channel = "1.7.1"
+# async-channel = "1.7.1"
 prost = "0.11.2"
-async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
+# async-std = { version = "1.12.0", features = ["attributes", "unstable"] }
 futures = "0.3.25"
 async-walkdir = "0.2.0"
 sled = "0.34.7"
@@ -20,6 +20,11 @@ pretty-bytes-rust = "0.1.0"
 log = "0.4.17"
 env_logger = "0.10.0"
 rand = "0.8.5"
+quinn = "0.9.3"
+tokio = { version = "1.24.2", features = ["full"] }
+rustls = { version = "0.20.8", features = ["dangerous_configuration", "quic"]}
+rcgen = "0.10.0"
+anyhow = "1.0.28"
 
 [dev-dependencies]
 sluice = "0.5.5"

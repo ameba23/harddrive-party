@@ -10,6 +10,7 @@ use futures::{
 };
 use log::{info, warn};
 use prost::Message;
+use quinn::Connection;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -33,8 +34,8 @@ pub enum Event {
 }
 
 #[derive(Debug)]
-pub struct Protocol<IO> {
-    io: IO,
+pub struct Protocol {
+    connection: Connection,
     pub is_initiator: bool,
     public_key: [u8; 32],
     outbound_rx: Receiver<Vec<u8>>,
@@ -47,16 +48,13 @@ pub struct Protocol<IO> {
     pub remote_pk: Option<[u8; 32]>,
 }
 
-impl<IO> Protocol<IO>
-where
-    IO: AsyncWrite + AsyncRead + Send + Unpin + 'static,
-{
+impl Protocol {
     /// Create a new protocol instance.
-    pub fn new(io: IO, public_key: [u8; 32], is_initiator: bool) -> Self {
+    pub fn new(connection: Connection, public_key: [u8; 32], is_initiator: bool) -> Self {
         info!("new protocol");
         let (outbound_tx, outbound_rx) = async_channel::unbounded();
         Protocol {
-            io,
+            connection,
             is_initiator,
             public_key,
             remote_pk: None,
@@ -70,11 +68,11 @@ where
 
     /// Wait for the handshake before returning a new protocol instance
     pub async fn with_handshake(
-        io: IO,
+        connection: Connection,
         public_key: [u8; 32],
         is_initiator: bool,
     ) -> Result<Self, HandshakeError> {
-        let mut protocol = Protocol::new(io, public_key, is_initiator);
+        let mut protocol = Protocol::new(connection, public_key, is_initiator);
         let event = protocol.next().await;
         match event {
             Some(Ok(Event::HandshakeRequest)) => Ok(protocol),
@@ -90,8 +88,11 @@ where
     ) -> Result<(), SendError> {
         info!("Making request {:?} {}", request, self.is_initiator);
         let (id, buf) = self.create_request(request.message);
-        self.outbound_tx.send(buf).await?;
-        self.open_requests.insert(id, request.response_tx);
+
+        let (mut send, recv) = self.connection.open_bi().await?;
+        send.write_all(&buf);
+        // self.open_requests.insert(id, reest.response_tx);
+        // Spawn a task, read responses, and write them to the channel
         Ok(())
     }
 
@@ -161,10 +162,7 @@ where
     }
 }
 
-impl<IO> Stream for Protocol<IO>
-where
-    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
+impl Stream for Protocol {
     type Item = Result<Event, PeerConnectionError>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut buf = vec![0u8; READ_BUF_INITIAL_SIZE];
@@ -338,10 +336,7 @@ where
     }
 }
 
-impl<IO> FusedStream for Protocol<IO>
-where
-    IO: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
+impl FusedStream for Protocol {
     fn is_terminated(&self) -> bool {
         self.is_terminated
     }
@@ -350,6 +345,7 @@ where
 fn serialize_message(message: &messages::HdpMessage) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.reserve(message.encoded_len());
+
     // Unwrap is safe, since we have reserved sufficient capacity in the vector.
     message.encode(&mut buf).unwrap();
     buf
