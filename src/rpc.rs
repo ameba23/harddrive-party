@@ -1,16 +1,11 @@
-// use crate::fs::ReadStream;
-// use crate::messages::response::{success, EndResponse, Success};
-// use crate::messages::{request, response};
-// use crate::run::{IncomingPeerRequest, OutgoingPeerResponse};
-use crate::shares::{EntryParseError, Shares};
+use crate::shares::Shares;
 use bincode::serialize;
+// use log::debug;
+use thiserror::Error;
 use tokio::{
     fs,
-    io::{self, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
+    io::{self, AsyncReadExt, AsyncSeekExt},
 };
-// use futures::{stream, Stream, StreamExt};
-use log::info;
-use thiserror::Error;
 
 /// Remote Procedure Call - process remote requests (or requests from ourself to query our own
 /// share index)
@@ -84,123 +79,6 @@ impl Rpc {
             Err(_) => Err(RpcError::PathNotFound),
         }
     }
-    // pub async fn read(
-    //     &mut self,
-    //     path: String,
-    //     start: Option<u64>,
-    //     end: Option<u64>,
-    //     output: impl AsyncWrite,
-    // ) -> Result<Box<dyn AsyncRead + Send + 'static>> {
-    //     let start = start.unwrap_or(0);
-    //
-    //     if let Some(end_offset) = end {
-    //         if start > end_offset {
-    //             return create_error_stream(RpcError::BadOffset);
-    //         }
-    //     }
-    //
-    //     match self.shares.resolve_path(path) {
-    //         Ok(resolved_path) => {
-    //             match fs::File::open(resolved_path).await {
-    //                 Ok(file) => {
-    //                     match ReadStream::new(file, start, end).await {
-    //                         Ok(rs) => Box::new(rs),
-    //                         // If the initial seek fails because start > filesize
-    //                         Err(_) => create_error_stream(RpcError::BadOffset),
-    //                     }
-    //                 }
-    //                 Err(_) => create_error_stream(RpcError::PathNotFound),
-    //             }
-    //         }
-    //         Err(_) => create_error_stream(RpcError::PathNotFound),
-    //     }
-    // }
-    //
-    // /// Read a file, or a section of a file
-    // async fn read(
-    //     &mut self,
-    //     path: String,
-    //     start: Option<u64>,
-    //     end: Option<u64>,
-    // ) -> Box<dyn AsyncRead + Send + '_> {
-    //     let start = start.unwrap_or(0);
-    //
-    //     if let Some(end_offset) = end {
-    //         if start > end_offset {
-    //             return create_error_stream(RpcError::BadOffset);
-    //         }
-    //     }
-    //
-    //     match self.shares.resolve_path(path) {
-    //         Ok(resolved_path) => {
-    //             match fs::File::open(resolved_path).await {
-    //                 Ok(file) => {
-    //                     match ReadStream::new(file, start, end).await {
-    //                         Ok(rs) => Box::new(rs),
-    //                         // If the initial seek fails because start > filesize
-    //                         Err(_) => create_error_stream(RpcError::BadOffset),
-    //                     }
-    //                 }
-    //                 Err(_) => create_error_stream(RpcError::PathNotFound),
-    //             }
-    //         }
-    //         Err(_) => create_error_stream(RpcError::PathNotFound),
-    //     }
-    // }
-    //
-    // // TODO this should be private, but it is used in the test
-    // pub async fn request(
-    //     &mut self,
-    //     req: request::Msg,
-    // ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
-    //     match req {
-    //         request::Msg::Ls(request::Ls {
-    //             path,
-    //             searchterm,
-    //             recursive,
-    //         }) => self.ls(path, searchterm, recursive).await,
-    //         request::Msg::Read(request::Read { path, start, end }) => {
-    //             self.read(path, start, end).await
-    //         }
-    //         request::Msg::Handshake(_) => self.ls(None, None, true).await,
-    //     }
-    // }
-    //
-    // /// Loop serving requests
-    // /// Will return an error it gets a channel which is no longer open
-    // pub async fn run(
-    //     &mut self,
-    //     mut requests_rx: Receiver<IncomingPeerRequest>,
-    // ) -> Result<(), SendError<OutgoingPeerResponse>> {
-    //     while let Some(peer_request) = requests_rx.next().await {
-    //         let mut responses = Box::into_pin(self.request(peer_request.message).await);
-    //         let mut is_error = false;
-    //         while let Some(res) = responses.next().await {
-    //             info!("Sending response");
-    //             is_error = matches!(res, response::Response::Err(_));
-    //             peer_request
-    //                 .response_tx
-    //                 .send(OutgoingPeerResponse {
-    //                     message: res,
-    //                     id: peer_request.id,
-    //                 })
-    //                 .await?;
-    //         }
-    //         // Finally send an endresponse, unless we already sent an error
-    //         if !is_error {
-    //             peer_request
-    //                 .response_tx
-    //                 .send(OutgoingPeerResponse {
-    //                     id: peer_request.id,
-    //                     message: crate::messages::response::Response::Success(Success {
-    //                         msg: Some(success::Msg::EndResponse(EndResponse {})),
-    //                     }),
-    //                 })
-    //                 .await?;
-    //         }
-    //     }
-    //     Ok(())
-    // }
 }
 
 // ENOENT: -2,

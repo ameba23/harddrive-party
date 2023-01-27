@@ -137,7 +137,7 @@ impl Shares {
             chunk_size: MAX_ENTRIES_PER_MESSAGE,
         };
 
-        let response_iter = chunked.map(|entries| LsResponse::Success(entries));
+        let response_iter = chunked.map(LsResponse::Success);
 
         Ok(Box::new(response_iter))
     }

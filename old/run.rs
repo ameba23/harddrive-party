@@ -17,7 +17,6 @@ use quinn::Connection;
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tokio::sync::mpsc;
 
 #[derive(Debug)]
 pub struct OutGoingPeerRequest {
