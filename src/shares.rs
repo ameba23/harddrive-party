@@ -345,7 +345,7 @@ mod tests {
     async fn share_query() {
         let storage = TempDir::new().unwrap();
         let mut shares = Shares::new(storage).await.unwrap();
-        let added = shares.scan("tests_/test-data").await.unwrap();
+        let added = shares.scan("tests/test-data").await.unwrap();
         assert_eq!(added, 3);
 
         let mut test_entries = create_test_entries();
@@ -369,10 +369,7 @@ mod tests {
         let resolved = shares
             .resolve_path("test-data/df/aslkjdsal.asds".to_string())
             .unwrap();
-        assert_eq!(
-            resolved,
-            PathBuf::from("tests_/test-data/df/aslkjdsal.asds")
-        );
+        assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
     }
 
     // #[tokio::test]

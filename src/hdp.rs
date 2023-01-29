@@ -6,7 +6,7 @@ use crate::{
     shares::{CreateSharesError, Shares},
 };
 use bincode::{deserialize, serialize};
-use log::debug;
+use log::{debug, warn};
 use quinn::Connection;
 // use tokio::sync::mpsc::unbounded_channel;
 
@@ -53,7 +53,7 @@ impl Hdp {
                     }
                 }
                 Err(_) => {
-                    println!("cannot decode");
+                    warn!("Cannot decode message");
                 }
             }
         }
@@ -89,9 +89,9 @@ mod tests {
         env_logger::init();
         let storage_a = TempDir::new().unwrap();
         let mut peer_a = Hdp::new(storage_a).await.unwrap();
-        peer_a.rpc.shares.scan("tests_/test-data").await.unwrap();
-        let server_addr = "127.0.0.1:5000".parse().unwrap();
-        let (endpoint_a, _server_cert) = make_server_endpoint(server_addr)?;
+        peer_a.rpc.shares.scan("tests/test-data").await.unwrap();
+        let (endpoint_a, _server_cert) = make_server_endpoint("127.0.0.1:0".parse().unwrap())?;
+        let server_addr = endpoint_a.local_addr().unwrap();
 
         tokio::spawn(async move {
             if let Some(incoming_conn) = endpoint_a.accept().await {
@@ -111,7 +111,7 @@ mod tests {
             }
         });
 
-        let (endpoint_b, _server_cert) = make_server_endpoint("127.0.0.1:5001".parse().unwrap())?;
+        let (endpoint_b, _server_cert) = make_server_endpoint("127.0.0.1:0".parse().unwrap())?;
 
         let storage_b = TempDir::new().unwrap();
         let mut peer_b = Hdp::new(storage_b).await.unwrap();
