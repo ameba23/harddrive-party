@@ -20,7 +20,7 @@ impl Rpc {
 
     /// Query the filepath index
     pub async fn ls(
-        &mut self,
+        &self,
         path: Option<String>,
         searchterm: Option<String>,
         recursive: bool,
@@ -39,7 +39,7 @@ impl Rpc {
     }
 
     pub async fn read(
-        &mut self,
+        &self,
         path: String,
         start: Option<u64>,
         end: Option<u64>,

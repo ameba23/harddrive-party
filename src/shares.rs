@@ -25,7 +25,10 @@ pub struct Shares {
 
 impl Shares {
     /// Setup share index giving a path to use for persistant storage
-    pub async fn new(storage: impl AsRef<Path>) -> Result<Self, CreateSharesError> {
+    pub async fn new(
+        storage: impl AsRef<Path>,
+        share_dirs: Vec<&str>,
+    ) -> Result<Self, CreateSharesError> {
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir).expect("open");
@@ -34,11 +37,17 @@ impl Shares {
         dirs.set_merge_operator(addition_merge);
         let share_names = db.open_tree(SHARE_NAMES)?;
 
-        Ok(Shares {
+        let mut shares = Shares {
             files,
             dirs,
             share_names,
-        })
+        };
+
+        for share_dir in share_dirs {
+            shares.scan(share_dir).await?;
+        }
+
+        Ok(shares)
     }
 
     /// Index a given directory and return the number of entries added to the database
@@ -253,6 +262,8 @@ fn addition_merge(_key: &[u8], old_value: Option<&[u8]>, merged_bytes: &[u8]) ->
 pub enum CreateSharesError {
     #[error(transparent)]
     IOError(#[from] sled::Error),
+    #[error(transparent)]
+    ScanDirError(#[from] ScanDirError),
 }
 
 /// Error when indexing a dir
@@ -344,12 +355,12 @@ mod tests {
     #[tokio::test]
     async fn share_query() {
         let storage = TempDir::new().unwrap();
-        let mut shares = Shares::new(storage).await.unwrap();
+        let mut shares = Shares::new(storage, Vec::new()).await.unwrap();
         let added = shares.scan("tests/test-data").await.unwrap();
         assert_eq!(added, 3);
 
         let mut test_entries = create_test_entries();
-        let mut responses = shares.query(None, None, true).unwrap();
+        let responses = shares.query(None, None, true).unwrap();
         for res in responses {
             match res {
                 LsResponse::Success(entries) => {
