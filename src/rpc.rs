@@ -1,10 +1,11 @@
-use crate::shares::Shares;
+use crate::shares::{EntryParseError, Shares};
 use bincode::serialize;
-// use log::debug;
+use log::{debug, warn};
+use quinn::WriteError;
 use thiserror::Error;
 use tokio::{
     fs,
-    io::{self, AsyncReadExt, AsyncSeekExt},
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt},
 };
 
 /// Remote Procedure Call - process remote requests (or requests from ourself to query our own
@@ -25,26 +26,47 @@ impl Rpc {
         searchterm: Option<String>,
         recursive: bool,
         mut output: quinn::SendStream,
-    ) -> () {
+    ) -> Result<(), RpcError> {
         match self.shares.query(path, searchterm, recursive) {
             Ok(it) => {
                 for res in it {
-                    let buf = serialize(&res).unwrap();
-                    output.write(&buf).await.unwrap();
+                    let buf = serialize(&res).map_err(|e| {
+                        warn!("Cannot serialize query response {:?}", e);
+                        RpcError::SerializeError
+                    })?;
+
+                    // Write the length prefix
+                    // TODO this should be a varint
+                    let length: u64 = buf.len().try_into().unwrap();
+                    debug!("Writing prefix {length}");
+                    output.write(&length.to_le_bytes()).await?;
+
+                    output.write(&buf).await?;
+                    debug!("Written buf {:?}", buf);
                 }
-                output.finish().await.unwrap();
+                output.finish().await?;
+                Ok(())
             }
-            Err(_) => {}
+            Err(error) => {
+                warn!("Error during share query {:?}", error);
+                send_error(
+                    match error {
+                        EntryParseError::PathNotFound => RpcError::PathNotFound,
+                        _ => RpcError::DbError,
+                    },
+                    output,
+                )
+                .await
+            }
         }
     }
 
-    pub async fn read(
+    async fn get_file_portion(
         &self,
         path: String,
         start: Option<u64>,
         end: Option<u64>,
-        mut output: quinn::SendStream,
-    ) -> Result<(), RpcError> {
+    ) -> Result<Box<dyn AsyncRead + Send>, RpcError> {
         let start = start.unwrap_or(0);
 
         if let Some(end_offset) = end {
@@ -56,47 +78,64 @@ impl Rpc {
         match self.shares.resolve_path(path) {
             Ok(resolved_path) => match fs::File::open(resolved_path).await {
                 Ok(mut file) => {
-                    file.seek(std::io::SeekFrom::Start(start)).await.unwrap();
+                    file.seek(std::io::SeekFrom::Start(start))
+                        .await
+                        .map_err(|_| RpcError::BadOffset)?;
                     match end {
                         Some(e) => {
-                            io::copy(&mut file.take(start + e), &mut output)
-                                .await
-                                .unwrap();
+                            // TODO should this be just e?
+                            Ok(Box::new(file.take(start + e)))
                         }
-                        None => {
-                            // io::copy(&mut file, &mut output).await.unwrap();
-                            let mut buf: [u8; 32] = [0; 32];
-                            let n = file.read(&mut buf).await.unwrap();
-                            output.write(&buf[..n]).await.unwrap();
-                            println!("copied {}", n);
-                            output.finish().await.unwrap();
-                        }
+                        None => Ok(Box::new(file)),
                     }
-                    Ok(())
                 }
                 Err(_) => Err(RpcError::PathNotFound),
             },
             Err(_) => Err(RpcError::PathNotFound),
         }
     }
+
+    pub async fn read(
+        &self,
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+        mut output: quinn::SendStream,
+    ) -> Result<(), RpcError> {
+        match self.get_file_portion(path, start, end).await {
+            Ok(file) => {
+                // TODO output.write success header
+                io::copy(&mut Box::into_pin(file), &mut output).await?;
+                output.finish().await?;
+                Ok(())
+            }
+            Err(rpc_error) => send_error(rpc_error, output).await,
+        }
+    }
 }
 
-// ENOENT: -2,
-// ENOTDIR: -20,
-// EHOSTUNREACH: -113,
-// EEXIST: -17,
-// EBUSY: -16,
-// ENOLCK: -39
-/// Error code to be send as a wire message
-#[repr(i32)]
+async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+    // TODO send serialised version of the error
+    output.write(&[0]).await?;
+    output.finish().await?;
+    Err(error)
+}
+
+/// Error to be sent as a wire message
 #[derive(Error, Debug)]
 pub enum RpcError {
     #[error("Db error")]
-    DbError = 1,
+    DbError,
     #[error("Path not found")]
-    PathNotFound = -2,
+    PathNotFound,
     #[error("Bad offset")]
-    BadOffset = 2,
+    BadOffset,
+    #[error("Read error")]
+    ReadError(#[from] std::io::Error),
+    #[error("Write error")]
+    WriteError(#[from] WriteError),
+    #[error("serialize error")]
+    SerializeError,
 }
 
 // fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {

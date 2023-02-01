@@ -1,8 +1,8 @@
 use quinn::{ClientConfig, Endpoint, ServerConfig};
 // use rustls::PrivateKey;
-use std::{error::Error, net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc};
 
-pub fn make_server_endpoint(bind_addr: SocketAddr) -> Result<(Endpoint, Vec<u8>), Box<dyn Error>> {
+pub fn make_server_endpoint(bind_addr: SocketAddr) -> anyhow::Result<(Endpoint, Vec<u8>)> {
     let (server_config, server_cert, client_config) = configure_server()?;
     let mut endpoint = Endpoint::server(server_config, bind_addr)?;
     endpoint.set_default_client_config(client_config);
@@ -11,7 +11,7 @@ pub fn make_server_endpoint(bind_addr: SocketAddr) -> Result<(Endpoint, Vec<u8>)
 
 /// Returns default server configuration along with its certificate.
 // #[allow(clippy::field_reassign_with_default)] // https://github.com/rust-lang/rust-clippy/issues/6527
-fn configure_server() -> Result<(ServerConfig, Vec<u8>, ClientConfig), Box<dyn Error>> {
+fn configure_server() -> anyhow::Result<(ServerConfig, Vec<u8>, ClientConfig)> {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let cert_der = cert.serialize_der().unwrap();
     let priv_key = cert.serialize_private_key_der();

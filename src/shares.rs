@@ -1,4 +1,4 @@
-use crate::messages::{Entry, LsResponse};
+use crate::wire_messages::{Entry, LsResponse};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;
 use log::{info, warn};
@@ -208,6 +208,7 @@ fn kv_filter_map(
         };
     }
 
+    // TODO warn and return none?
     let size = u64::from_le_bytes(
         size.to_vec()
             .try_into()
@@ -215,6 +216,7 @@ fn kv_filter_map(
             .unwrap(),
     );
 
+    dbg!(name, is_dir);
     Some(Entry {
         name: name.to_string(),
         size,

@@ -4,7 +4,7 @@ use thiserror::Error;
 /// Wire messages
 // TODO read error
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Request {
     Ls {
         path: Option<String>,
@@ -24,7 +24,7 @@ pub enum LsResponse {
     Err(LsResponseError),
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Entry {
     pub name: String,
     pub size: u64,
