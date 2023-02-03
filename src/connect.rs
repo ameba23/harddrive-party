@@ -2,6 +2,7 @@ use quinn::{ClientConfig, Endpoint, ServerConfig};
 // use rustls::PrivateKey;
 use std::{net::SocketAddr, sync::Arc};
 
+/// Setup an endpoint for Quic connections with a given socket address
 pub fn make_server_endpoint(bind_addr: SocketAddr) -> anyhow::Result<(Endpoint, Vec<u8>)> {
     let (server_config, server_cert, client_config) = configure_server()?;
     let mut endpoint = Endpoint::server(server_config, bind_addr)?;
@@ -37,6 +38,7 @@ fn configure_server() -> anyhow::Result<(ServerConfig, Vec<u8>, ClientConfig)> {
     Ok((server_config, cert_der, client_config))
 }
 
+/// Setup Quic client for outgoing connections to peers
 fn configure_client() -> ClientConfig {
     let crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()

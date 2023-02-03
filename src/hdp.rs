@@ -17,11 +17,17 @@ use tokio::{
 };
 
 pub struct Hdp {
+    /// A map of peernames to peer connections
     peers: HashMap<String, Connection>,
+    /// Remote proceduce call for share queries and downloads
     rpc: Arc<Rpc>,
+    /// The QUIC endpoint
     endpoint: Endpoint,
+    /// Channel for commands from the UI
     pub command_tx: UnboundedSender<UiClientMessage>,
+    /// Channel for commands from the UI
     command_rx: UnboundedReceiver<UiClientMessage>,
+    /// Channel for responses to the UI
     response_tx: UnboundedSender<UiServerMessage>,
 }
 
@@ -53,6 +59,7 @@ impl Hdp {
         ))
     }
 
+    /// Loop handling incoming peer connections and commands from the UI
     pub async fn run(&mut self) {
         loop {
             select! {
@@ -69,22 +76,18 @@ impl Hdp {
         }
     }
 
-    /// Open a request stream and write a request to the given peer
-    async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let connection = self.peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        let (mut send, recv) = connection.open_bi().await?;
-        let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
-
-        send.write_all(&buf).await?;
-        send.finish().await?;
-        Ok(recv)
-    }
-
     /// Handle an incoming connection from a remote peer
     async fn handle_connection(&mut self, incoming_conn: quinn::Connecting) {
         match incoming_conn.await {
             Ok(conn) => {
                 debug!("connection accepted {}", conn.remote_address());
+
+                if let Some(i) = conn.handshake_data() {
+                    let d = i
+                        .downcast::<quinn::crypto::rustls::HandshakeData>()
+                        .unwrap();
+                    debug!("Server name {:?}", d.server_name);
+                }
 
                 if let Some(i) = conn.peer_identity() {
                     debug!("Client cert {:?}", i.downcast::<Vec<rustls::Certificate>>());
@@ -156,108 +159,156 @@ impl Hdp {
                 let response = self.connect_to_peer(addr).await;
                 if self
                     .response_tx
-                    .send(UiServerMessage { id, response })
+                    .send(UiServerMessage::Response { id, response })
                     .is_err()
                 {
                     return Err(HandleUiCommandError::ChannelClosed);
                 }
             }
             Command::Request(req, name) => {
-                let req_clone = req.clone();
-                match self.request(req, &name).await {
-                    Ok(mut recv) => {
-                        let response_tx = self.response_tx.clone();
-                        tokio::spawn(async move {
-                            match req_clone {
-                                Request::Ls {
-                                    path: _,
-                                    searchterm: _,
-                                    recursive: _,
-                                } => {
-                                    // Read the length prefix
-                                    // TODO this should be a varint
-                                    let mut length_buf: [u8; 8] = [0; 8];
-                                    while let Ok(()) = recv.read_exact(&mut length_buf).await {
-                                        let length: u64 = u64::from_le_bytes(length_buf);
-                                        debug!("Read prefix {length}");
+                let requests = self.expand_request(req, name).await;
+                for (request, peer_name) in requests {
+                    let req_clone = request.clone();
+                    let peer_name_clone = peer_name.clone();
+                    match self.request(request, &peer_name).await {
+                        Ok(mut recv) => {
+                            let response_tx = self.response_tx.clone();
+                            tokio::spawn(async move {
+                                match req_clone {
+                                    Request::Ls {
+                                        path: _,
+                                        searchterm: _,
+                                        recursive: _,
+                                    } => {
+                                        // Read the length prefix
+                                        // TODO this should be a varint
+                                        let mut length_buf: [u8; 8] = [0; 8];
+                                        while let Ok(()) = recv.read_exact(&mut length_buf).await {
+                                            let length: u64 = u64::from_le_bytes(length_buf);
+                                            debug!("Read prefix {length}");
 
-                                        // Read a message
-                                        let mut msg_buf =
-                                            vec![Default::default(); length.try_into().unwrap()];
-                                        recv.read_exact(&mut msg_buf).await.unwrap();
-                                        let ls_response: LsResponse =
-                                            deserialize(&msg_buf).unwrap();
+                                            // Read a message
+                                            let mut msg_buf = vec![
+                                                Default::default();
+                                                length.try_into().unwrap()
+                                            ];
+                                            match recv.read_exact(&mut msg_buf).await {
+                                                Ok(()) => {
+                                                    let ls_response: LsResponse =
+                                                        deserialize(&msg_buf).unwrap();
 
+                                                    if response_tx
+                                                        .send(UiServerMessage::Response {
+                                                            id,
+                                                            response: Ok(UiResponse::Ls(
+                                                                ls_response,
+                                                                peer_name_clone.to_string(),
+                                                            )),
+                                                        })
+                                                        .is_err()
+                                                    {
+                                                        warn!("Response channel closed");
+                                                        break;
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    warn!("Bad prefix / read error");
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        // Terminate with an endresponse
+                                        // TODO if there was more then one peer we need to only
+                                        // send this if we are the last one
                                         if response_tx
-                                            .send(UiServerMessage {
+                                            .send(UiServerMessage::Response {
                                                 id,
-                                                response: Ok(UiResponse::Ls(ls_response)),
+                                                response: Ok(UiResponse::EndResponse),
                                             })
                                             .is_err()
                                         {
                                             warn!("Response channel closed");
-                                            break;
                                         }
                                     }
-
-                                    // Terminate with an endresponse or an error
-                                    if response_tx
-                                        .send(UiServerMessage {
-                                            id,
-                                            response: Ok(UiResponse::EndResponse),
-                                        })
-                                        .is_err()
-                                    {
-                                        warn!("Response channel closed");
+                                    Request::Read {
+                                        path: _,
+                                        start: _,
+                                        end: _,
+                                    } => {
+                                        // TODO write to file
+                                        let mut buf: [u8; 1024] = [0; 1024];
+                                        while let Ok(Some(n)) = recv.read(&mut buf).await {
+                                            debug!("Read {} bytes", n);
+                                            if response_tx
+                                                .send(UiServerMessage::Response {
+                                                    id,
+                                                    response: Ok(UiResponse::Read(
+                                                        buf[..n].to_vec(),
+                                                    )),
+                                                })
+                                                .is_err()
+                                            {
+                                                warn!("Response channel closed");
+                                                break;
+                                            };
+                                        }
+                                        // Terminate with an endresponse or an error
                                     }
                                 }
-                                Request::Read {
-                                    path: _,
-                                    start: _,
-                                    end: _,
-                                } => {
-                                    // TODO write to file
-                                    let mut buf: [u8; 1024] = [0; 1024];
-                                    while let Ok(Some(n)) = recv.read(&mut buf).await {
-                                        debug!("Read {} bytes", n);
-                                        if response_tx
-                                            .send(UiServerMessage {
-                                                id,
-                                                response: Ok(UiResponse::Read(buf[..n].to_vec())),
-                                            })
-                                            .is_err()
-                                        {
-                                            warn!("Response channel closed");
-                                            break;
-                                        };
-                                    }
-                                    // Terminate with an endresponse or an error
-                                }
-                            }
-                        });
-                    }
-                    Err(err) => {
-                        if self
-                            .response_tx
-                            .send(UiServerMessage {
-                                id,
-                                response: Err(UiServerError::RequestError(err)),
-                            })
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
+                            });
                         }
-                    }
-                };
+                        Err(err) => {
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Err(UiServerError::RequestError(err)),
+                                })
+                                .is_err()
+                            {
+                                return Err(HandleUiCommandError::ChannelClosed);
+                            }
+                        }
+                    };
+                }
             }
         };
         Ok(())
     }
 
+    /// Turn a single request into potentially a set of requests to all peers
+    async fn expand_request<'a>(
+        &'a self,
+        request: Request,
+        name: String,
+    ) -> Vec<(Request, String)> {
+        if name.is_empty() {
+            self.peers
+                .keys()
+                .map(|peer_name| (request.clone(), peer_name.to_string()))
+                .collect()
+        } else {
+            vec![(request, name)]
+        }
+    }
+
+    /// Open a request stream and write a request to the given peer
+    async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
+        let connection = self.peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        let (mut send, recv) = connection.open_bi().await?;
+        let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
+
+        send.write_all(&buf).await?;
+        send.finish().await?;
+        Ok(recv)
+    }
+
+    /// Initiate a Quic connection to a remote peer
     async fn connect_to_peer(&mut self, addr: SocketAddr) -> Result<UiResponse, UiServerError> {
         let connection = self
             .endpoint
-            .connect(addr, "localhost")
+            .connect(addr, "ssss")
             .map_err(|_| UiServerError::ConnectionError)?
             .await
             .map_err(|_| UiServerError::ConnectionError)?;
@@ -275,7 +326,8 @@ impl Hdp {
     }
 }
 
-#[derive(Error, Debug)]
+/// Error on making a request to a given remote peer
+#[derive(Error, Debug, PartialEq)]
 pub enum RequestError {
     #[error("Peer not found")]
     PeerNotFound,
@@ -287,6 +339,7 @@ pub enum RequestError {
     WriteError(#[from] quinn::WriteError),
 }
 
+/// Error on handling a UI command
 #[derive(Error, Debug)]
 pub enum HandleUiCommandError {
     #[error("User closed connection")]
@@ -348,7 +401,11 @@ mod tests {
             .unwrap();
 
         let res = bob_rx.recv().await.unwrap();
-        assert_eq!(UiResponse::Read(b"boop\n".to_vec()), res.response.unwrap());
+        if let UiServerMessage::Response { id: _, response } = res {
+            assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
+        } else {
+            panic!("Bad response");
+        }
 
         // Do an Ls query
         let req = Request::Ls {
@@ -364,8 +421,10 @@ mod tests {
             .unwrap();
 
         let mut entries = Vec::new();
-        while let UiResponse::Ls(LsResponse::Success(some_entries)) =
-            bob_rx.recv().await.unwrap().response.unwrap()
+        while let UiServerMessage::Response {
+            id: _,
+            response: Ok(UiResponse::Ls(LsResponse::Success(some_entries), _name)),
+        } = bob_rx.recv().await.unwrap()
         {
             for entry in some_entries {
                 entries.push(entry);
