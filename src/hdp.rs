@@ -1,20 +1,23 @@
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
-
 use crate::{
     connect::make_server_endpoint,
+    mdns::{mdns_server, MdnsPeerInfo},
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage},
     wire_messages::{LsResponse, Request},
 };
 use bincode::{deserialize, serialize};
-use log::{debug, warn};
+use local_ip_address::local_ip;
+use log::{debug, info, warn};
 use quinn::{Connection, Endpoint, RecvStream};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
 use thiserror::Error;
 use tokio::{
     select,
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
+
+const MAX_REQUEST_SIZE: usize = 1024;
 
 pub struct Hdp {
     /// A map of peernames to peer connections
@@ -22,13 +25,15 @@ pub struct Hdp {
     /// Remote proceduce call for share queries and downloads
     rpc: Arc<Rpc>,
     /// The QUIC endpoint
-    endpoint: Endpoint,
+    pub endpoint: Endpoint,
     /// Channel for commands from the UI
     pub command_tx: UnboundedSender<UiClientMessage>,
     /// Channel for commands from the UI
     command_rx: UnboundedReceiver<UiClientMessage>,
     /// Channel for responses to the UI
     response_tx: UnboundedSender<UiServerMessage>,
+    /// Channel for discovered mdns peers
+    mdns_peers_rx: UnboundedReceiver<MdnsPeerInfo>,
 }
 
 impl Hdp {
@@ -43,7 +48,18 @@ impl Hdp {
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
         let shares = Shares::new(storage, sharedirs).await?;
-        let (endpoint, _cert) = make_server_endpoint("127.0.0.1:0".parse()?)?;
+
+        let my_local_ip = local_ip()?;
+
+        let (endpoint, _cert) = make_server_endpoint(SocketAddr::new(my_local_ip, 0))?;
+
+        let addr = endpoint.local_addr()?;
+        println!("mdns addr {:?}", addr);
+        let topic = "boop".to_string(); // TODO
+        let mdns_peers_rx = mdns_server(&addr.to_string(), addr, topic).await?;
+        // while let Some(mdns_peer_info) = peers_rx.recv().await {
+        //     println!("Found mdns peer {}", mdns_peer_info.addr);
+        // }
         Ok((
             Self {
                 peers: Default::default(),
@@ -52,6 +68,7 @@ impl Hdp {
                 command_tx,
                 command_rx,
                 response_tx,
+                mdns_peers_rx,
                 // public_key,
                 // name: to_hex_string(public_key),
             },
@@ -72,12 +89,24 @@ impl Hdp {
                         break;
                     };
                 }
+                Some(mdns_peer_info) = self.mdns_peers_rx.recv() => {
+                    debug!("Found mdns peer {}", mdns_peer_info.addr);
+                    if self.connect_to_peer(mdns_peer_info.addr).await.is_err() {
+                        warn!("Cannot connect to mdns peer");
+                    };
+                }
             }
         }
     }
 
     /// Handle an incoming connection from a remote peer
     async fn handle_connection(&mut self, incoming_conn: quinn::Connecting) {
+        // if self
+        //     .peers
+        //     .contains_key(&incoming_conn.remote_address().to_string())
+        // {
+        //     println!("Not conencting to existing peer");
+        // } else {
         match incoming_conn.await {
             Ok(conn) => {
                 debug!("connection accepted {}", conn.remote_address());
@@ -92,15 +121,17 @@ impl Hdp {
                 if let Some(i) = conn.peer_identity() {
                     debug!("Client cert {:?}", i.downcast::<Vec<rustls::Certificate>>());
                 }
+                info!("[incoming] before connected to {} peers", self.peers.len());
                 self.peers
                     .insert(conn.remote_address().to_string(), conn.clone());
+                info!("[incoming] connected to {} peers", self.peers.len());
 
                 let rpc = self.rpc.clone();
                 tokio::spawn(async move {
+                    // Loop over incoming requests from this peer
                     while let Ok((send, recv)) = conn.accept_bi().await {
-                        match recv.read_to_end(1024).await {
+                        match recv.read_to_end(MAX_REQUEST_SIZE).await {
                             Ok(buf) => {
-                                // request::decode(req);
                                 let request: Result<Request, Box<bincode::ErrorKind>> =
                                     deserialize(&buf);
                                 match request {
@@ -126,22 +157,24 @@ impl Hdp {
                                         }
                                     }
                                     Err(_) => {
-                                        warn!("Cannot decode message");
+                                        warn!("Cannot decode wire message");
                                     }
                                 }
                             }
                             Err(err) => {
-                                warn!("Cannot read from incoming connection {:?}", err);
+                                warn!("Cannot read from incoming QUIC connection {:?}", err);
                                 break;
                             }
                         };
                     }
+                    // TODO here we need to remove the peer from the hashmap
                 });
             }
             Err(err) => {
-                warn!("Incoming connection failed {:?}", err);
+                warn!("Incoming QUIC connection failed {:?}", err);
             }
         }
+        // }
     }
 
     /// Handle a command from the UI
@@ -168,6 +201,7 @@ impl Hdp {
             Command::Request(req, name) => {
                 let requests = self.expand_request(req, name).await;
                 for (request, peer_name) in requests {
+                    info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
                     let peer_name_clone = peer_name.clone();
                     match self.request(request, &peer_name).await {
@@ -259,11 +293,13 @@ impl Hdp {
                             });
                         }
                         Err(err) => {
+                            println!("Error from remote peer {:?}", err);
+                            // TODO map the error
                             if self
                                 .response_tx
                                 .send(UiServerMessage::Response {
                                     id,
-                                    response: Err(UiServerError::RequestError(err)),
+                                    response: Err(UiServerError::RequestError),
                                 })
                                 .is_err()
                             {
@@ -278,11 +314,7 @@ impl Hdp {
     }
 
     /// Turn a single request into potentially a set of requests to all peers
-    async fn expand_request<'a>(
-        &'a self,
-        request: Request,
-        name: String,
-    ) -> Vec<(Request, String)> {
+    async fn expand_request(&self, request: Request, name: String) -> Vec<(Request, String)> {
         if name.is_empty() {
             self.peers
                 .keys()
@@ -298,7 +330,7 @@ impl Hdp {
         let connection = self.peers.get(name).ok_or(RequestError::PeerNotFound)?;
         let (mut send, recv) = connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
-
+        info!("message serialized, writing...");
         send.write_all(&buf).await?;
         send.finish().await?;
         Ok(recv)
@@ -306,6 +338,10 @@ impl Hdp {
 
     /// Initiate a Quic connection to a remote peer
     async fn connect_to_peer(&mut self, addr: SocketAddr) -> Result<UiResponse, UiServerError> {
+        println!("addr: {:?}, peers: {:?}", addr, self.peers);
+        if self.peers.contains_key(&addr.to_string()) {
+            println!("Not conencting to existing peer");
+        }
         let connection = self
             .endpoint
             .connect(addr, "ssss")
@@ -320,8 +356,10 @@ impl Hdp {
             );
         };
 
+        info!("[outgoing] before connected to {} peers", self.peers.len());
         self.peers
             .insert(connection.remote_address().to_string(), connection);
+        info!("Connected to {} peers", self.peers.len());
         Ok(UiResponse::Connect)
     }
 }

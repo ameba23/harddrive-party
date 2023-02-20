@@ -1,18 +1,18 @@
-use crate::hdp::RequestError;
 use crate::wire_messages::{LsResponse, Request};
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use thiserror::Error;
 
 /// Messages for communicating with the user interface over websocket
 
 /// A command from the Ui
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct UiClientMessage {
     pub id: u32,
     pub command: Command,
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
     Connect(SocketAddr),
     Request(Request, String),
@@ -20,7 +20,7 @@ pub enum Command {
 }
 
 /// A message to the UI
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiServerMessage {
     Response {
         id: u32,
@@ -29,13 +29,13 @@ pub enum UiServerMessage {
     Event(UiEvent),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
     PeerConnected,
     PeerDisconnected,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiResponse {
     Read(Vec<u8>),
     Ls(LsResponse, String),
@@ -43,10 +43,10 @@ pub enum UiResponse {
     EndResponse,
 }
 
-#[derive(Error, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
 pub enum UiServerError {
-    #[error(transparent)]
-    RequestError(#[from] RequestError),
     #[error("Cannot connect")]
     ConnectionError,
+    #[error("Request error")]
+    RequestError, // TODO
 }

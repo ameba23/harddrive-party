@@ -6,17 +6,38 @@ use thiserror::Error;
 use tokio::{
     fs,
     io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt},
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
+
+struct ReadRequest {
+    path: String,
+    start: Option<u64>,
+    end: Option<u64>,
+    output: quinn::SendStream,
+}
 
 /// Remote Procedure Call - process remote requests (or requests from ourself to query our own
 /// share index)
 pub struct Rpc {
     pub shares: Shares,
+    upload_tx: UnboundedSender<ReadRequest>,
+    // upload_rx: UnboundedReceiver<ReadRequest>,
 }
 
 impl Rpc {
     pub fn new(shares: Shares) -> Rpc {
-        Rpc { shares }
+        let (upload_tx, upload_rx) = unbounded_channel();
+        let shares_clone = shares.clone();
+
+        tokio::spawn(async move {
+            let mut uploader = Uploader {
+                shares: shares_clone,
+                upload_rx,
+            };
+            uploader.run().await;
+        });
+
+        Rpc { shares, upload_tx }
     }
 
     /// Query the filepath index
@@ -61,6 +82,58 @@ impl Rpc {
         }
     }
 
+    pub async fn read(
+        &self,
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+        output: quinn::SendStream,
+    ) -> Result<(), RpcError> {
+        self.upload_tx
+            .send(ReadRequest {
+                path,
+                start,
+                end,
+                output,
+            })
+            .map_err(|_| RpcError::ChannelClosed)?;
+        Ok(())
+    }
+}
+
+/// Uploads are processed sequentially in a separate task
+struct Uploader {
+    shares: Shares,
+    upload_rx: UnboundedReceiver<ReadRequest>,
+}
+
+impl Uploader {
+    async fn run(&mut self) {
+        while let Some(read_request) = self.upload_rx.recv().await {
+            if let Err(e) = self.do_read(read_request).await {
+                warn!("Error uploading {:?}", e);
+            }
+        }
+    }
+
+    async fn do_read(&self, read_request: ReadRequest) -> Result<(), RpcError> {
+        let ReadRequest {
+            path,
+            start,
+            end,
+            mut output,
+        } = read_request;
+        match self.get_file_portion(path, start, end).await {
+            Ok(file) => {
+                // TODO output.write success header
+                io::copy(&mut Box::into_pin(file), &mut output).await?;
+                output.finish().await?;
+                Ok(())
+            }
+            Err(rpc_error) => send_error(rpc_error, output).await,
+        }
+    }
+
     async fn get_file_portion(
         &self,
         path: String,
@@ -94,24 +167,6 @@ impl Rpc {
             Err(_) => Err(RpcError::PathNotFound),
         }
     }
-
-    pub async fn read(
-        &self,
-        path: String,
-        start: Option<u64>,
-        end: Option<u64>,
-        mut output: quinn::SendStream,
-    ) -> Result<(), RpcError> {
-        match self.get_file_portion(path, start, end).await {
-            Ok(file) => {
-                // TODO output.write success header
-                io::copy(&mut Box::into_pin(file), &mut output).await?;
-                output.finish().await?;
-                Ok(())
-            }
-            Err(rpc_error) => send_error(rpc_error, output).await,
-        }
-    }
 }
 
 async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
@@ -136,6 +191,8 @@ pub enum RpcError {
     WriteError(#[from] WriteError),
     #[error("serialize error")]
     SerializeError,
+    #[error("Channel closed")]
+    ChannelClosed,
 }
 
 // fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {

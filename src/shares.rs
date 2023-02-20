@@ -14,6 +14,7 @@ const SHARE_NAMES: &[u8; 1] = b"s";
 pub const MAX_ENTRIES_PER_MESSAGE: usize = 3;
 
 /// The share index
+#[derive(Clone)]
 pub struct Shares {
     /// Filepaths mapped to their size in bytes
     files: sled::Tree,

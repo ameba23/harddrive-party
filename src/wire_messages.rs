@@ -18,7 +18,7 @@ pub enum Request {
     },
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum LsResponse {
     Success(Vec<Entry>),
     Err(LsResponseError),
@@ -31,7 +31,7 @@ pub struct Entry {
     pub is_dir: bool,
 }
 
-#[derive(Error, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Error, Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum LsResponseError {
     #[error("Database error")]
     DbError,
