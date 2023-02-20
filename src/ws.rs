@@ -2,20 +2,19 @@ use crate::{
     ui_messages::{Command, UiClientMessage, UiResponse, UiServerMessage},
     wire_messages::LsResponse,
 };
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
-
 use bincode::{deserialize, serialize};
 use colored::Colorize;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use log::warn;
+use log::{debug, warn};
 use rand::{rngs::ThreadRng, Rng};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 use tokio::{
     net::TcpListener,
     select,
@@ -24,18 +23,19 @@ use tokio::{
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 type Tx = UnboundedSender<UiServerMessage>;
-type PeerMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+type ClientMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
+/// WS server
 pub async fn server(
     addr: SocketAddr,
     command_tx: UnboundedSender<UiClientMessage>,
     mut response_rx: UnboundedReceiver<UiServerMessage>,
 ) -> anyhow::Result<()> {
-    let state = PeerMap::new(Mutex::new(HashMap::new()));
+    let state = ClientMap::new(Mutex::new(HashMap::new()));
 
     // Create the event loop and TCP listener we'll accept connections on.
     let try_socket = TcpListener::bind(&addr).await;
-    let listener = try_socket.expect("Failed to bind");
+    let listener = try_socket?;
     println!("WS Listening on: {}", addr);
 
     // Loop over response channel and send to each connected client
@@ -43,12 +43,12 @@ pub async fn server(
     tokio::spawn(async move {
         while let Some(msg) = response_rx.recv().await {
             let clients = state_clone.lock().unwrap();
-            println!("{} connected clients", clients.len());
+            debug!("{} connected clients", clients.len());
             for client in clients.values() {
                 match client.send(msg.clone()) {
                     Ok(_) => {}
                     Err(err) => {
-                        println!("Cannot send msg to connected client {:?}", err);
+                        warn!("Cannot send msg to connected client {:?}", err);
                     }
                 };
             }
@@ -63,7 +63,7 @@ pub async fn server(
         let state_clone = state.clone();
         let command_tx = command_tx.clone();
         tokio::spawn(async move {
-            println!("Incoming TCP connection from: {}", client_addr);
+            debug!("Incoming WS connection from: {}", client_addr);
 
             let ws_stream = tokio_tungstenite::accept_async(stream)
                 .await
@@ -94,7 +94,7 @@ pub async fn server(
                                 }
                             }
                             None => {
-                                println!("Ws Connection closed, ending loop");
+                                debug!("Ws Connection closed, ending loop");
                                 break;
                             }
                         }
@@ -103,7 +103,7 @@ pub async fn server(
                     // TODO handle none
                     Some(msg) = rx.recv() => {
                         if let Err(err) = outgoing.send(Message::Binary(serialize(&msg).unwrap())).await {
-                            println!("cannot send ws message {:?}", err);
+                            warn!("cannot send ws message {:?}", err);
                             break;
                         };
                     }
@@ -111,7 +111,7 @@ pub async fn server(
             }
             // Remove the client from our map
             if state_clone.lock().unwrap().remove(&client_addr).is_none() {
-                println!("WS client address not removed! {}", client_addr);
+                warn!("WS client address not removed! {}", client_addr);
             };
         });
     }
@@ -119,6 +119,7 @@ pub async fn server(
     Ok(())
 }
 
+/// WS client used for the CLI
 pub struct WsClient {
     write: SplitSink<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, Message>,
     read: SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
@@ -128,7 +129,7 @@ pub struct WsClient {
 impl WsClient {
     pub async fn new(server_addr: String) -> anyhow::Result<WsClient> {
         let (ws_stream, _) = connect_async(server_addr).await.expect("Failed to connect");
-        println!("WebSocket handshake has been successfully completed");
+        debug!("WebSocket handshake has been successfully completed");
 
         let (write, read) = ws_stream.split();
         let rng = rand::thread_rng();
@@ -139,11 +140,12 @@ impl WsClient {
     pub async fn send_message(&mut self, command: Command) -> anyhow::Result<u32> {
         let id = self.rng.gen();
         let message = UiClientMessage { id, command };
-        let message_buf = serialize(&message).unwrap();
+        let message_buf = serialize(&message)?;
         self.write.send(Message::Binary(message_buf)).await?;
         Ok(id)
     }
 
+    // TODO this should return a result with a stream of messages
     pub async fn read_responses(&mut self, message_id: u32) {
         while let Some(msg_result) = self.read.next().await {
             match msg_result {
