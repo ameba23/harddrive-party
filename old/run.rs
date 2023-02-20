@@ -13,6 +13,7 @@ use async_std::task::{self, JoinHandle};
 use futures::io::{AsyncRead, AsyncWrite};
 use futures::{select, StreamExt};
 use log::{info, warn};
+use quinn::Connection;
 use rand::Rng;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,14 +32,13 @@ pub struct IncomingPeerResponse {
 
 pub struct IncomingPeerRequest {
     pub message: request::Msg,
-    pub id: u32,
-    pub response_tx: Sender<OutgoingPeerResponse>,
+    pub response_tx: quinn::SendStream,
 }
 
-pub struct OutgoingPeerResponse {
-    pub id: u32,
-    pub message: response::Response,
-}
+// pub struct OutgoingPeerResponse {
+//     pub id: u32,
+//     pub message: response::Response,
+// }
 
 pub trait AsyncReadAndWrite: AsyncWrite + AsyncRead + Send + Unpin + 'static {}
 
@@ -72,34 +72,40 @@ impl Run {
     /// Loop for IO for a connected peer
     pub async fn handle_peer(
         &mut self,
-        peer_stream: Box<dyn AsyncReadAndWrite>,
+        connection: Connection,
         is_initiator: bool,
     ) -> JoinHandle<()> {
         // TODO handle the case that the handshake fails
-        let mut peer_connection =
-            Protocol::with_handshake(Box::into_pin(peer_stream), self.public_key, is_initiator)
-                .await
-                .unwrap();
-        info!("Remote pk {:?}", peer_connection.remote_pk.unwrap());
+        // let mut peer_connection =
+        //     Protocol::with_handshake(Box::into_pin(peer_stream), self.public_key, is_initiator)
+        //         .await
+        //         .unwrap();
+        // info!("Remote pk {:?}", peer_connection.remote_pk.unwrap());
 
         let requests_to_us_tx = self.requests_to_us_tx.clone();
 
-        let (response_tx, response_rx): (
-            async_channel::Sender<OutgoingPeerResponse>,
-            async_channel::Receiver<OutgoingPeerResponse>,
-        ) = async_channel::unbounded();
-
+        // let (response_tx, response_rx): (
+        //     async_channel::Sender<OutgoingPeerResponse>,
+        //     async_channel::Receiver<OutgoingPeerResponse>,
+        // ) = async_channel::unbounded();
+        //
         let (requests_from_us_tx, requests_from_us_rx): (
             async_channel::Sender<OutGoingPeerRequest>,
             async_channel::Receiver<OutGoingPeerRequest>,
         ) = async_channel::unbounded();
-        self.peers.insert(
-            to_hex_string(peer_connection.remote_pk.unwrap()),
-            requests_from_us_tx,
-        );
+        // self.peers.insert(
+        //     to_hex_string(peer_connection.remote_pk.unwrap()),
+        //     requests_from_us_tx,
+        // );
         task::spawn(async move {
             let mut response_rx = response_rx.fuse();
             let mut requests_from_us_rx = requests_from_us_rx.fuse();
+
+            // here we need a loop for incoming requests
+            while let Ok((mut send, recv)) = connection.accept_bi().await {
+                // recieve a request
+                // send it to rpc
+            }
 
             // TODO if the connection closes, this loop should end, and the peer should be removed
             // from self.peers

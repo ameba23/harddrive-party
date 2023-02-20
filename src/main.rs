@@ -1,0 +1,161 @@
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::PathBuf,
+};
+
+use clap::{Parser, Subcommand};
+use harddrive_party::{hdp::Hdp, ui_messages::Command, wire_messages::Request};
+use local_ip_address::local_ip;
+
+#[derive(Parser, Debug, Clone)]
+#[clap(version, about, long_about = None)]
+#[clap(about = "Peer to peer filesharing")]
+struct Cli {
+    #[clap(subcommand)]
+    command: CliCommand,
+    #[arg(short, long)]
+    ui_addr: Option<String>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum CliCommand {
+    /// Start the process
+    Start {
+        storage: String,
+        share_dir: String,
+        ws_addr: Option<SocketAddr>,
+    },
+    /// Connect to a peer
+    Connect {
+        addr: SocketAddr,
+    },
+    /// Query remote peers
+    Ls {
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: Option<bool>,
+        peer: Option<String>,
+    },
+    Read {
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+        peer: Option<String>,
+    },
+    /// mdns
+    Mdns {
+        name: String,
+        port: u16,
+    },
+    LocalIp {},
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+    let default_ui_addr = "ws://localhost:5001".to_string();
+    let cli = Cli::parse();
+    let ui_addr = cli.ui_addr.unwrap_or(default_ui_addr);
+    match cli.command {
+        CliCommand::Start {
+            storage,
+            share_dir,
+            ws_addr,
+        } => {
+            let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
+            let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir]).await.unwrap();
+            println!("Listening on {}", hdp.endpoint.local_addr().unwrap());
+            let command_tx = hdp.command_tx.clone();
+
+            tokio::spawn(async move {
+                harddrive_party::ws::server(ws_addr, command_tx, recv)
+                    .await
+                    .unwrap();
+            });
+
+            hdp.run().await;
+        }
+        CliCommand::Connect { addr } => {
+            // let command = Command::Request(
+            //     Request::Ls {
+            //         path: None,
+            //         searchterm: None,
+            //         recursive: false,
+            //     },
+            //     "".to_string(),
+            // );
+            harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;
+        }
+        CliCommand::Ls {
+            path,
+            searchterm,
+            recursive,
+            peer,
+        } => {
+            // TODO If a path is given, convert to pathbuf, split into peername and path components
+            harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::Request(
+                    Request::Ls {
+                        path,
+                        searchterm,
+                        recursive: recursive.unwrap_or(true),
+                    },
+                    peer.unwrap_or_default(),
+                ),
+            )
+            .await?;
+        }
+        CliCommand::Read {
+            path,
+            start,
+            end,
+            peer,
+        } => {
+            // TODO If a path is given, convert to pathbuf, split into peername and path components
+            harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::Request(Request::Read { path, start, end }, peer.unwrap_or_default()),
+            )
+            .await?;
+        }
+        // Temporary
+        CliCommand::Mdns { name, port } => {
+            let topic = "boop".to_string();
+            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 101)), port);
+            let mut peers_rx = harddrive_party::mdns::mdns_server(&name, addr, topic)
+                .await
+                .unwrap();
+            while let Some(mdns_peer_info) = peers_rx.recv().await {
+                println!("Found mdns peer {}", mdns_peer_info.addr);
+            }
+        }
+        CliCommand::LocalIp {} => {
+            // let network_interfaces = list_afinet_netifas().unwrap();
+            //
+            // for (name, ip) in network_interfaces.iter() {
+            //     println!("{}:\t{:?}", name, ip);
+            // }
+            let my_local_ip = local_ip().unwrap();
+
+            println!("This is my local IP address: {:?}", my_local_ip);
+        }
+    };
+    Ok(())
+}
+
+fn path_to_peer_path(path: String) -> (String, String) {
+    let path_buf = PathBuf::from(path);
+    if let Some(first_component) = path_buf.iter().next() {
+        let peer_name = first_component.to_str().unwrap();
+        let remaining_path = path_buf
+            .strip_prefix(peer_name)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        (peer_name.to_string(), remaining_path)
+    } else {
+        ("".to_string(), "".to_string())
+    }
+}

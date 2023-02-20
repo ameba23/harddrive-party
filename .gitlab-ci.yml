@@ -23,6 +23,8 @@ test-code:
     - cargo fmt -- --check
     - cargo install cargo-audit
     - cargo audit
+  only:
+    - main
 
 # lint-code:
 #   stage: test

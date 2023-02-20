@@ -1,142 +1,201 @@
-use crate::fs::ReadStream;
-use crate::messages::response::{success, EndResponse, Success};
-use crate::messages::{request, response};
-use crate::run::{IncomingPeerRequest, OutgoingPeerResponse};
 use crate::shares::{EntryParseError, Shares};
-use async_channel::{Receiver, SendError};
-use async_std::fs;
-use futures::{stream, Stream, StreamExt};
-use log::info;
+use bincode::serialize;
+use log::{debug, warn};
+use quinn::WriteError;
+use thiserror::Error;
+use tokio::{
+    fs,
+    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt},
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+};
+
+struct ReadRequest {
+    path: String,
+    start: Option<u64>,
+    end: Option<u64>,
+    output: quinn::SendStream,
+}
 
 /// Remote Procedure Call - process remote requests (or requests from ourself to query our own
 /// share index)
 pub struct Rpc {
     pub shares: Shares,
+    upload_tx: UnboundedSender<ReadRequest>,
+    // upload_rx: UnboundedReceiver<ReadRequest>,
 }
 
 impl Rpc {
     pub fn new(shares: Shares) -> Rpc {
-        Rpc { shares }
+        let (upload_tx, upload_rx) = unbounded_channel();
+        let shares_clone = shares.clone();
+
+        tokio::spawn(async move {
+            let mut uploader = Uploader {
+                shares: shares_clone,
+                upload_rx,
+            };
+            uploader.run().await;
+        });
+
+        Rpc { shares, upload_tx }
     }
 
     /// Query the filepath index
-    async fn ls(
-        &mut self,
+    pub async fn ls(
+        &self,
         path: Option<String>,
         searchterm: Option<String>,
         recursive: bool,
-    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
+        mut output: quinn::SendStream,
+    ) -> Result<(), RpcError> {
         match self.shares.query(path, searchterm, recursive) {
-            Ok(e) => e,
-            Err(entry_parse_error) => create_error_stream(match entry_parse_error {
-                EntryParseError::PathNotFound => RpcError::PathNotFound,
-                _ => RpcError::DbError,
-            }),
+            Ok(it) => {
+                for res in it {
+                    let buf = serialize(&res).map_err(|e| {
+                        warn!("Cannot serialize query response {:?}", e);
+                        RpcError::SerializeError
+                    })?;
+
+                    // Write the length prefix
+                    // TODO this should be a varint
+                    let length: u64 = buf.len().try_into().unwrap();
+                    debug!("Writing prefix {length}");
+                    output.write(&length.to_le_bytes()).await?;
+
+                    output.write(&buf).await?;
+                    debug!("Written buf {:?}", buf);
+                }
+                output.finish().await?;
+                Ok(())
+            }
+            Err(error) => {
+                warn!("Error during share query {:?}", error);
+                send_error(
+                    match error {
+                        EntryParseError::PathNotFound => RpcError::PathNotFound,
+                        _ => RpcError::DbError,
+                    },
+                    output,
+                )
+                .await
+            }
         }
     }
 
-    /// Read a file, or a section of a file
-    async fn read(
-        &mut self,
+    pub async fn read(
+        &self,
         path: String,
         start: Option<u64>,
         end: Option<u64>,
-    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
-        let start = start.unwrap_or(0);
-
-        if let Some(end_offset) = end {
-            if start > end_offset {
-                return create_error_stream(RpcError::BadOffset);
-            }
-        }
-
-        match self.shares.resolve_path(path) {
-            Ok(resolved_path) => {
-                match fs::File::open(resolved_path).await {
-                    Ok(file) => {
-                        match ReadStream::new(file, start, end).await {
-                            Ok(rs) => Box::new(rs),
-                            // If the initial seek fails because start > filesize
-                            Err(_) => create_error_stream(RpcError::BadOffset),
-                        }
-                    }
-                    Err(_) => create_error_stream(RpcError::PathNotFound),
-                }
-            }
-            Err(_) => create_error_stream(RpcError::PathNotFound),
-        }
-    }
-
-    // TODO this should be private, but it is used in the test
-    pub async fn request(
-        &mut self,
-        req: request::Msg,
-    ) -> Box<dyn Stream<Item = response::Response> + Send + '_> {
-        match req {
-            request::Msg::Ls(request::Ls {
+        output: quinn::SendStream,
+    ) -> Result<(), RpcError> {
+        self.upload_tx
+            .send(ReadRequest {
                 path,
-                searchterm,
-                recursive,
-            }) => self.ls(path, searchterm, recursive).await,
-            request::Msg::Read(request::Read { path, start, end }) => {
-                self.read(path, start, end).await
-            }
-            request::Msg::Handshake(_) => self.ls(None, None, true).await,
-        }
-    }
-
-    /// Loop serving requests
-    /// Will return an error it gets a channel which is no longer open
-    pub async fn run(
-        &mut self,
-        mut requests_rx: Receiver<IncomingPeerRequest>,
-    ) -> Result<(), SendError<OutgoingPeerResponse>> {
-        while let Some(peer_request) = requests_rx.next().await {
-            let mut responses = Box::into_pin(self.request(peer_request.message).await);
-            let mut is_error = false;
-            while let Some(res) = responses.next().await {
-                info!("Sending response");
-                is_error = matches!(res, response::Response::Err(_));
-                peer_request
-                    .response_tx
-                    .send(OutgoingPeerResponse {
-                        message: res,
-                        id: peer_request.id,
-                    })
-                    .await?;
-            }
-            // Finally send an endresponse, unless we already sent an error
-            if !is_error {
-                peer_request
-                    .response_tx
-                    .send(OutgoingPeerResponse {
-                        id: peer_request.id,
-                        message: crate::messages::response::Response::Success(Success {
-                            msg: Some(success::Msg::EndResponse(EndResponse {})),
-                        }),
-                    })
-                    .await?;
-            }
-        }
+                start,
+                end,
+                output,
+            })
+            .map_err(|_| RpcError::ChannelClosed)?;
         Ok(())
     }
 }
 
-// ENOENT: -2,
-// ENOTDIR: -20,
-// EHOSTUNREACH: -113,
-// EEXIST: -17,
-// EBUSY: -16,
-// ENOLCK: -39
-/// Error code to be send as a wire message
-#[repr(i32)]
-enum RpcError {
-    DbError = 1,
-    PathNotFound = -2,
-    BadOffset = 2,
+/// Uploads are processed sequentially in a separate task
+struct Uploader {
+    shares: Shares,
+    upload_rx: UnboundedReceiver<ReadRequest>,
 }
 
-fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {
-    let response = response::Response::Err(err as i32);
-    Box::new(stream::iter(vec![response]))
+impl Uploader {
+    async fn run(&mut self) {
+        while let Some(read_request) = self.upload_rx.recv().await {
+            if let Err(e) = self.do_read(read_request).await {
+                warn!("Error uploading {:?}", e);
+            }
+        }
+    }
+
+    async fn do_read(&self, read_request: ReadRequest) -> Result<(), RpcError> {
+        let ReadRequest {
+            path,
+            start,
+            end,
+            mut output,
+        } = read_request;
+        match self.get_file_portion(path, start, end).await {
+            Ok(file) => {
+                // TODO output.write success header
+                io::copy(&mut Box::into_pin(file), &mut output).await?;
+                output.finish().await?;
+                Ok(())
+            }
+            Err(rpc_error) => send_error(rpc_error, output).await,
+        }
+    }
+
+    async fn get_file_portion(
+        &self,
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+    ) -> Result<Box<dyn AsyncRead + Send>, RpcError> {
+        let start = start.unwrap_or(0);
+
+        if let Some(end_offset) = end {
+            if start > end_offset {
+                return Err(RpcError::BadOffset);
+            }
+        }
+
+        match self.shares.resolve_path(path) {
+            Ok(resolved_path) => match fs::File::open(resolved_path).await {
+                Ok(mut file) => {
+                    file.seek(std::io::SeekFrom::Start(start))
+                        .await
+                        .map_err(|_| RpcError::BadOffset)?;
+                    match end {
+                        Some(e) => {
+                            // TODO should this be just e?
+                            Ok(Box::new(file.take(start + e)))
+                        }
+                        None => Ok(Box::new(file)),
+                    }
+                }
+                Err(_) => Err(RpcError::PathNotFound),
+            },
+            Err(_) => Err(RpcError::PathNotFound),
+        }
+    }
 }
+
+async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+    // TODO send serialised version of the error
+    output.write(&[0]).await?;
+    output.finish().await?;
+    Err(error)
+}
+
+/// Error to be sent as a wire message
+#[derive(Error, Debug)]
+pub enum RpcError {
+    #[error("Db error")]
+    DbError,
+    #[error("Path not found")]
+    PathNotFound,
+    #[error("Bad offset")]
+    BadOffset,
+    #[error("Read error")]
+    ReadError(#[from] std::io::Error),
+    #[error("Write error")]
+    WriteError(#[from] WriteError),
+    #[error("serialize error")]
+    SerializeError,
+    #[error("Channel closed")]
+    ChannelClosed,
+}
+
+// fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {
+//     let response = response::Response::Err(err as i32);
+//     Box::new(stream::iter(vec![response]))
+// }

@@ -1,9 +1,8 @@
-pub mod messages {
-    include!(concat!(env!("OUT_DIR"), "/harddriveparty.messages.rs"));
-}
-
-pub mod fs;
-pub mod protocol;
+pub mod connect;
+pub mod hdp;
+pub mod mdns;
 pub mod rpc;
-pub mod run;
 pub mod shares;
+pub mod ui_messages;
+pub mod wire_messages;
+pub mod ws;
