@@ -1,11 +1,11 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::PathBuf,
-};
-
 use clap::{Parser, Subcommand};
-use harddrive_party::{hdp::Hdp, ui_messages::Command, wire_messages::Request};
-use local_ip_address::local_ip;
+use colored::Colorize;
+use harddrive_party::{
+    hdp::Hdp,
+    ui_messages::{Command, UiResponse},
+    wire_messages::{LsResponse, Request},
+};
+use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
@@ -26,9 +26,7 @@ enum CliCommand {
         ws_addr: Option<SocketAddr>,
     },
     /// Connect to a peer
-    Connect {
-        addr: SocketAddr,
-    },
+    Connect { addr: SocketAddr },
     /// Query remote peers
     Ls {
         path: Option<String>,
@@ -42,12 +40,6 @@ enum CliCommand {
         end: Option<u64>,
         peer: Option<String>,
     },
-    /// mdns
-    Mdns {
-        name: String,
-        port: u16,
-    },
-    LocalIp {},
 }
 
 #[tokio::main]
@@ -93,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
             peer,
         } => {
             // TODO If a path is given, convert to pathbuf, split into peername and path components
-            harddrive_party::ws::single_client_command(
+            let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
                 Command::Request(
                     Request::Ls {
@@ -105,6 +97,36 @@ async fn main() -> anyhow::Result<()> {
                 ),
             )
             .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
+                        LsResponse::Success(entries) => {
+                            for entry in entries {
+                                if entry.is_dir {
+                                    println!(
+                                        "{} {} bytes",
+                                        format!("[{}/{}]", peer_name, entry.name).blue(),
+                                        entry.size
+                                    );
+                                } else {
+                                    println!("{}/{} {}", peer_name, entry.name, entry.size);
+                                }
+                            }
+                        }
+                        LsResponse::Err(err) => {
+                            println!("Error from peer {:?}", err);
+                        }
+                    },
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Read {
             path,
@@ -113,32 +135,26 @@ async fn main() -> anyhow::Result<()> {
             peer,
         } => {
             // TODO If a path is given, convert to pathbuf, split into peername and path components
-            harddrive_party::ws::single_client_command(
+            let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
                 Command::Request(Request::Read { path, start, end }, peer.unwrap_or_default()),
             )
             .await?;
-        }
-        // Temporary
-        CliCommand::Mdns { name, port } => {
-            let topic = "boop".to_string();
-            let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 101)), port);
-            let mut peers_rx = harddrive_party::mdns::mdns_server(&name, addr, topic)
-                .await
-                .unwrap();
-            while let Some(mdns_peer_info) = peers_rx.recv().await {
-                println!("Found mdns peer {}", mdns_peer_info.addr);
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::Read(data)) => {
+                        println!("{:?}", data);
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
             }
-        }
-        CliCommand::LocalIp {} => {
-            // let network_interfaces = list_afinet_netifas().unwrap();
-            //
-            // for (name, ip) in network_interfaces.iter() {
-            //     println!("{}:\t{:?}", name, ip);
-            // }
-            let my_local_ip = local_ip().unwrap();
-
-            println!("This is my local IP address: {:?}", my_local_ip);
         }
     };
     Ok(())

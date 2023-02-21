@@ -1,9 +1,5 @@
-use crate::{
-    ui_messages::{Command, UiClientMessage, UiResponse, UiServerMessage},
-    wire_messages::LsResponse,
-};
+use crate::ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage};
 use bincode::{deserialize, serialize};
-use colored::Colorize;
 use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
@@ -144,54 +140,41 @@ impl WsClient {
         self.write.send(Message::Binary(message_buf)).await?;
         Ok(id)
     }
+}
 
-    // TODO this should return a result with a stream of messages
-    pub async fn read_responses(&mut self, message_id: u32) {
-        while let Some(msg_result) = self.read.next().await {
+pub async fn single_client_command(
+    server_addr: String,
+    command: Command,
+) -> anyhow::Result<UnboundedReceiver<Result<UiResponse, UiServerError>>> {
+    let mut ws_client = WsClient::new(server_addr).await?;
+    let message_id = ws_client.send_message(command).await?;
+    Ok(read_responses(ws_client.read, message_id).await)
+    // read.for_each(|message| async {
+    //     let data = message.unwrap().into_data();
+    //     println!("data {:?}", data);
+    // });
+}
+
+// TODO this should return a result with a stream of messages
+pub async fn read_responses(
+    mut read: SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
+    message_id: u32,
+) -> UnboundedReceiver<Result<UiResponse, UiServerError>> {
+    let (tx, rx) = unbounded_channel();
+    tokio::spawn(async move {
+        while let Some(msg_result) = read.next().await {
             match msg_result {
                 Ok(Message::Binary(buf)) => {
                     let msg: UiServerMessage = deserialize(&buf).unwrap();
                     match msg {
                         UiServerMessage::Response { id, response } => {
                             if id == message_id {
-                                match response {
-                                    Ok(UiResponse::Read(data)) => {
-                                        println!("{:?}", data);
-                                    }
-                                    Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response
-                                    {
-                                        LsResponse::Success(entries) => {
-                                            for entry in entries {
-                                                if entry.is_dir {
-                                                    println!(
-                                                        "[{}/{}] {}",
-                                                        peer_name,
-                                                        entry.name.green(),
-                                                        entry.size
-                                                    );
-                                                } else {
-                                                    println!(
-                                                        "{}/{} {}",
-                                                        peer_name, entry.name, entry.size
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        LsResponse::Err(err) => {
-                                            println!("Error from peer {:?}", err);
-                                        }
-                                    },
-                                    Ok(some_other_response) => {
-                                        println!("{:?}", some_other_response);
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        println!("Error from server {:?}", e);
-                                        break;
-                                    }
-                                }
+                                if tx.send(response).is_err() {
+                                    warn!("Ws single response channel closed");
+                                    break;
+                                };
                             } else {
-                                println!("Unexpected msg id - got message for another client");
+                                warn!("Unexpected msg id - got message for another client");
                             }
                         }
                         UiServerMessage::Event(event) => {
@@ -209,17 +192,6 @@ impl WsClient {
             }
         }
         println!("Cannot read more responses, closing connection");
-    }
-}
-
-pub async fn single_client_command(server_addr: String, command: Command) -> anyhow::Result<()> {
-    let mut ws_client = WsClient::new(server_addr).await?;
-    let message_id = ws_client.send_message(command).await?;
-    ws_client.read_responses(message_id).await;
-    // read.for_each(|message| async {
-    //     let data = message.unwrap().into_data();
-    //     println!("data {:?}", data);
-    // });
-
-    Ok(())
+    });
+    rx
 }

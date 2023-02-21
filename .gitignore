@@ -1,2 +1,5 @@
 Cargo.lock
 /target
+/extra-test-data
+/alice-db
+/bob-db
