@@ -64,19 +64,13 @@ pub async fn mdns_server(
             name,
             host_name,
             ipv4_addr,
-            addr.port() + 150,
+            addr.port() + 150, // TODO
             Some(properties),
         )?;
         // .enable_addr_auto();
 
         // Register with the daemon, which publishes the service.
         mdns.register(my_service)?;
-        // std::thread::sleep(std::time::Duration::from_secs(5));
-        // let monitor = mdns.monitor().expect("Failed to monitor the daemon");
-        // // Only do this if we monitor the daemon events, which is optional.
-        // while let Ok(event) = monitor.recv() {
-        //     println!("Daemon event: {:?}", &event);
-        // }
 
         let mdns_receiver = mdns.browse(SERVICE_TYPE)?;
 

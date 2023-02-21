@@ -117,9 +117,11 @@ async fn main() -> anyhow::Result<()> {
                             println!("Error from peer {:?}", err);
                         }
                     },
+                    Ok(UiResponse::EndResponse) => {
+                        break;
+                    }
                     Ok(some_other_response) => {
                         println!("Got unexpected response {:?}", some_other_response);
-                        break;
                     }
                     Err(e) => {
                         println!("Error from WS server {:?}", e);

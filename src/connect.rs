@@ -1,6 +1,8 @@
+use anyhow::anyhow;
 use quinn::{ClientConfig, Endpoint, ServerConfig};
-// use rustls::PrivateKey;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Setup an endpoint for Quic connections with a given socket address
 pub fn make_server_endpoint(bind_addr: SocketAddr) -> anyhow::Result<(Endpoint, Vec<u8>)> {
@@ -29,9 +31,13 @@ fn configure_server() -> anyhow::Result<(ServerConfig, Vec<u8>, ClientConfig)> {
         .unwrap();
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
+
+    // let transport_config =
+    //     TransportConfig::default().keep_alive_interval(Some(Duration::from_secs(10)));
     Arc::get_mut(&mut server_config.transport)
-        .unwrap()
-        .max_concurrent_uni_streams(0_u8.into());
+        .ok_or_else(|| anyhow!("Cannot get transport config"))?
+        .max_concurrent_uni_streams(0_u8.into())
+        .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
 
     let client_config = configure_client();
 

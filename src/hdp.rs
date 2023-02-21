@@ -10,7 +10,12 @@ use bincode::{deserialize, serialize};
 use local_ip_address::local_ip;
 use log::{debug, info, warn};
 use quinn::{Connection, Endpoint, RecvStream};
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
 use tokio::{
     select,
@@ -21,7 +26,7 @@ const MAX_REQUEST_SIZE: usize = 1024;
 
 pub struct Hdp {
     /// A map of peernames to peer connections
-    peers: HashMap<String, Connection>,
+    peers: Arc<Mutex<HashMap<String, Connection>>>,
     /// Remote proceduce call for share queries and downloads
     rpc: Arc<Rpc>,
     /// The QUIC endpoint
@@ -56,9 +61,6 @@ impl Hdp {
         let addr = endpoint.local_addr()?;
         let topic = "boop".to_string(); // TODO
         let mdns_peers_rx = mdns_server(&addr.to_string(), addr, topic).await?;
-        // while let Some(mdns_peer_info) = peers_rx.recv().await {
-        //     println!("Found mdns peer {}", mdns_peer_info.addr);
-        // }
         Ok((
             Self {
                 peers: Default::default(),
@@ -98,55 +100,75 @@ impl Hdp {
         }
     }
 
+    // Handle a QUIC connection from/to another peer
     async fn handle_connection(&mut self, conn: quinn::Connection, incoming: bool) {
         let direction = if incoming { "incoming" } else { "outgoing" };
-        info!(
-            "[{}] before connected to {} peers",
-            direction,
-            self.peers.len()
-        );
-        self.peers
-            .insert(conn.remote_address().to_string(), conn.clone());
-        info!("[{}] connected to {} peers", direction, self.peers.len());
+
+        let peers_clone = self.peers.clone();
+        let mut peers = self.peers.lock().unwrap();
+        info!("[{}] before connected to {} peers", direction, peers.len());
+        peers.insert(conn.remote_address().to_string(), conn.clone());
+        info!("[{}] connected to {} peers", direction, peers.len());
 
         let rpc = self.rpc.clone();
         tokio::spawn(async move {
             // Loop over incoming requests from this peer
-            while let Ok((send, recv)) = conn.accept_bi().await {
-                match recv.read_to_end(MAX_REQUEST_SIZE).await {
-                    Ok(buf) => {
-                        let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
-                        match request {
-                            Ok(req) => {
-                                debug!("Got request from peer {:?}", req);
-                                match req {
-                                    Request::Ls {
-                                        path,
-                                        searchterm,
-                                        recursive,
-                                    } => {
-                                        if let Ok(()) =
-                                            rpc.ls(path, searchterm, recursive, send).await
-                                        {
-                                        };
+            loop {
+                match conn.accept_bi().await {
+                    Ok((send, recv)) => {
+                        match recv.read_to_end(MAX_REQUEST_SIZE).await {
+                            Ok(buf) => {
+                                let request: Result<Request, Box<bincode::ErrorKind>> =
+                                    deserialize(&buf);
+                                match request {
+                                    Ok(req) => {
+                                        debug!("Got request from peer {:?}", req);
+                                        match req {
+                                            Request::Ls {
+                                                path,
+                                                searchterm,
+                                                recursive,
+                                            } => {
+                                                if let Ok(()) =
+                                                    rpc.ls(path, searchterm, recursive, send).await
+                                                {
+                                                };
+                                            }
+                                            Request::Read { path, start, end } => {
+                                                if let Ok(()) =
+                                                    rpc.read(path, start, end, send).await
+                                                {
+                                                };
+                                            }
+                                        }
                                     }
-                                    Request::Read { path, start, end } => {
-                                        if let Ok(()) = rpc.read(path, start, end, send).await {};
+                                    Err(_) => {
+                                        warn!("Cannot decode wire message");
                                     }
                                 }
                             }
-                            Err(_) => {
-                                warn!("Cannot decode wire message");
+                            Err(err) => {
+                                warn!("Cannot read from incoming QUIC stream {:?}", err);
+                                break;
                             }
-                        }
+                        };
                     }
-                    Err(err) => {
-                        warn!("Cannot read from incoming QUIC connection {:?}", err);
+                    Err(error) => {
+                        warn!("Error when accepting QUIC stream {:?}", error);
                         break;
                     }
-                };
+                }
             }
-            // TODO here we need to remove the peer from the hashmap
+            let mut peers = peers_clone.lock().unwrap();
+            match peers.remove(&conn.remote_address().to_string()) {
+                Some(_) => {
+                    debug!("Connection closed - removed peer");
+                    // TODO here we should send a peer disconnected event to the UI
+                }
+                None => {
+                    warn!("Connection closed but peer not present in map");
+                }
+            }
         });
     }
 
@@ -183,8 +205,11 @@ impl Hdp {
 
     /// Initiate a Quic connection to a remote peer
     async fn connect_to_peer(&mut self, addr: SocketAddr) -> Result<UiResponse, UiServerError> {
-        if self.peers.contains_key(&addr.to_string()) {
-            warn!("Connecting to existing peer!");
+        {
+            let peers = self.peers.lock().unwrap();
+            if peers.contains_key(&addr.to_string()) {
+                warn!("Connecting to existing peer!");
+            }
         }
         let connection = self
             .endpoint
@@ -342,8 +367,9 @@ impl Hdp {
 
     /// Turn a single request into potentially a set of requests to all peers
     async fn expand_request(&self, request: Request, name: String) -> Vec<(Request, String)> {
+        let peers = self.peers.lock().unwrap();
         if name.is_empty() {
-            self.peers
+            peers
                 .keys()
                 .map(|peer_name| (request.clone(), peer_name.to_string()))
                 .collect()
@@ -354,7 +380,8 @@ impl Hdp {
 
     /// Open a request stream and write a request to the given peer
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let connection = self.peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        let peers = self.peers.lock().unwrap();
+        let connection = peers.get(name).ok_or(RequestError::PeerNotFound)?;
         let (mut send, recv) = connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
