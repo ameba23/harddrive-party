@@ -1,7 +1,7 @@
 use crate::wire_messages::{Entry, LsResponse};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;
-use log::{info, warn};
+use log::{debug, info, warn};
 use sled::IVec;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use thiserror::Error;
@@ -55,10 +55,10 @@ impl Shares {
     pub async fn scan(&mut self, root: &str) -> Result<u32, ScanDirError> {
         let mut added_entries = 0;
         let path = PathBuf::from(root);
-        let pc = &path.clone();
+        let path_clone = &path.clone();
 
-        let path_clone = path.clone();
-        let share_name = path_clone
+        let path_clone_2 = path.clone();
+        let share_name = path_clone_2
             .file_name()
             .ok_or(ScanDirError::GetParentError)?
             .to_str()
@@ -68,6 +68,9 @@ impl Shares {
         let path_str = path_os_str.to_str().ok_or(ScanDirError::OsStringError())?;
         self.share_names.insert(share_name, path_str)?;
 
+        // Remove existing entries before beginning
+        self.remove_share_dir(share_name)?;
+
         let mut entries = WalkDir::new(path);
         loop {
             match entries.next().await {
@@ -76,8 +79,8 @@ impl Shares {
                     if !metadata.is_dir() {
                         // Remove the 'path' portion of the entry, and join it with share_name
                         let ep = entry.path();
-                        let entry_path = ep.strip_prefix(pc)?;
-                        let sn = pc.file_name().ok_or(ScanDirError::GetParentError)?;
+                        let entry_path = ep.strip_prefix(path_clone)?;
+                        let sn = path_clone.file_name().ok_or(ScanDirError::GetParentError)?;
                         let entry_path_with_share_name = Path::new(sn).join(entry_path);
                         let filepath = entry_path_with_share_name
                             .to_str()
@@ -174,6 +177,22 @@ impl Shares {
 
         let actual_path = PathBuf::from(std::str::from_utf8(&actual_path_bytes)?);
         Ok(actual_path.join(sub_path))
+    }
+
+    fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
+        for entry_result in self.dirs.scan_prefix(share_name) {
+            if let Ok((entry, _)) = entry_result {
+                debug!("Deleting existing entry {:?}", entry);
+                self.dirs.remove(entry)?;
+            }
+        }
+        for entry_result in self.files.scan_prefix(share_name) {
+            if let Ok((entry, _)) = entry_result {
+                debug!("Deleting existing entry {:?}", entry);
+                self.files.remove(entry)?;
+            }
+        }
+        Ok(())
     }
 }
 
