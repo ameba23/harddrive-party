@@ -1,6 +1,6 @@
 pub mod connect;
+pub mod discovery;
 pub mod hdp;
-pub mod mdns;
 pub mod rpc;
 pub mod shares;
 pub mod ui_messages;

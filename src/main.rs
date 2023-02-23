@@ -32,13 +32,11 @@ enum CliCommand {
         path: Option<String>,
         searchterm: Option<String>,
         recursive: Option<bool>,
-        peer: Option<String>,
     },
     Read {
         path: String,
         start: Option<u64>,
         end: Option<u64>,
-        peer: Option<String>,
     },
 }
 
@@ -68,32 +66,31 @@ async fn main() -> anyhow::Result<()> {
             hdp.run().await;
         }
         CliCommand::Connect { addr } => {
-            // let command = Command::Request(
-            //     Request::Ls {
-            //         path: None,
-            //         searchterm: None,
-            //         recursive: false,
-            //     },
-            //     "".to_string(),
-            // );
             harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;
         }
         CliCommand::Ls {
             path,
             searchterm,
             recursive,
-            peer,
         } => {
-            // TODO If a path is given, convert to pathbuf, split into peername and path components
+            // Split path into peername and path components
+            let (peer_name, peer_path) = match path {
+                Some(given_path) => {
+                    let (peer_name, peer_path) = path_to_peer_path(given_path);
+                    (peer_name, Some(peer_path))
+                }
+                None => ("".to_string(), None),
+            };
+
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
                 Command::Request(
                     Request::Ls {
-                        path,
+                        path: peer_path,
                         searchterm,
                         recursive: recursive.unwrap_or(true),
                     },
-                    peer.unwrap_or_default(),
+                    peer_name,
                 ),
             )
             .await?;
@@ -130,22 +127,29 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::Read {
-            path,
-            start,
-            end,
-            peer,
-        } => {
-            // TODO If a path is given, convert to pathbuf, split into peername and path components
+        CliCommand::Read { path, start, end } => {
+            // Split path into peername and path components
+            let (peer_name, peer_path) = path_to_peer_path(path);
+
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Request(Request::Read { path, start, end }, peer.unwrap_or_default()),
+                Command::Request(
+                    Request::Read {
+                        path: peer_path,
+                        start,
+                        end,
+                    },
+                    peer_name,
+                ),
             )
             .await?;
             while let Some(response) = responses.recv().await {
                 match response {
                     Ok(UiResponse::Read(data)) => {
-                        println!("{:?}", data);
+                        println!("{}", std::str::from_utf8(&data).unwrap());
+                    }
+                    Ok(UiResponse::EndResponse) => {
+                        break;
                     }
                     Ok(some_other_response) => {
                         println!("Got unexpected response {:?}", some_other_response);

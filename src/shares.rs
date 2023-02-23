@@ -180,17 +180,13 @@ impl Shares {
     }
 
     fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
-        for entry_result in self.dirs.scan_prefix(share_name) {
-            if let Ok((entry, _)) = entry_result {
-                debug!("Deleting existing entry {:?}", entry);
-                self.dirs.remove(entry)?;
-            }
+        for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
+            debug!("Deleting existing entry {:?}", entry);
+            self.dirs.remove(entry)?;
         }
-        for entry_result in self.files.scan_prefix(share_name) {
-            if let Ok((entry, _)) = entry_result {
-                debug!("Deleting existing entry {:?}", entry);
-                self.files.remove(entry)?;
-            }
+        for (entry, _) in self.files.scan_prefix(share_name).flatten() {
+            debug!("Deleting existing entry {:?}", entry);
+            self.files.remove(entry)?;
         }
         Ok(())
     }

@@ -26,6 +26,7 @@ Peers connect using QUIC. A QUIC stream is opened for each RPC request to a peer
 - [ ] Support multiple topics
 - [ ] Persistent cryptographic identities / derived peer names
 - [ ] Query own files / represent self as a peer
+- [ ] Attempt to reconnect to peers after loosing connection
 - [ ] Holepunching / peer discovery over internet
 - [ ] Download files rather than just read them
 - [ ] Handle recursive directory download request

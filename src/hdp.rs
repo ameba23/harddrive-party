@@ -1,6 +1,9 @@
 use crate::{
     connect::make_server_endpoint,
-    mdns::{mdns_server, MdnsPeerInfo},
+    discovery::{
+        mdns::{mdns_server, MdnsPeerInfo},
+        topic::Topic,
+    },
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage},
@@ -57,7 +60,7 @@ impl Hdp {
         let (endpoint, _cert) = make_server_endpoint(SocketAddr::new(my_local_ip, 0))?;
 
         let addr = endpoint.local_addr()?;
-        let topic = "boop".to_string(); // TODO
+        let topic = Topic::new("boop".to_string()); // TODO
         let mdns_peers_rx = mdns_server(&addr.to_string(), addr, topic).await?;
         Ok((
             Self {
@@ -322,6 +325,7 @@ impl Hdp {
                                     } => {
                                         // TODO write to file
                                         let mut buf: [u8; 1024] = [0; 1024];
+                                        // TODO handle errors here
                                         while let Ok(Some(n)) = recv.read(&mut buf).await {
                                             debug!("Read {} bytes", n);
                                             if response_tx
@@ -337,7 +341,16 @@ impl Hdp {
                                                 break;
                                             };
                                         }
-                                        // Terminate with an endresponse or an error
+                                        // Terminate with an endresponse
+                                        if response_tx
+                                            .send(UiServerMessage::Response {
+                                                id,
+                                                response: Ok(UiResponse::EndResponse),
+                                            })
+                                            .is_err()
+                                        {
+                                            warn!("Response channel closed");
+                                        }
                                     }
                                 }
                             });

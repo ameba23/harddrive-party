@@ -1,3 +1,4 @@
+use crate::discovery::topic::Topic;
 use anyhow::anyhow;
 use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
@@ -43,11 +44,12 @@ impl MdnsPeerInfo {
     }
 }
 
+// TODO i dont think we need the port proptery
 /// Announce ourself on mdns and discover other local peers
 pub async fn mdns_server(
     name: &str,
     addr: SocketAddr,
-    topic: String,
+    topic: Topic,
 ) -> anyhow::Result<UnboundedReceiver<MdnsPeerInfo>> {
     let (peers_tx, peers_rx) = unbounded_channel();
     let mdns = ServiceDaemon::new()?;
@@ -55,7 +57,7 @@ pub async fn mdns_server(
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = std::collections::HashMap::new();
-    properties.insert(TOPIC.to_string(), topic.clone());
+    properties.insert(TOPIC.to_string(), topic.as_hex());
     properties.insert(PORT.to_string(), addr.port().to_string());
 
     if let IpAddr::V4(ipv4_addr) = addr.ip() {
@@ -64,7 +66,7 @@ pub async fn mdns_server(
             name,
             host_name,
             ipv4_addr,
-            addr.port() + 150, // TODO
+            addr.port(), //+ 150, // TODO
             Some(properties),
         )?;
         // .enable_addr_auto();
@@ -84,7 +86,7 @@ pub async fn mdns_server(
                         debug!("Resolved a mdns service: {:?}", info);
                         match MdnsPeerInfo::new(info) {
                             Ok(mdns_peer) => {
-                                if mdns_peer.topic == topic {
+                                if mdns_peer.topic == topic.as_hex() {
                                     if mdns_peer.addr == addr {
                                         debug!("Found ourself on mdns");
                                     } else {
