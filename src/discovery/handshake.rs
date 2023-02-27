@@ -1,18 +1,22 @@
+use std::net::SocketAddr;
+
 use crate::discovery::topic::Topic;
 use anyhow::anyhow;
-use cryptoxide::chacha20poly1305::ChaCha20Poly1305;
+use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
 use rand::Rng;
 
-type HandshakeRequest = [u8; 32 + 16 + 8];
-type Token = [u8; 32];
+pub type HandshakeRequest = [u8; 32 + 16 + 8];
+pub type Token = [u8; 32];
 
 const AAD: [u8; 0] = [];
+pub const TOKEN_LENGTH: usize = 32;
 
-pub fn handshake_request(topic: &Topic) -> (HandshakeRequest, Token) {
+pub fn handshake_request(topic: &Topic, addr: SocketAddr) -> (HandshakeRequest, Token) {
+    let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
     let mut rng = rand::thread_rng();
     let token: [u8; 32] = rng.gen();
+
     let nonce: [u8; 8] = rng.gen();
-    let key = topic.hash;
     let mut out: [u8; 32 + 16 + 8] = [0u8; 32 + 16 + 8];
     let mut tag: [u8; 16] = [0u8; 16];
 
@@ -29,8 +33,9 @@ pub fn handshake_request(topic: &Topic) -> (HandshakeRequest, Token) {
 pub fn handshake_response(
     handshake_request: HandshakeRequest,
     topic: &Topic,
+    addr: SocketAddr,
 ) -> anyhow::Result<Token> {
-    let key = topic.hash;
+    let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
     let mut decrypt_msg: [u8; 32] = [0u8; 32];
 
     let nonce = &handshake_request[32 + 16..];
@@ -47,6 +52,14 @@ pub fn handshake_response(
     }
 }
 
+fn keyed_hash(input: &[u8], key: &[u8; 32]) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    let mut topic_hash = Blake2b::new_keyed(32, key);
+    topic_hash.input(input);
+    topic_hash.result(&mut hash);
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,16 +67,18 @@ mod tests {
     #[test]
     fn basic_handshake() {
         let topic = Topic::new("boop".to_string());
-        let (request, token) = handshake_request(&topic);
-        let response = handshake_response(request, &topic).unwrap();
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let (request, token) = handshake_request(&topic, addr);
+        let response = handshake_response(request, &topic, addr).unwrap();
         assert_eq!(token, response);
     }
 
     #[test]
     fn handshake_fails_with_bad_topic() {
         let topic = Topic::new("boop".to_string());
-        let (request, _token) = handshake_request(&topic);
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let (request, _token) = handshake_request(&topic, addr);
         let bad_topic = Topic::new("something else".to_string());
-        assert!(handshake_response(request, &bad_topic).is_err());
+        assert!(handshake_response(request, &bad_topic, addr).is_err());
     }
 }

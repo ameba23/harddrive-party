@@ -32,6 +32,7 @@ local-ip-address = "0.5.1"
 cryptoxide = "0.4.4"
 hex = "0.4.3"
 key-to-animal = { git = "https://gitlab.com/pegpeg/key-to-animal" }
+ring = "0.16.20"
 
 [dev-dependencies]
 sluice = "0.5.5"

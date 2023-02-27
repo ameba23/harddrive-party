@@ -1,7 +1,8 @@
 use crate::{
-    connect::make_server_endpoint,
+    connect::{generate_certificate, make_server_endpoint},
     discovery::{
-        mdns::{mdns_server, MdnsPeerInfo},
+        handshake::{Token, TOKEN_LENGTH},
+        mdns::{mdns_server, MdnsPeer},
         topic::Topic,
     },
     rpc::Rpc,
@@ -9,10 +10,13 @@ use crate::{
     ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage},
     wire_messages::{LsResponse, Request},
 };
+use anyhow::anyhow;
 use bincode::{deserialize, serialize};
+use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use local_ip_address::local_ip;
 use log::{debug, info, warn};
 use quinn::{Connection, Endpoint, RecvStream};
+use rustls::Certificate;
 use std::{collections::HashMap, net::SocketAddr, path::Path, sync::Arc};
 use thiserror::Error;
 use tokio::{
@@ -24,6 +28,7 @@ use tokio::{
 };
 
 const MAX_REQUEST_SIZE: usize = 1024;
+const CONFIG: &[u8; 1] = b"c";
 
 pub struct Hdp {
     /// A map of peernames to peer connections
@@ -39,7 +44,9 @@ pub struct Hdp {
     /// Channel for responses to the UI
     response_tx: UnboundedSender<UiServerMessage>,
     /// Channel for discovered mdns peers
-    mdns_peers_rx: UnboundedReceiver<MdnsPeerInfo>,
+    mdns_peers_rx: UnboundedReceiver<MdnsPeer>,
+    /// Session token
+    token: Token,
 }
 
 impl Hdp {
@@ -53,15 +60,38 @@ impl Hdp {
 
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
-        let shares = Shares::new(storage, sharedirs).await?;
+
+        let mut db_dir = storage.as_ref().to_owned();
+        db_dir.push("db");
+        let db = sled::open(db_dir).expect("open");
+        let shares = Shares::new(db.clone(), sharedirs).await?;
+
+        let config_db = db.open_tree(CONFIG)?;
+
+        // Attempt to get keypair from storage, and otherwise generate them and store
+        let (cert_der, priv_key_der) = {
+            let existing_cert = config_db.get(b"cert");
+            let existing_priv = config_db.get(b"priv");
+            match (existing_cert, existing_priv) {
+                (Ok(Some(cert_der)), Ok(Some(priv_key_der))) => {
+                    (cert_der.to_vec(), priv_key_der.to_vec())
+                }
+                _ => {
+                    let (cert_der, priv_key_der) = generate_certificate()?;
+                    config_db.insert(b"cert", cert_der.clone())?;
+                    config_db.insert(b"priv", priv_key_der.clone())?;
+                    (cert_der, priv_key_der)
+                }
+            }
+        };
 
         let my_local_ip = local_ip()?;
-
-        let (endpoint, _cert) = make_server_endpoint(SocketAddr::new(my_local_ip, 0))?;
+        let endpoint =
+            make_server_endpoint(SocketAddr::new(my_local_ip, 0), cert_der, priv_key_der)?;
 
         let addr = endpoint.local_addr()?;
         let topic = Topic::new("boop".to_string()); // TODO
-        let mdns_peers_rx = mdns_server(&addr.to_string(), addr, topic).await?;
+        let (mdns_peers_rx, token) = mdns_server(&addr.to_string(), addr, topic).await?;
         Ok((
             Self {
                 peers: Default::default(),
@@ -71,6 +101,7 @@ impl Hdp {
                 command_rx,
                 response_tx,
                 mdns_peers_rx,
+                token,
                 // public_key,
                 // name: to_hex_string(public_key),
             },
@@ -91,9 +122,9 @@ impl Hdp {
                         break;
                     };
                 }
-                Some(mdns_peer_info) = self.mdns_peers_rx.recv() => {
-                    debug!("Found mdns peer {}", mdns_peer_info.addr);
-                    if self.connect_to_peer(mdns_peer_info.addr).await.is_err() {
+                Some(mdns_peer) = self.mdns_peers_rx.recv() => {
+                    debug!("Found mdns peer {}", mdns_peer.addr);
+                    if self.connect_to_peer(mdns_peer.addr, Some(mdns_peer.token)).await.is_err() {
                         warn!("Cannot connect to mdns peer");
                     };
                 }
@@ -101,18 +132,57 @@ impl Hdp {
         }
     }
 
-    // Handle a QUIC connection from/to another peer
-    async fn handle_connection(&mut self, conn: quinn::Connection, incoming: bool) {
-        let direction = if incoming { "incoming" } else { "outgoing" };
+    /// Handle a QUIC connection from/to another peer
+    async fn handle_connection(
+        &mut self,
+        conn: quinn::Connection,
+        incoming: bool,
+        token: Option<Token>,
+        remote_cert: Certificate,
+    ) {
+        let peer_name = self.certificate_to_name(remote_cert);
+        debug!("Connected to peer {}", peer_name);
 
         let peers_clone = self.peers.clone();
-        let mut peers = self.peers.lock().await;
-        info!("[{}] before connected to {} peers", direction, peers.len());
-        peers.insert(conn.remote_address().to_string(), conn.clone());
-        info!("[{}] connected to {} peers", direction, peers.len());
-
+        let our_token = self.token.clone();
         let rpc = self.rpc.clone();
+
         tokio::spawn(async move {
+            if let Some(thier_token) = token {
+                let (mut send, _recv) = conn.open_bi().await.unwrap();
+                send.write_all(&thier_token).await.unwrap();
+                // send.write_all(&our_token).await.unwrap();
+                send.finish().await.unwrap();
+            } else {
+                if let Ok((_send, recv)) = conn.accept_bi().await {
+                    // TODO This should be token length
+                    match recv.read_to_end(TOKEN_LENGTH).await {
+                        Ok(buf) => {
+                            // make some check
+                            if buf == our_token {
+                                debug!("accepted remote peer's token");
+                            } else {
+                                warn!("Rejected remote peer's token");
+                                return;
+                            }
+                        }
+                        Err(_) => {
+                            return;
+                        }
+                    }
+                } else {
+                    return;
+                }
+            }
+
+            {
+                // Add peer to our hashmap
+                let direction = if incoming { "incoming" } else { "outgoing" };
+                let mut peers = peers_clone.lock().await;
+                peers.insert(conn.remote_address().to_string(), conn.clone());
+                info!("[{}] connected to {} peers", direction, peers.len());
+            }
+
             // Loop over incoming requests from this peer
             loop {
                 match conn.accept_bi().await {
@@ -192,11 +262,11 @@ impl Hdp {
                     debug!("Server name {:?}", d.server_name);
                 }
 
-                if let Some(i) = conn.peer_identity() {
-                    debug!("Client cert {:?}", i.downcast::<Vec<rustls::Certificate>>());
+                if let Ok(remote_cert) = get_certificate_from_connection(&conn) {
+                    self.handle_connection(conn, true, None, remote_cert).await;
+                } else {
+                    warn!("Peer attempted to connect with bad or missing certificate");
                 }
-
-                self.handle_connection(conn, true).await;
             }
             Err(err) => {
                 warn!("Incoming QUIC connection failed {:?}", err);
@@ -205,11 +275,15 @@ impl Hdp {
     }
 
     /// Initiate a Quic connection to a remote peer
-    async fn connect_to_peer(&mut self, addr: SocketAddr) -> Result<UiResponse, UiServerError> {
+    async fn connect_to_peer(
+        &mut self,
+        addr: SocketAddr,
+        token: Option<Token>,
+    ) -> Result<UiResponse, UiServerError> {
         {
             let peers = self.peers.lock().await;
             if peers.contains_key(&addr.to_string()) {
-                warn!("Connecting to existing peer!");
+                warn!("Connecting to peer we are already connected to!");
             }
         }
         let connection = self
@@ -219,15 +293,13 @@ impl Hdp {
             .await
             .map_err(|_| UiServerError::ConnectionError)?;
 
-        // if let Some(i) = connection.peer_identity() {
-        //     debug!(
-        //         "[client] connected: addr={:#?}",
-        //         i.downcast::<Vec<rustls::Certificate>>()
-        //     );
-        // };
-
-        self.handle_connection(connection, false).await;
-        Ok(UiResponse::Connect)
+        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
+            self.handle_connection(connection, false, token, remote_cert)
+                .await;
+            Ok(UiResponse::Connect)
+        } else {
+            Err(UiServerError::ConnectionError)
+        }
     }
 
     /// Handle a command from the UI
@@ -242,7 +314,7 @@ impl Hdp {
                 return Err(HandleUiCommandError::ConnectionClosed);
             }
             Command::Connect(addr) => {
-                let response = self.connect_to_peer(addr).await;
+                let response = self.connect_to_peer(addr, None).await;
                 if self
                     .response_tx
                     .send(UiServerMessage::Response { id, response })
@@ -252,7 +324,27 @@ impl Hdp {
                 }
             }
             Command::Request(req, name) => {
+                // Some querys are to be sent to multiple peers
                 let requests = self.expand_request(req, name).await;
+
+                // If there is no request to make, end the response
+                if requests.len() == 0 {
+                    if self
+                        .response_tx
+                        .send(UiServerMessage::Response {
+                            id,
+                            response: Ok(UiResponse::EndResponse),
+                        })
+                        .is_err()
+                    {
+                        warn!("Response channel closed");
+                    }
+                }
+
+                // Track how many remaining requests there are, so we can terminate the reponse
+                // when all are finished
+                let remaining_responses: Arc<Mutex<usize>> = Arc::new(Mutex::new(requests.len()));
+
                 for (request, peer_name) in requests {
                     info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
@@ -260,6 +352,7 @@ impl Hdp {
                     match self.request(request, &peer_name).await {
                         Ok(mut recv) => {
                             let response_tx = self.response_tx.clone();
+                            let remaining_responses_clone = remaining_responses.clone();
                             tokio::spawn(async move {
                                 match req_clone {
                                     Request::Ls {
@@ -306,16 +399,20 @@ impl Hdp {
                                         }
 
                                         // Terminate with an endresponse
-                                        // TODO if there was more then one peer we need to only
+                                        // If there was more then one peer we need to only
                                         // send this if we are the last one
-                                        if response_tx
-                                            .send(UiServerMessage::Response {
-                                                id,
-                                                response: Ok(UiResponse::EndResponse),
-                                            })
-                                            .is_err()
-                                        {
-                                            warn!("Response channel closed");
+                                        let mut remaining = remaining_responses_clone.lock().await;
+                                        *remaining -= 1;
+                                        if *remaining == 0 {
+                                            if response_tx
+                                                .send(UiServerMessage::Response {
+                                                    id,
+                                                    response: Ok(UiResponse::EndResponse),
+                                                })
+                                                .is_err()
+                                            {
+                                                warn!("Response channel closed");
+                                            }
                                         }
                                     }
                                     Request::Read {
@@ -401,6 +498,28 @@ impl Hdp {
         debug!("message sent");
         Ok(recv)
     }
+
+    fn certificate_to_name(&self, cert: Certificate) -> String {
+        let mut hash = [0u8; 32];
+        let mut topic_hash = Blake2b::new(32);
+        topic_hash.input(cert.as_ref());
+        topic_hash.result(&mut hash);
+        key_to_animal::key_to_name(&hash)
+    }
+}
+
+fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+    let identity = conn
+        .peer_identity()
+        .ok_or_else(|| anyhow!("No peer certificate"))?;
+
+    let remote_cert = identity
+        .downcast::<Vec<Certificate>>()
+        .map_err(|_| anyhow!("No cert"))?;
+    remote_cert
+        .first()
+        .ok_or_else(|| anyhow!("No cert"))
+        .cloned()
 }
 
 /// Error on making a request to a given remote peer
