@@ -27,12 +27,13 @@ pub struct Shares {
 impl Shares {
     /// Setup share index giving a path to use for persistant storage
     pub async fn new(
-        storage: impl AsRef<Path>,
+        db: sled::Db,
+        // storage: impl AsRef<Path>,
         share_dirs: Vec<&str>,
     ) -> Result<Self, CreateSharesError> {
-        let mut db_dir = storage.as_ref().to_owned();
-        db_dir.push("db");
-        let db = sled::open(db_dir).expect("open");
+        // let mut db_dir = storage.as_ref().to_owned();
+        // db_dir.push("db");
+        // let db = sled::open(db_dir).expect("open");
         let files = db.open_tree(FILES)?;
         let dirs = db.open_tree(DIRS)?;
         dirs.set_merge_operator(addition_merge);
@@ -373,7 +374,11 @@ mod tests {
     #[tokio::test]
     async fn share_query() {
         let storage = TempDir::new().unwrap();
-        let mut shares = Shares::new(storage, Vec::new()).await.unwrap();
+        let mut db_dir = storage.as_ref().to_owned();
+        db_dir.push("db");
+        let db = sled::open(db_dir).expect("open");
+
+        let mut shares = Shares::new(db, Vec::new()).await.unwrap();
         let added = shares.scan("tests/test-data").await.unwrap();
         assert_eq!(added, 3);
 
