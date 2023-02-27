@@ -180,6 +180,7 @@ impl Shares {
         Ok(actual_path.join(sub_path))
     }
 
+    // TODO this should find the old total size of share dir and subtract it from the "" entry
     fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
         for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
             debug!("Deleting existing entry {:?}", entry);

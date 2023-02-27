@@ -39,7 +39,7 @@ pub fn handshake_response(
     let mut decrypt_msg: [u8; 32] = [0u8; 32];
 
     let nonce = &handshake_request[32 + 16..];
-    let mut cipher = ChaCha20Poly1305::new(&key, &nonce, &AAD);
+    let mut cipher = ChaCha20Poly1305::new(&key, nonce, &AAD);
 
     if cipher.decrypt(
         &handshake_request[0..32],

@@ -40,7 +40,7 @@ fn configure_server(
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<(ServerConfig, ClientConfig)> {
     let priv_key = rustls::PrivateKey(priv_key_der.clone());
-    let cert_chain = vec![rustls::Certificate(cert_der.clone())];
+    let cert_chain = vec![rustls::Certificate(cert_der)];
 
     // let mut server_config = ServerConfig::with_single_cert(cert_chain, priv_key)?;
 

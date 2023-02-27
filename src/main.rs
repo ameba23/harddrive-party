@@ -146,7 +146,8 @@ async fn main() -> anyhow::Result<()> {
             while let Some(response) = responses.recv().await {
                 match response {
                     Ok(UiResponse::Read(data)) => {
-                        println!("{}", std::str::from_utf8(&data).unwrap());
+                        println!("read {} bytes", data.len());
+                        // println!("{}", std::str::from_utf8(&data).unwrap());
                     }
                     Ok(UiResponse::EndResponse) => {
                         break;

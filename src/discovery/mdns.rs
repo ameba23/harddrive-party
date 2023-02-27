@@ -97,27 +97,25 @@ pub async fn mdns_server(
                             Ok((their_addr, capability)) => {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
-                                } else {
-                                    if let Ok(their_token) =
-                                        handshake_response(capability, &topic, their_addr)
+                                } else if let Ok(their_token) =
+                                    handshake_response(capability, &topic, their_addr)
+                                {
+                                    // Only connect if our address is lexicographicaly greater than
+                                    // theirs - to prevent duplicate connections
+                                    let us = addr.to_string();
+                                    let them = their_addr.to_string();
+                                    if us > them
+                                        && peers_tx
+                                            .send(MdnsPeer {
+                                                addr: their_addr,
+                                                token: their_token,
+                                            })
+                                            .is_err()
                                     {
-                                        // Only connect if our address is lexicographicaly greater than
-                                        // theirs - to prevent duplicate connections
-                                        let us = addr.to_string();
-                                        let them = their_addr.to_string();
-                                        if us > them
-                                            && peers_tx
-                                                .send(MdnsPeer {
-                                                    addr: their_addr,
-                                                    token: their_token,
-                                                })
-                                                .is_err()
-                                        {
-                                            warn!("Cannot send - mdns peer channel closed");
-                                        }
-                                    } else {
-                                        warn!("Found mdns peer with unknown/bad capability");
+                                        warn!("Cannot send - mdns peer channel closed");
                                     }
+                                } else {
+                                    warn!("Found mdns peer with unknown/bad capability");
                                 }
                             }
                             Err(error) => {
