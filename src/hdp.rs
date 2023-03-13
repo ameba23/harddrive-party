@@ -1,27 +1,31 @@
 use crate::{
     connect::{generate_certificate, make_server_endpoint},
     discovery::{
+        discover_peers,
         handshake::{Token, TOKEN_LENGTH},
-        mdns::{mdns_server, MdnsPeer},
         topic::Topic,
+        DiscoveredPeer,
     },
     rpc::Rpc,
     shares::Shares,
-    ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage},
+    ui_messages::{
+        Command, ReadResponse, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
+    },
     wire_messages::{LsResponse, Request},
 };
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
-use local_ip_address::local_ip;
 use log::{debug, info, warn};
 use quinn::{Connection, Endpoint, RecvStream};
 use rustls::Certificate;
+use speedometer::Speedometer;
 use std::{
     collections::HashMap,
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
@@ -35,7 +39,7 @@ use tokio::{
 };
 
 const MAX_REQUEST_SIZE: usize = 1024;
-const DOWNLOAD_BLOCK_SIZE: usize = 1024; // TODO
+const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
 
 pub struct Hdp {
@@ -51,8 +55,8 @@ pub struct Hdp {
     command_rx: UnboundedReceiver<UiClientMessage>,
     /// Channel for responses to the UI
     response_tx: UnboundedSender<UiServerMessage>,
-    /// Channel for discovered mdns peers
-    mdns_peers_rx: UnboundedReceiver<MdnsPeer>,
+    /// Channel for discovered peers
+    peers_rx: UnboundedReceiver<DiscoveredPeer>,
     /// Session token
     token: Token,
     /// Download directory
@@ -63,14 +67,13 @@ impl Hdp {
     pub async fn new(
         storage: impl AsRef<Path>,
         sharedirs: Vec<&str>,
+        topic_names: Vec<&str>,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
-        // TODO this will be replaced by a noise public key
-        // let mut rng = rand::thread_rng();
-        // let public_key = rng.gen();
-
+        // Channels for communication with UI
         let (command_tx, command_rx) = unbounded_channel();
         let (response_tx, response_rx) = unbounded_channel();
 
+        // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir)?;
@@ -99,22 +102,21 @@ impl Hdp {
             }
         };
 
-        let my_local_ip = local_ip()?;
-        let endpoint =
-            make_server_endpoint(SocketAddr::new(my_local_ip, 0), cert_der, priv_key_der)?;
-
-        let addr = endpoint.local_addr()?;
-        let topic = Topic::new("boop".to_string()); // TODO
-        let (mdns_peers_rx, token) = mdns_server(&addr.to_string(), addr, topic).await?;
+        let topics = topic_names
+            .iter()
+            .map(|name| Topic::new(name.to_string()))
+            .collect();
+        let (socket, peers_rx, token) = discover_peers(topics, false, true).await?;
+        let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
         Ok((
             Self {
                 peers: Default::default(),
-                rpc: Arc::new(Rpc::new(shares)),
+                rpc: Arc::new(Rpc::new(shares, response_tx.clone())),
                 endpoint,
                 command_tx,
                 command_rx,
                 response_tx,
-                mdns_peers_rx,
+                peers_rx,
                 token,
                 download_dir,
                 // public_key,
@@ -137,10 +139,10 @@ impl Hdp {
                         break;
                     };
                 }
-                Some(mdns_peer) = self.mdns_peers_rx.recv() => {
-                    debug!("Found mdns peer {}", mdns_peer.addr);
-                    if self.connect_to_peer(mdns_peer.addr, Some(mdns_peer.token)).await.is_err() {
-                        warn!("Cannot connect to mdns peer");
+                Some(peer) = self.peers_rx.recv() => {
+                    debug!("Discovered peer {}", peer.addr);
+                    if self.connect_to_peer(peer.addr, peer.token).await.is_err() {
+                        warn!("Cannot connect to discovered peer");
                     };
                 }
             }
@@ -157,11 +159,11 @@ impl Hdp {
     ) {
         let peer_name = self.certificate_to_name(remote_cert);
         debug!("Connected to peer {}", peer_name);
+        let response_tx = self.response_tx.clone();
 
         let peers_clone = self.peers.clone();
         let our_token = self.token;
         let rpc = self.rpc.clone();
-
         tokio::spawn(async move {
             if let Some(thier_token) = token {
                 let (mut send, _recv) = conn.open_bi().await.unwrap();
@@ -195,6 +197,10 @@ impl Hdp {
                     warn!("Adding connection for already connected peer!");
                 };
                 info!("[{}] connected to {} peers", direction, peers.len());
+                send_event(
+                    response_tx.clone(),
+                    UiEvent::PeerConnected(peer_name.clone()),
+                );
             }
 
             // Loop over incoming requests from this peer
@@ -249,6 +255,7 @@ impl Hdp {
                 Some(_) => {
                     debug!("Connection closed - removed peer");
                     // TODO here we should send a peer disconnected event to the UI
+                    send_event(response_tx, UiEvent::PeerConnected(peer_name.clone()));
                 }
                 None => {
                     warn!("Connection closed but peer not present in map");
@@ -427,15 +434,24 @@ impl Hdp {
                                         start,
                                         end: _,
                                     } => {
-                                        let output_path = download_dir.join(path);
+                                        let output_path = download_dir.join(path.clone());
                                         match setup_download(output_path, start).await {
                                             Ok(mut file) => {
                                                 let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
                                                     [0; DOWNLOAD_BLOCK_SIZE];
+                                                let mut bytes_read: u64 = 0;
+                                                let mut total_bytes_read = 0;
+                                                let mut speedometer =
+                                                    Speedometer::new(Duration::from_secs(5));
                                                 // TODO handle errors here
                                                 while let Ok(Some(n)) = recv.read(&mut buf).await {
                                                     debug!("Read {} bytes", n);
-                                                    if let Err(error) = file.write(&buf).await {
+                                                    speedometer.entry(n);
+                                                    bytes_read += n as u64;
+                                                    total_bytes_read += n as u64;
+
+                                                    if let Err(error) = file.write(&buf[..n]).await
+                                                    {
                                                         warn!(
                                                             "Cannot write downloading file {:?}",
                                                             error
@@ -446,7 +462,15 @@ impl Hdp {
                                                         .send(UiServerMessage::Response {
                                                             id,
                                                             response: Ok(UiResponse::Read(
-                                                                buf[..n].to_vec(),
+                                                                ReadResponse {
+                                                                    path: path.clone(),
+                                                                    bytes_read,
+                                                                    total_bytes_read,
+                                                                    speed: speedometer
+                                                                        .measure()
+                                                                        .unwrap(),
+                                                                },
+                                                                // buf[..n].to_vec(),
                                                             )),
                                                         })
                                                         .is_err()
@@ -530,6 +554,12 @@ impl Hdp {
         topic_hash.input(cert.as_ref());
         topic_hash.result(&mut hash);
         key_to_animal::key_to_name(&hash)
+    }
+}
+
+fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {
+    if sender.send(UiServerMessage::Event(event)).is_err() {
+        warn!("UI response channel closed");
     }
 }
 

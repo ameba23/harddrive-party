@@ -23,6 +23,7 @@ enum CliCommand {
     Start {
         storage: String,
         share_dir: String,
+        topic: String,
         ws_addr: Option<SocketAddr>,
     },
     /// Connect to a peer
@@ -51,9 +52,12 @@ async fn main() -> anyhow::Result<()> {
             storage,
             share_dir,
             ws_addr,
+            topic,
         } => {
             let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
-            let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir]).await.unwrap();
+            let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir], vec![&topic])
+                .await
+                .unwrap();
             println!("Listening on {}", hdp.endpoint.local_addr().unwrap());
             let command_tx = hdp.command_tx.clone();
 
@@ -145,8 +149,8 @@ async fn main() -> anyhow::Result<()> {
             .await?;
             while let Some(response) = responses.recv().await {
                 match response {
-                    Ok(UiResponse::Read(data)) => {
-                        println!("read {} bytes", data.len());
+                    Ok(UiResponse::Read(read_response)) => {
+                        println!("{:?}", read_response);
                         // println!("{}", std::str::from_utf8(&data).unwrap());
                     }
                     Ok(UiResponse::EndResponse) => {

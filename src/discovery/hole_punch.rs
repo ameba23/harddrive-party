@@ -1,0 +1,183 @@
+use futures::ready;
+use log::{debug, warn};
+use std::{
+    io,
+    net::SocketAddr,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
+use tokio::{
+    io::Interest,
+    sync::{broadcast, mpsc},
+};
+
+/// Most of this is copied from https://github.com/Frando/quinn-holepunch
+
+pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
+pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
+
+#[derive(Debug)]
+pub struct PunchingUdpSocket {
+    socket: Arc<tokio::net::UdpSocket>,
+    quinn_socket_state: quinn_udp::UdpSocketState,
+    udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
+}
+
+impl PunchingUdpSocket {
+    pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
+        let socket = socket.into_std()?;
+
+        quinn_udp::UdpSocketState::configure((&socket).into())?;
+
+        let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
+
+        let (udp_recv_tx, udp_recv) = broadcast::channel::<IncomingHolepunchPacket>(1024);
+        let (udp_send, mut udp_send_rx) = mpsc::channel::<OutgoingHolepunchPacket>(1024);
+
+        let socket_clone = socket.clone();
+        tokio::spawn(async move {
+            while let Some(packet) = udp_send_rx.recv().await {
+                match socket_clone.send_to(&packet.data, packet.dest).await {
+                    Ok(_) => {}
+                    Err(err) => debug!(
+                        "Failed to send holepunch packet to {}: {}",
+                        packet.dest, err
+                    ),
+                }
+            }
+        });
+
+        Ok((
+            Self {
+                socket,
+                quinn_socket_state: quinn_udp::UdpSocketState::new(),
+                udp_recv_tx,
+            },
+            HolePuncher { udp_recv, udp_send },
+        ))
+    }
+}
+
+impl quinn::AsyncUdpSocket for PunchingUdpSocket {
+    fn poll_send(
+        &mut self,
+        state: &quinn_udp::UdpState,
+        cx: &mut Context,
+        transmits: &[quinn::Transmit],
+    ) -> Poll<io::Result<usize>> {
+        let quinn_socket_state = &mut self.quinn_socket_state;
+        let io = &*self.socket;
+        loop {
+            ready!(io.poll_send_ready(cx))?;
+            if let Ok(res) = io.try_io(Interest::WRITABLE, || {
+                quinn_socket_state.send(io.into(), state, transmits)
+            }) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+    }
+
+    fn poll_recv(
+        &self,
+        cx: &mut Context,
+        bufs: &mut [std::io::IoSliceMut<'_>],
+        metas: &mut [quinn_udp::RecvMeta],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            ready!(self.socket.poll_recv_ready(cx))?;
+            if let Ok(res) = self.socket.try_io(Interest::READABLE, || {
+                let res = self
+                    .quinn_socket_state
+                    .recv((&*self.socket).into(), bufs, metas);
+
+                if let Ok(msg_count) = res {
+                    forward_holepunch(&self.udp_recv_tx, bufs, metas, msg_count);
+                }
+
+                res
+            }) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
+        self.socket.local_addr()
+    }
+}
+
+fn forward_holepunch(
+    channel: &broadcast::Sender<IncomingHolepunchPacket>,
+    bufs: &[std::io::IoSliceMut<'_>],
+    metas: &[quinn_udp::RecvMeta],
+    msg_count: usize,
+) {
+    for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
+        if meta.len == 1 {
+            let packet = IncomingHolepunchPacket {
+                data: [*&buf[0]],
+                from: meta.addr,
+            };
+            let _ = channel.send(packet);
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IncomingHolepunchPacket {
+    data: [u8; 1],
+    from: SocketAddr,
+}
+
+#[derive(Clone, Debug)]
+pub struct OutgoingHolepunchPacket {
+    data: [u8; 1],
+    dest: SocketAddr,
+}
+
+pub struct HolePuncher {
+    udp_send: UdpSend,
+    udp_recv: UdpReceive,
+}
+
+impl HolePuncher {
+    /// Make a connection by holepunching
+    /// This should be run as a separate task
+    pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
+        let mut packet = OutgoingHolepunchPacket {
+            dest: addr,
+            data: [0u8],
+        };
+        let mut wait = false;
+        loop {
+            if wait {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            tokio::select! {
+              send = self.udp_send.send(packet.clone()) => {
+                  if let Err(err) = send {
+                      warn!("Failed to forward holepunch packet to {addr}: {err}");
+                  }
+                    debug!("sent packet to {addr}, waiting");
+                  wait = true;
+              }
+              recv = self.udp_recv.recv() => {
+                  if let Ok(recv) = recv {
+                      if recv.from == addr {
+                          match recv.data[0] {
+                              0 => {
+                                  packet.data = [1u8];
+                              }
+                              1 => break,
+                              _ => debug!("Received invalid holepunch packet from {addr}")
+                          }
+                      }
+                  }
+                  wait = false
+              }
+            }
+        }
+        Ok(())
+    }
+}

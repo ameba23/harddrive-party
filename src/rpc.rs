@@ -1,13 +1,18 @@
-use crate::shares::{EntryParseError, Shares};
+use crate::{
+    shares::{EntryParseError, Shares},
+    ui_messages::{UiEvent, UiServerMessage, UploadInfo},
+};
 use bincode::serialize;
 use log::{debug, warn};
 use quinn::WriteError;
 use thiserror::Error;
 use tokio::{
     fs,
-    io::{self, AsyncRead, AsyncReadExt, AsyncSeekExt},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
     sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
+
+const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
 struct ReadRequest {
     path: String,
@@ -25,7 +30,8 @@ pub struct Rpc {
 }
 
 impl Rpc {
-    pub fn new(shares: Shares) -> Rpc {
+    pub fn new(shares: Shares, event_tx: UnboundedSender<UiServerMessage>) -> Rpc {
+        // TODO this should also take a tx for sending upload events to the UI
         let (upload_tx, upload_rx) = unbounded_channel();
         let shares_clone = shares.clone();
 
@@ -33,6 +39,7 @@ impl Rpc {
             let mut uploader = Uploader {
                 shares: shares_clone,
                 upload_rx,
+                event_tx,
             };
             uploader.run().await;
         });
@@ -105,6 +112,7 @@ impl Rpc {
 struct Uploader {
     shares: Shares,
     upload_rx: UnboundedReceiver<ReadRequest>,
+    event_tx: UnboundedSender<UiServerMessage>,
 }
 
 impl Uploader {
@@ -123,10 +131,32 @@ impl Uploader {
             end,
             mut output,
         } = read_request;
-        match self.get_file_portion(path, start, end).await {
+        match self.get_file_portion(path.clone(), start, end).await {
             Ok(file) => {
                 // TODO output.write success header
-                io::copy(&mut Box::into_pin(file), &mut output).await?;
+                // io::copy(&mut Box::into_pin(file), &mut output).await?;
+                let mut buf: [u8; UPLOAD_BLOCK_SIZE] = [0; UPLOAD_BLOCK_SIZE];
+                let mut file = Box::into_pin(file);
+                let mut bytes_read: u64 = 0; // TODO this should depend on start
+                while let Ok(n) = file.read(&mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    debug!("Uploaded {} bytes", n);
+                    bytes_read += n as u64;
+                    if self
+                        .event_tx
+                        .send(UiServerMessage::Event(UiEvent::Uploaded(UploadInfo {
+                            path: path.clone(),
+                            bytes_read,
+                            speed: 0, // TODO
+                        })))
+                        .is_err()
+                    {
+                        warn!("Ui response channel closed");
+                    };
+                    output.write(&buf[..n]).await?;
+                }
                 output.finish().await?;
                 Ok(())
             }

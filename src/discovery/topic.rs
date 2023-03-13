@@ -1,4 +1,7 @@
-use cryptoxide::{blake2b::Blake2b, digest::Digest};
+use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
+use rand::{thread_rng, Rng};
+
+const AAD: [u8; 0] = [];
 
 // This is the Blake2b hash of the string "harddrive-party"
 const CONTEXT: [u8; 32] = [
@@ -6,9 +9,12 @@ const CONTEXT: [u8; 32] = [
     210, 81, 113, 98, 32, 171, 11, 228, 240, 2,
 ];
 
+#[derive(Debug, Clone)]
 pub struct Topic {
     pub name: String,
     pub hash: [u8; 32],
+    /// A publically sharable ID made by hashing a second time
+    pub public_id: String,
 }
 
 impl Topic {
@@ -18,11 +24,63 @@ impl Topic {
         topic_hash.input(name.as_str().as_bytes());
         topic_hash.result(&mut hash);
 
-        Self { name, hash }
+        let mut id_hash = [0u8; 32];
+        let mut blake = Blake2b::new(32);
+        blake.input(&hash);
+        blake.result(&mut id_hash);
+        let public_id = to_hex_string(id_hash);
+
+        Self {
+            name,
+            hash,
+            public_id,
+        }
     }
 
     pub fn as_hex(&self) -> String {
         to_hex_string(self.hash)
+    }
+
+    /// Encrypt a message using this topic as the key
+    pub fn encrypt(&self, payload: &Vec<u8>) -> Vec<u8> {
+        let nonce: [u8; 8] = thread_rng().gen();
+        // let mut out: [u8; payload.len() + 16 + 8] = [0u8; 32 + 16 + 8];
+        let mut out: Vec<u8> = Vec::with_capacity(payload.len() + 16 + 8);
+        out.resize(payload.len(), 0);
+        let mut tag: [u8; 16] = [0u8; 16];
+
+        let mut cipher = ChaCha20Poly1305::new(&self.hash, &nonce, &AAD);
+
+        // Encrypt the msg and append the tag at the end
+        cipher.encrypt(payload, &mut out, &mut tag);
+        // out[32..32 + 16].copy_from_slice(&tag);
+        out.append(&mut tag.to_vec());
+        // out[32 + 16..].copy_from_slice(&nonce);
+        out.append(&mut nonce.to_vec());
+        out
+    }
+
+    /// Decrypt a message using this topic as the key
+    pub fn decrypt(&self, encrypted: &Vec<u8>) -> Option<Vec<u8>> {
+        if encrypted.len() < 16 + 8 {
+            return None;
+        };
+        let ciphertext_length = encrypted.len() - 16 - 8;
+        let mut plain: Vec<u8> = Vec::with_capacity(ciphertext_length);
+        plain.resize(ciphertext_length, 0);
+
+        let nonce = &encrypted[encrypted.len() - 8..];
+        let mut cipher = ChaCha20Poly1305::new(&self.hash, nonce, &AAD);
+
+        if cipher.decrypt(
+            &encrypted[0..ciphertext_length],
+            &mut plain,
+            &encrypted[ciphertext_length..ciphertext_length + 16],
+        ) {
+            Some(plain)
+        } else {
+            None
+        }
     }
 }
 
@@ -31,6 +89,17 @@ fn to_hex_string(bytes: [u8; 32]) -> String {
     strs.join("")
 }
 
-// fn from_hex_string(input: String) -> Vec<u8> {
-//
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypt_to_topic() {
+        let topic = Topic::new("robot".to_string());
+
+        let plain = b"beep boop".to_vec();
+        let ciphertext = topic.encrypt(&plain);
+        let decrypted = topic.decrypt(&ciphertext).unwrap();
+        assert_eq!(plain, decrypted);
+    }
+}

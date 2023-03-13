@@ -31,13 +31,21 @@ pub enum UiServerMessage {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
-    PeerConnected,
-    PeerDisconnected,
+    PeerConnected(String),
+    PeerDisconnected(String),
+    Uploaded(UploadInfo),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct UploadInfo {
+    pub path: String,
+    pub bytes_read: u64,
+    pub speed: usize,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiResponse {
-    Read(Vec<u8>),
+    Read(ReadResponse),
     Ls(LsResponse, String),
     Connect,
     EndResponse,
@@ -49,4 +57,12 @@ pub enum UiServerError {
     ConnectionError,
     #[error("Request error")]
     RequestError, // TODO
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct ReadResponse {
+    pub path: String,
+    pub bytes_read: u64,
+    pub total_bytes_read: u64,
+    pub speed: usize,
 }

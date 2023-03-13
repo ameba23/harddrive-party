@@ -1,9 +1,10 @@
+use crate::discovery::hole_punch::PunchingUdpSocket;
 use anyhow::anyhow;
 use log::{debug, warn};
 use quinn::{ClientConfig, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
 use rustls::SignatureScheme;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -22,13 +23,20 @@ pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 }
 
 /// Setup an endpoint for Quic connections with a given socket address and certificate
-pub fn make_server_endpoint(
-    bind_addr: SocketAddr,
+pub async fn make_server_endpoint(
+    socket: PunchingUdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<Endpoint> {
     let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
-    let mut endpoint = Endpoint::server(server_config, bind_addr)?;
+    // let mut endpoint = Endpoint::server(server_config, bind_addr)?;
+
+    let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
+        Default::default(),
+        Some(server_config),
+        socket,
+        quinn::TokioRuntime,
+    )?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
 }

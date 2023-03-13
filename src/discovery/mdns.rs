@@ -1,67 +1,29 @@
 use crate::discovery::{
-    handshake::{handshake_request, handshake_response, HandshakeRequest, Token},
+    handshake::{handshake_response, HandshakeRequest},
     topic::Topic,
+    DiscoveredPeer,
 };
 use anyhow::anyhow;
 use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::net::{IpAddr, SocketAddr};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+use tokio::sync::mpsc::UnboundedSender;
 
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 const TOPIC: &str = "topic";
 const PORT: &str = "port";
 
-/// A peer discovered by mdns
-pub struct MdnsPeer {
-    pub addr: SocketAddr,
-    // pub topic: String,
-    // pub capability: HandshakeRequest,
-    pub token: Token,
-}
-
-fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, HandshakeRequest)> {
-    if info.get_type() != SERVICE_TYPE {
-        return Err(anyhow!("Peer does not have expected service type"));
-    }
-
-    let properties = info.get_properties();
-
-    let capability = hex::decode(
-        properties
-            .get(&TOPIC.to_string())
-            .ok_or_else(|| anyhow!("Cannot get topic"))?,
-    )?
-    .try_into()
-    .map_err(|_| anyhow!("Cannot decode hex"))?;
-
-    let their_ip = info
-        .get_addresses()
-        .iter()
-        .next()
-        .ok_or_else(|| anyhow!("Cannot get ip"))?;
-
-    // let their_port = info.get_port();
-    let their_port = properties
-        .get(&PORT.to_string())
-        .ok_or_else(|| anyhow!("Cannot get port"))?
-        .parse::<u16>()?;
-
-    let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
-    Ok((addr, capability))
-}
-
 // TODO i dont think we need the port proptery
+// TODO allow multiple topics
 /// Announce ourself on mdns and discover other local peers
 pub async fn mdns_server(
     name: &str,
     addr: SocketAddr,
     topic: Topic,
-) -> anyhow::Result<(UnboundedReceiver<MdnsPeer>, Token)> {
-    let (peers_tx, peers_rx) = unbounded_channel();
+    peers_tx: UnboundedSender<DiscoveredPeer>,
+    capability: HandshakeRequest,
+) -> anyhow::Result<()> {
     let mdns = ServiceDaemon::new()?;
-
-    let (capability, our_token) = handshake_request(&topic, addr);
 
     // Create a service info.
     let host_name = "localhost"; // TODO
@@ -106,13 +68,14 @@ pub async fn mdns_server(
                                     let them = their_addr.to_string();
                                     if us > them
                                         && peers_tx
-                                            .send(MdnsPeer {
+                                            .send(DiscoveredPeer {
                                                 addr: their_addr,
-                                                token: their_token,
+                                                token: Some(their_token),
+                                                topic: None,
                                             })
                                             .is_err()
                                     {
-                                        warn!("Cannot send - mdns peer channel closed");
+                                        warn!("Cannot send - peer discovery channel closed");
                                     }
                                 } else {
                                     warn!("Found mdns peer with unknown/bad capability");
@@ -130,8 +93,39 @@ pub async fn mdns_server(
                 }
             }
         });
-        Ok((peers_rx, our_token))
+        Ok(())
     } else {
         Err(anyhow!("ipv6 address cannot be used for MDNS"))
     }
+}
+
+fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, HandshakeRequest)> {
+    if info.get_type() != SERVICE_TYPE {
+        return Err(anyhow!("Peer does not have expected service type"));
+    }
+
+    let properties = info.get_properties();
+
+    let capability = hex::decode(
+        properties
+            .get(&TOPIC.to_string())
+            .ok_or_else(|| anyhow!("Cannot get topic"))?,
+    )?
+    .try_into()
+    .map_err(|_| anyhow!("Cannot decode hex"))?;
+
+    let their_ip = info
+        .get_addresses()
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("Cannot get ip"))?;
+
+    // let their_port = info.get_port();
+    let their_port = properties
+        .get(&PORT.to_string())
+        .ok_or_else(|| anyhow!("Cannot get port"))?
+        .parse::<u16>()?;
+
+    let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
+    Ok((addr, capability))
 }
