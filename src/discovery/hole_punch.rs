@@ -32,7 +32,7 @@ impl PunchingUdpSocket {
 
         let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
-        let (udp_recv_tx, udp_recv) = broadcast::channel::<IncomingHolepunchPacket>(1024);
+        let (udp_recv_tx, _udp_recv) = broadcast::channel::<IncomingHolepunchPacket>(1024);
         let (udp_send, mut udp_send_rx) = mpsc::channel::<OutgoingHolepunchPacket>(1024);
 
         let socket_clone = socket.clone();
@@ -40,7 +40,7 @@ impl PunchingUdpSocket {
             while let Some(packet) = udp_send_rx.recv().await {
                 match socket_clone.send_to(&packet.data, packet.dest).await {
                     Ok(_) => {}
-                    Err(err) => debug!(
+                    Err(err) => warn!(
                         "Failed to send holepunch packet to {}: {}",
                         packet.dest, err
                     ),
@@ -52,9 +52,12 @@ impl PunchingUdpSocket {
             Self {
                 socket,
                 quinn_socket_state: quinn_udp::UdpSocketState::new(),
+                udp_recv_tx: udp_recv_tx.clone(),
+            },
+            HolePuncher {
+                udp_send,
                 udp_recv_tx,
             },
-            HolePuncher { udp_recv, udp_send },
         ))
     }
 }
@@ -136,15 +139,17 @@ pub struct OutgoingHolepunchPacket {
     dest: SocketAddr,
 }
 
+#[derive(Clone, Debug)]
 pub struct HolePuncher {
     udp_send: UdpSend,
-    udp_recv: UdpReceive,
+    udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
 }
 
 impl HolePuncher {
     /// Make a connection by holepunching
     /// This should be run as a separate task
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
+        let mut udp_recv = self.udp_recv_tx.subscribe();
         let mut packet = OutgoingHolepunchPacket {
             dest: addr,
             data: [0u8],
@@ -159,14 +164,15 @@ impl HolePuncher {
                   if let Err(err) = send {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
                   }
-                    debug!("sent packet to {addr}, waiting");
+                  debug!("sent packet to {addr}, waiting");
                   wait = true;
               }
-              recv = self.udp_recv.recv() => {
+              recv = udp_recv.recv() => {
                   if let Ok(recv) = recv {
                       if recv.from == addr {
                           match recv.data[0] {
                               0 => {
+                                  debug!("Received initial holepunch packet from {addr}");
                                   packet.data = [1u8];
                               }
                               1 => break,

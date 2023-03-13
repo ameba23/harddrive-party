@@ -21,7 +21,7 @@ pub async fn mqtt_client(
     topics: Vec<Topic>,
     public_addr: SocketAddr,
     peers_tx: UnboundedSender<DiscoveredPeer>,
-    mut hole_puncher: HolePuncher,
+    hole_puncher: HolePuncher,
 ) -> anyhow::Result<()> {
     let server_addr: SocketAddr = "52.29.173.150:1883".parse()?; // broker.hivemq.com
     info!("Connecting to MQTT broker {:?} ... ", server_addr);
@@ -127,11 +127,15 @@ pub async fn mqtt_client(
                                 tn.contains(&topic.public_id)}
                             ) {
                                 if let Some(announce_address) = decrypt_using_topic(&publ.payload().to_vec(), &associated_topic) {
-
-                                    // if hole_puncher.hole_punch_peer(announce_address.public_addr).await.is_err() {
-                                    //     warn!("Hole punching failed");
-                                    //     continue;
-                                    // };
+                                    let mut hole_puncher_clone = hole_puncher.clone();
+                                    tokio::spawn(async move {
+                                        info!("Attempting hole punch...");
+                                        if hole_puncher_clone.hole_punch_peer(announce_address.public_addr).await.is_err() {
+                                            warn!("Hole punching failed");
+                                        } else {
+                                            info!("Hole punching succeeded");
+                                        };
+                                    });
                                     let us = public_addr.to_string();
                                     let them = announce_address.public_addr.to_string();
                                     if us > them {
