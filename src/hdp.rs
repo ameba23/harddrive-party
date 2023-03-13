@@ -165,29 +165,29 @@ impl Hdp {
         let our_token = self.token;
         let rpc = self.rpc.clone();
         tokio::spawn(async move {
-            if let Some(thier_token) = token {
-                let (mut send, _recv) = conn.open_bi().await.unwrap();
-                send.write_all(&thier_token).await.unwrap();
-                // send.write_all(&our_token).await.unwrap();
-                send.finish().await.unwrap();
-            } else if let Ok((_send, recv)) = conn.accept_bi().await {
-                match recv.read_to_end(TOKEN_LENGTH).await {
-                    Ok(buf) => {
-                        // make some check
-                        if buf == our_token {
-                            debug!("accepted remote peer's token");
-                        } else {
-                            warn!("Rejected remote peer's token");
-                            return;
-                        }
-                    }
-                    Err(_) => {
-                        return;
-                    }
-                }
-            } else {
-                return;
-            }
+            // if let Some(thier_token) = token {
+            //     let (mut send, _recv) = conn.open_bi().await.unwrap();
+            //     send.write_all(&thier_token).await.unwrap();
+            //     // send.write_all(&our_token).await.unwrap();
+            //     send.finish().await.unwrap();
+            // } else if let Ok((_send, recv)) = conn.accept_bi().await {
+            //     match recv.read_to_end(TOKEN_LENGTH).await {
+            //         Ok(buf) => {
+            //             // make some check
+            //             if buf == our_token {
+            //                 debug!("accepted remote peer's token");
+            //             } else {
+            //                 warn!("Rejected remote peer's token");
+            //                 return;
+            //             }
+            //         }
+            //         Err(_) => {
+            //             return;
+            //         }
+            //     }
+            // } else {
+            //     return;
+            // }
 
             {
                 // Add peer to our hashmap
@@ -274,7 +274,10 @@ impl Hdp {
         // } else {
         match incoming_conn.await {
             Ok(conn) => {
-                debug!("connection accepted {}", conn.remote_address());
+                debug!(
+                    "incoming QUIC connection accepted {}",
+                    conn.remote_address()
+                );
 
                 if let Some(i) = conn.handshake_data() {
                     let d = i
@@ -342,6 +345,7 @@ impl Hdp {
                 // Some querys are to be sent to multiple peers
                 let requests = self.expand_request(req, name).await;
 
+                debug!("making request to {} peers", requests.len());
                 // If there is no request to make, end the response
                 if requests.is_empty()
                     && self
