@@ -1,4 +1,4 @@
-use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer};
+use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer, SessionToken};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use log::{error, info, trace, warn};
@@ -21,6 +21,7 @@ pub async fn mqtt_client(
     topics: Vec<Topic>,
     public_addr: SocketAddr,
     has_nat: bool,
+    our_token: SessionToken,
     peers_tx: UnboundedSender<DiscoveredPeer>,
     hole_puncher: HolePuncher,
 ) -> anyhow::Result<()> {
@@ -97,6 +98,7 @@ pub async fn mqtt_client(
     let announce_address = AnnounceAddress {
         public_addr,
         has_nat,
+        token: our_token,
     };
     let announce_cleartext = serialize(&announce_address)?;
     for topic in &topics {
@@ -158,7 +160,7 @@ pub async fn mqtt_client(
                                         if peers_tx
                                             .send(DiscoveredPeer {
                                                 addr: announce_address.public_addr,
-                                                token: None,
+                                                token: announce_address.token,
                                                 topic: Some(associated_topic.clone()),
                                             })
                                             .is_err()
@@ -199,6 +201,7 @@ pub async fn mqtt_client(
 struct AnnounceAddress {
     public_addr: SocketAddr,
     has_nat: bool,
+    token: SessionToken,
 }
 
 fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddress> {

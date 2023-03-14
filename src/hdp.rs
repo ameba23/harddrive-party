@@ -1,11 +1,6 @@
 use crate::{
     connect::{generate_certificate, make_server_endpoint},
-    discovery::{
-        discover_peers,
-        handshake::{Token, TOKEN_LENGTH},
-        topic::Topic,
-        DiscoveredPeer,
-    },
+    discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
     rpc::Rpc,
     shares::Shares,
     ui_messages::{
@@ -58,7 +53,7 @@ pub struct Hdp {
     /// Channel for discovered peers
     peers_rx: UnboundedReceiver<DiscoveredPeer>,
     /// Session token
-    token: Token,
+    token: SessionToken,
     /// Download directory
     download_dir: PathBuf,
 }
@@ -141,7 +136,7 @@ impl Hdp {
                 }
                 Some(peer) = self.peers_rx.recv() => {
                     debug!("Discovered peer {}", peer.addr);
-                    if self.connect_to_peer(peer.addr, peer.token).await.is_err() {
+                    if self.connect_to_peer(peer.addr, Some(peer.token)).await.is_err() {
                         warn!("Cannot connect to discovered peer");
                     };
                 }
@@ -154,7 +149,7 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        token: Option<Token>,
+        token: Option<SessionToken>,
         remote_cert: Certificate,
     ) {
         let peer_name = self.certificate_to_name(remote_cert);
@@ -165,29 +160,29 @@ impl Hdp {
         let our_token = self.token;
         let rpc = self.rpc.clone();
         tokio::spawn(async move {
-            // if let Some(thier_token) = token {
-            //     let (mut send, _recv) = conn.open_bi().await.unwrap();
-            //     send.write_all(&thier_token).await.unwrap();
-            //     // send.write_all(&our_token).await.unwrap();
-            //     send.finish().await.unwrap();
-            // } else if let Ok((_send, recv)) = conn.accept_bi().await {
-            //     match recv.read_to_end(TOKEN_LENGTH).await {
-            //         Ok(buf) => {
-            //             // make some check
-            //             if buf == our_token {
-            //                 debug!("accepted remote peer's token");
-            //             } else {
-            //                 warn!("Rejected remote peer's token");
-            //                 return;
-            //             }
-            //         }
-            //         Err(_) => {
-            //             return;
-            //         }
-            //     }
-            // } else {
-            //     return;
-            // }
+            if let Some(thier_token) = token {
+                let (mut send, _recv) = conn.open_bi().await.unwrap();
+                send.write_all(&thier_token).await.unwrap();
+                // send.write_all(&our_token).await.unwrap();
+                send.finish().await.unwrap();
+            } else if let Ok((_send, recv)) = conn.accept_bi().await {
+                match recv.read_to_end(TOKEN_LENGTH).await {
+                    Ok(buf) => {
+                        // make some check
+                        if buf == our_token {
+                            debug!("accepted remote peer's token");
+                        } else {
+                            warn!("Rejected remote peer's token");
+                            return;
+                        }
+                    }
+                    Err(_) => {
+                        return;
+                    }
+                }
+            } else {
+                return;
+            }
 
             {
                 // Add peer to our hashmap
@@ -302,7 +297,7 @@ impl Hdp {
     async fn connect_to_peer(
         &mut self,
         addr: SocketAddr,
-        token: Option<Token>,
+        token: Option<SessionToken>,
     ) -> Result<UiResponse, UiServerError> {
         let connection = self
             .endpoint

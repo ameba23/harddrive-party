@@ -1,7 +1,7 @@
 use crate::discovery::{
-    handshake::{handshake_response, HandshakeRequest},
+    capability::{handshake_request, handshake_response, HandshakeRequest},
     topic::Topic,
-    DiscoveredPeer,
+    DiscoveredPeer, SessionToken,
 };
 use anyhow::anyhow;
 use log::{debug, warn};
@@ -21,9 +21,11 @@ pub async fn mdns_server(
     addr: SocketAddr,
     topic: Topic,
     peers_tx: UnboundedSender<DiscoveredPeer>,
-    capability: HandshakeRequest,
+    token: SessionToken,
 ) -> anyhow::Result<()> {
     let mdns = ServiceDaemon::new()?;
+
+    let capability = handshake_request(&topic, addr, token);
 
     // Create a service info.
     let host_name = "localhost"; // TODO
@@ -70,7 +72,7 @@ pub async fn mdns_server(
                                         && peers_tx
                                             .send(DiscoveredPeer {
                                                 addr: their_addr,
-                                                token: Some(their_token),
+                                                token: their_token,
                                                 topic: None,
                                             })
                                             .is_err()

@@ -1,26 +1,24 @@
-use self::{
-    handshake::{handshake_request, Token},
-    hole_punch::PunchingUdpSocket,
-    mdns::mdns_server,
-    mqtt::mqtt_client,
-    topic::Topic,
-};
+use self::{hole_punch::PunchingUdpSocket, mdns::mdns_server, mqtt::mqtt_client, topic::Topic};
 use local_ip_address::local_ip;
 use log::debug;
 use quinn::AsyncUdpSocket;
+use rand::Rng;
 use std::net::{IpAddr, SocketAddr};
 use stunclient::StunClient;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
-pub mod handshake;
+pub mod capability;
 pub mod hole_punch;
 pub mod mdns;
 pub mod mqtt;
 pub mod topic;
 
+pub const TOKEN_LENGTH: usize = 32;
+pub type SessionToken = [u8; 32];
+
 pub struct DiscoveredPeer {
     pub addr: SocketAddr,
-    pub token: Option<Token>,
+    pub token: SessionToken,
     pub topic: Option<Topic>,
     // pub discovery_method,
 }
@@ -31,7 +29,11 @@ pub async fn discover_peers(
     topics: Vec<Topic>,
     use_mdns: bool,
     use_mqtt: bool,
-) -> anyhow::Result<(PunchingUdpSocket, UnboundedReceiver<DiscoveredPeer>, Token)> {
+) -> anyhow::Result<(
+    PunchingUdpSocket,
+    UnboundedReceiver<DiscoveredPeer>,
+    SessionToken,
+)> {
     let (peers_tx, peers_rx) = unbounded_channel();
 
     let my_local_ip = local_ip()?;
@@ -56,11 +58,12 @@ pub async fn discover_peers(
 
     let id = &addr.to_string(); // TODO id should be derived from public key (probably)
 
+    let mut rng = rand::thread_rng();
+    let token: [u8; 32] = rng.gen();
     let single_topic = topics[0].clone();
-    let (capability, token) = handshake_request(&single_topic, addr);
 
     if use_mdns && is_private(my_local_ip) {
-        mdns_server(id, addr, single_topic, peers_tx.clone(), capability).await?;
+        mdns_server(id, addr, single_topic, peers_tx.clone(), token).await?;
     };
     if use_mqtt {
         mqtt_client(
@@ -68,6 +71,7 @@ pub async fn discover_peers(
             topics,
             public_addr,
             has_nat,
+            token,
             peers_tx,
             hole_puncher,
         )
