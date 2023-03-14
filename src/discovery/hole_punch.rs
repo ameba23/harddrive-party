@@ -186,6 +186,7 @@ impl HolePuncher {
                               }
                               1 => {
                                   debug!("Received updated holepunch packet from {addr}");
+                                  packet.data = [1u8];
                                   received_updated = true;
                                   if sent_updated {
                                       break
