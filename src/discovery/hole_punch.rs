@@ -163,8 +163,13 @@ impl HolePuncher {
               send = self.udp_send.send(packet.clone()) => {
                   if let Err(err) = send {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
+                  } else {
+                        if packet.data == [0u8] {
+                            debug!("sent initial packet to {addr}, waiting");
+                        } else {
+                            debug!("sent updated packet to {addr}, waiting");
+                        }
                   }
-                  debug!("sent packet to {addr}, waiting");
                   wait = true;
               }
               recv = udp_recv.recv() => {
@@ -175,8 +180,11 @@ impl HolePuncher {
                                   debug!("Received initial holepunch packet from {addr}");
                                   packet.data = [1u8];
                               }
-                              1 => break,
-                              _ => debug!("Received invalid holepunch packet from {addr}")
+                              1 => {
+                                  debug!("Received updated holepunch packet from {addr}");
+                                  break
+                              },
+                              _ => warn!("Received invalid holepunch packet from {addr}")
                           }
                       }
                   }

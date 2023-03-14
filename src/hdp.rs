@@ -240,7 +240,14 @@ impl Hdp {
                         };
                     }
                     Err(error) => {
-                        warn!("Error when accepting QUIC stream {:?}", error);
+                        match error {
+                            quinn::ConnectionError::TimedOut => {
+                                warn!("Timeout when accepting stream from peer - likely they have disconnected");
+                            }
+                            _ => {
+                                warn!("Error when accepting QUIC stream {:?}", error);
+                            }
+                        }
                         break;
                     }
                 }
