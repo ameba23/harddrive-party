@@ -8,7 +8,7 @@ use self::{
 use local_ip_address::local_ip;
 use log::debug;
 use quinn::AsyncUdpSocket;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use stunclient::StunClient;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
@@ -36,25 +36,72 @@ pub async fn discover_peers(
 
     let my_local_ip = local_ip()?;
     let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
+
+    // Get our public address with STUN
     let stun_client = StunClient::with_google_stun_server();
     let public_addr = stun_client
         .query_external_address_async(&raw_socket)
         .await?;
+
     let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
     let addr = socket.local_addr()?;
 
-    debug!("Local address: {:?} Public address {:?}", addr, public_addr);
+    // TODO here we should loop over IPs of all network interfaces
+    let has_nat = addr.ip() != public_addr.ip();
+
+    debug!(
+        "Local address: {:?} Public address {:?} NAT: {}",
+        addr, public_addr, has_nat
+    );
 
     let id = &addr.to_string(); // TODO id should be derived from public key (probably)
 
     let single_topic = topics[0].clone();
     let (capability, token) = handshake_request(&single_topic, addr);
 
-    if use_mdns {
+    if use_mdns && is_private(my_local_ip) {
         mdns_server(id, addr, single_topic, peers_tx.clone(), capability).await?;
     };
     if use_mqtt {
-        mqtt_client(id.to_string(), topics, public_addr, peers_tx, hole_puncher).await?;
-    }
+        mqtt_client(
+            id.to_string(),
+            topics,
+            public_addr,
+            has_nat,
+            peers_tx,
+            hole_puncher,
+        )
+        .await?;
+    };
     Ok((socket, peers_rx, token))
 }
+
+// Check if an IP appears to be private
+fn is_private(ip: IpAddr) -> bool {
+    if let IpAddr::V4(ip_v4_addr) = ip {
+        ip_v4_addr.is_private()
+    } else {
+        // In the case of ipv6 we cant be sure
+        false
+    }
+}
+
+//
+// fn addresses_identical(ip1: IpAddr, ip2: IpAddr) -> bool {
+//     ip1 == ip2
+// match ip1 {
+//     IpAddr::V4(ip_v4_addr1) => {
+//         if let IpAddr::V4(ip_v4_addr2) = ip2 {
+//             ip_v4_addr1 == ip_v4_addr2
+//         } else {
+//             false
+//         }
+//     }
+//     IpAddr::V6(ip_v6_addr1) => {
+//         if let IpAddr::V6(ip_v6_addr2) = ip2 {
+//             ip_v6_addr1 == ip_v6_addr2
+//         } else {
+//             false
+//         }
+//     }
+// }

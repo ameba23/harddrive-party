@@ -20,6 +20,7 @@ pub async fn mqtt_client(
     client_id: String,
     topics: Vec<Topic>,
     public_addr: SocketAddr,
+    has_nat: bool,
     peers_tx: UnboundedSender<DiscoveredPeer>,
     hole_puncher: HolePuncher,
 ) -> anyhow::Result<()> {
@@ -93,7 +94,10 @@ pub async fn mqtt_client(
     }
 
     // Publish our own address to chosen topics
-    let announce_address = AnnounceAddress { public_addr };
+    let announce_address = AnnounceAddress {
+        public_addr,
+        has_nat,
+    };
     let announce_cleartext = serialize(&announce_address)?;
     for topic in &topics {
         let chan = TopicName::new(format!("hdp/{}/{}", topic.public_id, client_id))?;
@@ -118,7 +122,7 @@ pub async fn mqtt_client(
                         }
                         VariablePacket::PublishPacket(ref publ) => {
                             if publ.topic_name().ends_with(&client_id) {
-                                info!("Found our own message");
+                                info!("Found our own announce message");
                                 continue;
                             }
                             // Find the associated topic
@@ -126,7 +130,7 @@ pub async fn mqtt_client(
                                 let tn = &publ.topic_name();
                                 tn.contains(&topic.public_id)}
                             ) {
-                                if let Some(announce_address) = decrypt_using_topic(&publ.payload().to_vec(), &associated_topic) {
+                                if let Some(announce_address) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
                                     let mut hole_puncher_clone = hole_puncher.clone();
                                     tokio::spawn(async move {
                                         info!("Attempting hole punch...");
@@ -136,9 +140,20 @@ pub async fn mqtt_client(
                                             info!("Hole punching succeeded");
                                         };
                                     });
-                                    let us = public_addr.to_string();
-                                    let them = announce_address.public_addr.to_string();
-                                    if us > them {
+
+                                    // Decide whether to initiate the connection deterministically
+                                    // so that only one party initiates
+                                    let should_initiate_connection = match (has_nat, announce_address.has_nat) {
+                                        (true, false) => true,
+                                        (false, true) => false,
+                                        _ => {
+                                            let us = public_addr.to_string();
+                                            let them = announce_address.public_addr.to_string();
+                                            us > them
+                                        }
+                                    };
+
+                                    if should_initiate_connection {
                                         info!("PUBLISH ({})", publ.topic_name());
                                         if peers_tx
                                             .send(DiscoveredPeer {
@@ -183,6 +198,7 @@ pub async fn mqtt_client(
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct AnnounceAddress {
     public_addr: SocketAddr,
+    has_nat: bool,
 }
 
 fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddress> {

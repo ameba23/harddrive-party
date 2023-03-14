@@ -66,8 +66,7 @@ impl Topic {
             return None;
         };
         let ciphertext_length = encrypted.len() - 16 - 8;
-        let mut plain: Vec<u8> = Vec::with_capacity(ciphertext_length);
-        plain.resize(ciphertext_length, 0);
+        let mut plain: Vec<u8> = vec![0; ciphertext_length];
 
         let nonce = &encrypted[encrypted.len() - 8..];
         let mut cipher = ChaCha20Poly1305::new(&self.hash, nonce, &AAD);
