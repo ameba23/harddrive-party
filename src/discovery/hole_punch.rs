@@ -155,6 +155,8 @@ impl HolePuncher {
             data: [0u8],
         };
         let mut wait = false;
+        let mut sent_updated = false;
+        let mut received_updated = false;
         loop {
             if wait {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -163,12 +165,14 @@ impl HolePuncher {
               send = self.udp_send.send(packet.clone()) => {
                   if let Err(err) = send {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
+                  } else if packet.data == [0u8] {
+                      debug!("sent initial packet to {addr}, waiting");
                   } else {
-                        if packet.data == [0u8] {
-                            debug!("sent initial packet to {addr}, waiting");
-                        } else {
-                            debug!("sent updated packet to {addr}, waiting");
-                        }
+                      debug!("sent updated packet to {addr}, waiting");
+                      sent_updated = true;
+                      if received_updated {
+                          break
+                      };
                   }
                   wait = true;
               }
@@ -182,7 +186,10 @@ impl HolePuncher {
                               }
                               1 => {
                                   debug!("Received updated holepunch packet from {addr}");
-                                  break
+                                  received_updated = true;
+                                  if sent_updated {
+                                      break
+                                  };
                               },
                               _ => warn!("Received invalid holepunch packet from {addr}")
                           }
