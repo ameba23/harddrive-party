@@ -147,17 +147,16 @@ pub struct HolePuncher {
 
 impl HolePuncher {
     /// Make a connection by holepunching
-    /// TODO this should be simplified
     /// TODO dont wait forever - give up after n tries
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
-        let packet = OutgoingHolepunchPacket {
+        let mut packet = OutgoingHolepunchPacket {
             dest: addr,
             data: [0u8],
         };
         let mut wait = false;
-        let mut sent = false;
-        let mut received = false;
+        let mut sent_ack = false;
+        let mut received_ack = false;
         loop {
             if wait {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -166,10 +165,12 @@ impl HolePuncher {
               send = self.udp_send.send(packet.clone()) => {
                   if let Err(err) = send {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
+                  } else if packet.data == [0u8] {
+                      debug!("sent initial packet to {addr}, waiting");
                   } else {
-                      debug!("sent packet to {addr}");
-                      sent = true;
-                      if received {
+                      debug!("sent ack packet to {addr}, waiting");
+                      sent_ack = true;
+                      if received_ack {
                           break
                       };
                   }
@@ -180,17 +181,22 @@ impl HolePuncher {
                       if recv.from == addr {
                           match recv.data[0] {
                               0 => {
-                                  debug!("Received holepunch packet from {addr}");
-                                  received = true;
-                                  if sent {
+                                  debug!("Received initial holepunch packet from {addr}");
+                                  packet.data = [1u8];
+                              }
+                              1 => {
+                                  debug!("Received ack holepunch packet from {addr}");
+                                  packet.data = [1u8];
+                                  received_ack = true;
+                                  if sent_ack {
                                       break
                                   };
-                              }
+                              },
                               _ => warn!("Received invalid holepunch packet from {addr}")
                           }
                       }
                   }
-                  wait = false;
+                  wait = false
               }
             }
         }
