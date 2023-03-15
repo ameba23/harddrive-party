@@ -149,7 +149,7 @@ pub async fn mqtt_client(
                                     let their_nat_badness = remote_peer_announce.nat_type as u8;
                                     let should_initiate_connection = if our_nat_badness == their_nat_badness {
                                             let us = public_addr.to_string();
-                                            let them = announce_address.public_addr.to_string();
+                                            let them = remote_peer_announce.public_addr.to_string();
                                             us > them
                                     } else {
                                         our_nat_badness > their_nat_badness
@@ -170,8 +170,8 @@ pub async fn mqtt_client(
                                         info!("PUBLISH ({})", publ.topic_name());
                                         if peers_tx
                                             .send(DiscoveredPeer {
-                                                addr: announce_address.public_addr,
-                                                token: announce_address.token,
+                                                addr: remote_peer_announce.public_addr,
+                                                token: remote_peer_announce.token,
                                                 topic: Some(associated_topic.clone()),
                                             })
                                             .is_err()
