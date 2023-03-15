@@ -7,30 +7,32 @@ Currently **work-in-progress**.
 
 ## Design goals
 
-- Minimal setup - don't need to wait long for files to index
+- Minimal initial setup - don't need to wait long for files to index
 - Practical for transferring large media collections
 - Remote control via ws / http interface. Can be run on an ARM device or NAS and controlled from another computer
 - Minimal reliance on centralised infrastructure
+- Support slow / intermittent connections
 
 ## Protocol
 
-Peers currently can only discover each other using mDNS - only peers on the same local network will be found.
+Peers discover each other using by announcing themselves on an MQTT server, as well as to mDNS for peers connected to the same local network. Announcement messages are encrypted using a 'topic name', so it is only possible to find peers who know the topic name. Udp hole-punching is used to connect peers who are behind a NAT or firewall.
 
-Peers connect using QUIC. A QUIC stream is opened for each RPC request to a peer. There are two types of request.
+Peers connect using QUIC, with client authentication using ed25519. A QUIC stream is opened for each RPC request to a peer. There are two types of request:
+
 - `ls` - for querying the shared file index
 - `read` - for downloading a file, or part of a file.
 
 ## Roadmap
 
-- [ ] Handshaking / prove knowledge of 'topic'
-- [ ] Support multiple topics
-- [ ] Persistent cryptographic identities / derived peer names
+- [x] Handshaking / prove knowledge of 'topic'
+- [ ] Support multiple topics / dynamically joining or leaving a topic
+- [x] Persistent cryptographic identities / derived peer names
 - [ ] Query own files / represent self as a peer
 - [ ] Attempt to reconnect to peers after loosing connection
-- [ ] Holepunching / peer discovery over internet
-- [ ] Download files rather than just read them
+- [x] Holepunching / peer discovery over internet
+- [x] Download files rather than just read them
 - [ ] Handle recursive directory download request
 - [ ] Queueing / resume downloads
-- [ ] Web UI
+- [ ] Web UI (first attempt is here: https://gitlab.com/pegpeg/harddrive-party-web-ui )
 
 This is based on a previous NodeJS project - [pegpeg/hdp](https://gitlab.com/pegpeg/hdp) - but has many protocol-level changes.
