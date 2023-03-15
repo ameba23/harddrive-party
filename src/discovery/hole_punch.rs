@@ -147,7 +147,7 @@ pub struct HolePuncher {
 
 impl HolePuncher {
     /// Make a connection by holepunching
-    /// This should be run as a separate task
+    /// TODO dont wait forever - give up after n tries
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
         let mut packet = OutgoingHolepunchPacket {
@@ -155,8 +155,8 @@ impl HolePuncher {
             data: [0u8],
         };
         let mut wait = false;
-        let mut sent_updated = false;
-        let mut received_updated = false;
+        let mut sent_ack = false;
+        let mut received_ack = false;
         loop {
             if wait {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -168,9 +168,9 @@ impl HolePuncher {
                   } else if packet.data == [0u8] {
                       debug!("sent initial packet to {addr}, waiting");
                   } else {
-                      debug!("sent updated packet to {addr}, waiting");
-                      sent_updated = true;
-                      if received_updated {
+                      debug!("sent ack packet to {addr}, waiting");
+                      sent_ack = true;
+                      if received_ack {
                           break
                       };
                   }
@@ -185,10 +185,10 @@ impl HolePuncher {
                                   packet.data = [1u8];
                               }
                               1 => {
-                                  debug!("Received updated holepunch packet from {addr}");
+                                  debug!("Received ack holepunch packet from {addr}");
                                   packet.data = [1u8];
-                                  received_updated = true;
-                                  if sent_updated {
+                                  received_ack = true;
+                                  if sent_ack {
                                       break
                                   };
                               },

@@ -1,4 +1,4 @@
-use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer, SessionToken};
+use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer, NatType, SessionToken};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use log::{error, info, trace, warn};
@@ -20,7 +20,7 @@ pub async fn mqtt_client(
     client_id: String,
     topics: Vec<Topic>,
     public_addr: SocketAddr,
-    has_nat: bool,
+    nat_type: NatType,
     our_token: SessionToken,
     peers_tx: UnboundedSender<DiscoveredPeer>,
     hole_puncher: HolePuncher,
@@ -97,7 +97,7 @@ pub async fn mqtt_client(
     // Publish our own address to chosen topics
     let announce_address = AnnounceAddress {
         public_addr,
-        has_nat,
+        nat_type,
         token: our_token,
     };
     let announce_cleartext = serialize(&announce_address)?;
@@ -132,11 +132,11 @@ pub async fn mqtt_client(
                                 let tn = &publ.topic_name();
                                 tn.contains(&topic.public_id)}
                             ) {
-                                if let Some(announce_address) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
+                                if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
                                     let mut hole_puncher_clone = hole_puncher.clone();
                                     tokio::spawn(async move {
                                         info!("Attempting hole punch...");
-                                        if hole_puncher_clone.hole_punch_peer(announce_address.public_addr).await.is_err() {
+                                        if hole_puncher_clone.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
                                             warn!("Hole punching failed");
                                         } else {
                                             info!("Hole punching succeeded");
@@ -145,22 +145,33 @@ pub async fn mqtt_client(
 
                                     // Decide whether to initiate the connection deterministically
                                     // so that only one party initiates
-                                    let should_initiate_connection = match (has_nat, announce_address.has_nat) {
-                                        (true, false) => true,
-                                        (false, true) => false,
-                                        _ => {
+                                    let our_nat_badness = nat_type as u8;
+                                    let their_nat_badness = remote_peer_announce.nat_type as u8;
+                                    let should_initiate_connection = if our_nat_badness == their_nat_badness {
                                             let us = public_addr.to_string();
-                                            let them = announce_address.public_addr.to_string();
+                                            let them = remote_peer_announce.public_addr.to_string();
                                             us > them
-                                        }
+                                    } else {
+                                        our_nat_badness > their_nat_badness
                                     };
+
+                                    // let should_initiate_connection = match (nat_type, remote_peer_announce.nat_type) {
+                                    //     (NatType::Symmetric, NatType::NoNat) => true,
+                                    //     (NatType::Asymmetric, NatType::NoNat) => true,
+                                    //     (NatType::Symmetric, NatType::Asymmetric) => true,
+                                    //     _ => {
+                                    //         let us = public_addr.to_string();
+                                    //         let them = announce_address.public_addr.to_string();
+                                    //         us > them
+                                    //     }
+                                    // };
 
                                     if should_initiate_connection {
                                         info!("PUBLISH ({})", publ.topic_name());
                                         if peers_tx
                                             .send(DiscoveredPeer {
-                                                addr: announce_address.public_addr,
-                                                token: announce_address.token,
+                                                addr: remote_peer_announce.public_addr,
+                                                token: remote_peer_announce.token,
                                                 topic: Some(associated_topic.clone()),
                                             })
                                             .is_err()
@@ -200,7 +211,7 @@ pub async fn mqtt_client(
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 struct AnnounceAddress {
     public_addr: SocketAddr,
-    has_nat: bool,
+    nat_type: NatType,
     token: SessionToken,
 }
 
