@@ -133,6 +133,7 @@ pub async fn mqtt_client(
                                 tn.contains(&topic.public_id)}
                             ) {
                                 if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
+                                    // TODO only hole punch when needed
                                     let mut hole_puncher_clone = hole_puncher.clone();
                                     tokio::spawn(async move {
                                         info!("Attempting hole punch...");
