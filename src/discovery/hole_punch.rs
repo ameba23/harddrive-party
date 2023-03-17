@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use futures::ready;
 use log::{debug, warn};
 use std::{
@@ -16,6 +17,8 @@ use tokio::{
 
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
+
+const MAX_HOLEPUNCH_ATTEMPTS: usize = 10;
 
 #[derive(Debug)]
 pub struct PunchingUdpSocket {
@@ -157,6 +160,7 @@ impl HolePuncher {
         let mut wait = false;
         let mut sent_ack = false;
         let mut received_ack = false;
+        let mut attempts = 0;
         loop {
             if wait {
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -167,6 +171,10 @@ impl HolePuncher {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
                   } else if packet.data == [0u8] {
                       debug!("sent initial packet to {addr}, waiting");
+                      attempts = attempts + 1;
+                      if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
+                          return Err(anyhow!("Reach max holepunch attempts - giving up"));
+                      }
                   } else {
                       debug!("sent ack packet to {addr}, waiting");
                       sent_ack = true;
