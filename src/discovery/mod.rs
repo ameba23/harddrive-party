@@ -85,6 +85,7 @@ async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(SocketAddr
     // TODO have a list of public stun servers and choose two randomly
     let stun_client1 = StunClient::with_google_stun_server();
     let public_addr1 = stun_client1.query_external_address_async(socket).await?;
+
     let stun_server = "stun2.l.google.com:19302"
         .to_socket_addrs()?
         .find(|x| x.is_ipv4())
@@ -107,9 +108,10 @@ async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(SocketAddr
 
     debug!(
         "Local address: {:?}  Public address 1: {:?} Public address 2: {:?} NAT: {:?}",
-        addr, public_addr1, public_addr2, nat_type as u8
+        addr, public_addr1, public_addr2, nat_type
     );
-    Ok((public_addr1, nat_type))
+
+    Ok((public_addr2, nat_type))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]

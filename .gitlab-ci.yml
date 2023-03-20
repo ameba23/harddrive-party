@@ -4,9 +4,6 @@ default:
   before_script:
     - rustc --version
     - cargo --version
-    - apt-get update
-    - apt-get -y install protobuf-compiler
-    # - apk add protoc
 
 stages:
   - test
@@ -24,7 +21,7 @@ test-code:
     - cargo install cargo-audit
     - cargo audit
   only:
-    - main
+    - prod
 
 # lint-code:
 #   stage: test
