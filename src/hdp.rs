@@ -6,18 +6,20 @@ use crate::{
     ui_messages::{
         Command, ReadResponse, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
     },
-    wire_messages::{LsResponse, Request},
+    wire_messages::{Entry, LsResponse, Request},
 };
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use log::{debug, info, warn};
+use lru::LruCache;
 use quinn::{Connection, Endpoint, RecvStream};
 use rustls::Certificate;
 use speedometer::Speedometer;
 use std::{
-    collections::HashMap,
+    collections::{hash_map, HashMap},
     net::SocketAddr,
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -36,6 +38,9 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
+const CACHE_SIZE: usize = 256;
+
+type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 pub struct Hdp {
     /// A map of peernames to peer connections
@@ -56,6 +61,8 @@ pub struct Hdp {
     token: SessionToken,
     /// Download directory
     download_dir: PathBuf,
+    /// Cache for remote peer's file index
+    ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
 }
 
 impl Hdp {
@@ -101,8 +108,11 @@ impl Hdp {
             .iter()
             .map(|name| Topic::new(name.to_string()))
             .collect();
+
         let (socket, peers_rx, token) = discover_peers(topics, false, true).await?;
+
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
+
         Ok((
             Self {
                 peers: Default::default(),
@@ -116,6 +126,7 @@ impl Hdp {
                 download_dir,
                 // public_key,
                 // name: to_hex_string(public_key),
+                ls_cache: Default::default(),
             },
             response_rx,
         ))
@@ -330,7 +341,9 @@ impl Hdp {
         let id = ui_client_message.id;
         match ui_client_message.command {
             Command::Close => {
+                // TODO tidy up peer discovery / active transfers
                 self.endpoint.wait_idle().await;
+                // TODO why an error?
                 return Err(HandleUiCommandError::ConnectionClosed);
             }
             Command::Connect(addr) => {
@@ -366,6 +379,54 @@ impl Hdp {
                 let remaining_responses: Arc<Mutex<usize>> = Arc::new(Mutex::new(requests.len()));
 
                 for (request, peer_name) in requests {
+                    // If it is an ls request, first check the local cache for an existing response
+                    if let Request::Ls { .. } = request {
+                        let mut cache = self.ls_cache.lock().await;
+
+                        if let hash_map::Entry::Occupied(mut peer_cache_entry) =
+                            cache.entry(peer_name.clone())
+                        {
+                            let peer_cache = peer_cache_entry.get_mut();
+                            if let Some(responses) = peer_cache.get(&request) {
+                                debug!("Found existing responses in cache");
+                                for entries in responses.iter() {
+                                    if self
+                                        .response_tx
+                                        .send(UiServerMessage::Response {
+                                            id,
+                                            response: Ok(UiResponse::Ls(
+                                                LsResponse::Success(entries.to_vec()),
+                                                peer_name.to_string(),
+                                            )),
+                                        })
+                                        .is_err()
+                                    {
+                                        warn!("Response channel closed");
+                                        break;
+                                    }
+                                }
+                                // Terminate with an endresponse
+                                // If there was more then one peer we need to only
+                                // send this if we are the last one
+                                let mut remaining = remaining_responses.lock().await;
+                                *remaining -= 1;
+                                if *remaining == 0
+                                    && self
+                                        .response_tx
+                                        .send(UiServerMessage::Response {
+                                            id,
+                                            response: Ok(UiResponse::EndResponse),
+                                        })
+                                        .is_err()
+                                {
+                                    warn!("Response channel closed");
+                                    break;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
                     info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
                     let peer_name_clone = peer_name.clone();
@@ -374,6 +435,7 @@ impl Hdp {
                         Ok(mut recv) => {
                             let response_tx = self.response_tx.clone();
                             let remaining_responses_clone = remaining_responses.clone();
+                            let ls_cache = self.ls_cache.clone();
                             tokio::spawn(async move {
                                 match req_clone {
                                     Request::Ls {
@@ -381,6 +443,9 @@ impl Hdp {
                                         searchterm: _,
                                         recursive: _,
                                     } => {
+                                        // TODO Factor out the length prefix processing into a fn that takes a
+                                        // recv stream and returns a stream of messages
+                                        let mut cached_entries = Vec::new();
                                         // Read the length prefix
                                         // TODO this should be a varint
                                         let mut length_buf: [u8; 8] = [0; 8];
@@ -397,6 +462,14 @@ impl Hdp {
                                                 Ok(()) => {
                                                     let ls_response: LsResponse =
                                                         deserialize(&msg_buf).unwrap();
+
+                                                    // If it is not an err, add it to the local
+                                                    // cache
+                                                    if let LsResponse::Success(entries) =
+                                                        ls_response.clone()
+                                                    {
+                                                        cached_entries.push(entries);
+                                                    }
 
                                                     if response_tx
                                                         .send(UiServerMessage::Response {
@@ -417,6 +490,16 @@ impl Hdp {
                                                     break;
                                                 }
                                             }
+                                        }
+                                        if !cached_entries.is_empty() {
+                                            debug!("Writing ls cache {}", cached_entries.len());
+                                            let mut cache = ls_cache.lock().await;
+                                            let peer_cache = cache
+                                                .entry(peer_name_clone.clone())
+                                                .or_insert(LruCache::new(
+                                                    NonZeroUsize::new(CACHE_SIZE).unwrap(),
+                                                ));
+                                            peer_cache.put(req_clone, cached_entries);
                                         }
 
                                         // Terminate with an endresponse
@@ -524,6 +607,14 @@ impl Hdp {
                     };
                 }
             }
+            Command::Download {
+                entry: _entry,
+                peer_name: _peer_name,
+            } => {
+                // Check if entry is a file or dir
+                // file - download it
+                // dir - query and download
+            }
         };
         Ok(())
     }
@@ -553,6 +644,13 @@ impl Hdp {
         debug!("message sent");
         Ok(recv)
     }
+
+    // async fn request_with_cache(&self, request: Request, name: &str) -> Result<(), RequestError> {
+    //     // Check if this is an LS request
+    //     // Check if we already have a response in the cache
+    //     // If we do - return it in a stream - otherwise call request
+    //     Ok(())
+    // }
 
     fn certificate_to_name(&self, cert: Certificate) -> String {
         let mut hash = [0u8; 32];
