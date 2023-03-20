@@ -12,6 +12,7 @@ Currently **work-in-progress**.
 - Remote control via ws / http interface. Can be run on an ARM device or NAS and controlled from another computer
 - Minimal reliance on centralised infrastructure
 - Support slow / intermittent connections
+- Hackable open source protocol
 
 ## Protocol
 
@@ -28,7 +29,7 @@ Peers connect using QUIC, with client authentication using ed25519. A QUIC strea
 - [ ] MQTT should not use `retain` but periodically publish messages
 - [ ] Support multiple topics / dynamically joining or leaving a topic
 - [x] Persistent cryptographic identities / derived peer names
-- [ ] Query own files / represent self as a peer
+- [x] Query own files
 - [ ] Attempt to reconnect to peers after loosing connection
 - [x] Holepunching / peer discovery over internet
 - [ ] Holepunching for symmetric nat using birthday paradox. [See Tailscale nat traversal article](https://tailscale.com/blog/how-nat-traversal-works)
