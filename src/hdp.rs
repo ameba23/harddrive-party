@@ -645,13 +645,6 @@ impl Hdp {
         Ok(recv)
     }
 
-    // async fn request_with_cache(&self, request: Request, name: &str) -> Result<(), RequestError> {
-    //     // Check if this is an LS request
-    //     // Check if we already have a response in the cache
-    //     // If we do - return it in a stream - otherwise call request
-    //     Ok(())
-    // }
-
     fn certificate_to_name(&self, cert: Certificate) -> String {
         let mut hash = [0u8; 32];
         let mut topic_hash = Blake2b::new(32);
