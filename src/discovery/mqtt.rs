@@ -133,39 +133,35 @@ pub async fn mqtt_client(
                                 tn.contains(&topic.public_id)}
                             ) {
                                 if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
-                                    // TODO only hole punch when needed
-                                    let mut hole_puncher_clone = hole_puncher.clone();
-                                    tokio::spawn(async move {
-                                        info!("Attempting hole punch...");
-                                        if hole_puncher_clone.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
-                                            warn!("Hole punching failed");
-                                        } else {
-                                            info!("Hole punching succeeded");
-                                        };
-                                    });
+                                    // TODO dont connect if we are both on the same IP - use mdns
+                                    // TODO there are more cases when we should not bother hole punching
+                                    if remote_peer_announce.nat_type != NatType::Symmetric {
+                                        let mut hole_puncher_clone = hole_puncher.clone();
+                                        tokio::spawn(async move {
+                                            info!("Attempting hole punch...");
+                                            if hole_puncher_clone.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
+                                                warn!("Hole punching failed");
+                                            } else {
+                                                info!("Hole punching succeeded");
+                                            };
+                                        });
+                                    };
 
                                     // Decide whether to initiate the connection deterministically
                                     // so that only one party initiates
                                     let our_nat_badness = nat_type as u8;
                                     let their_nat_badness = remote_peer_announce.nat_type as u8;
                                     let should_initiate_connection = if our_nat_badness == their_nat_badness {
+                                            // If we both have the same NAT type, use the socket address
+                                            // as a tie breaker
                                             let us = public_addr.to_string();
                                             let them = remote_peer_announce.public_addr.to_string();
                                             us > them
                                     } else {
+                                        // Otherwise the peer with the worst NAT type initiates the
+                                        // connection
                                         our_nat_badness > their_nat_badness
                                     };
-
-                                    // let should_initiate_connection = match (nat_type, remote_peer_announce.nat_type) {
-                                    //     (NatType::Symmetric, NatType::NoNat) => true,
-                                    //     (NatType::Asymmetric, NatType::NoNat) => true,
-                                    //     (NatType::Symmetric, NatType::Asymmetric) => true,
-                                    //     _ => {
-                                    //         let us = public_addr.to_string();
-                                    //         let them = announce_address.public_addr.to_string();
-                                    //         us > them
-                                    //     }
-                                    // };
 
                                     if should_initiate_connection {
                                         info!("PUBLISH ({})", publ.topic_name());

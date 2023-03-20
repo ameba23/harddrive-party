@@ -171,9 +171,9 @@ impl HolePuncher {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
                   } else if packet.data == [0u8] {
                       debug!("sent initial packet to {addr}, waiting");
-                      attempts = attempts + 1;
+                      attempts += 1;
                       if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
-                          return Err(anyhow!("Reach max holepunch attempts - giving up"));
+                          return Err(anyhow!("Reached max holepunch attempts - giving up"));
                       }
                   } else {
                       debug!("sent ack packet to {addr}, waiting");

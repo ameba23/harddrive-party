@@ -12,10 +12,16 @@ pub struct UiClientMessage {
     pub command: Command,
 }
 
+/// A command from the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
+    /// Directly connected to a peer with the given socketaddr (temporary)
     Connect(SocketAddr),
+    /// Issue a request
     Request(Request, String),
+    /// Download a file or dir
+    Download { entry: String, peer_name: String },
+    /// Shutdown gracefully
     Close,
 }
 
