@@ -26,14 +26,7 @@ pub struct Shares {
 
 impl Shares {
     /// Setup share index giving a path to use for persistant storage
-    pub async fn new(
-        db: sled::Db,
-        // storage: impl AsRef<Path>,
-        share_dirs: Vec<&str>,
-    ) -> Result<Self, CreateSharesError> {
-        // let mut db_dir = storage.as_ref().to_owned();
-        // db_dir.push("db");
-        // let db = sled::open(db_dir).expect("open");
+    pub async fn new(db: sled::Db, share_dirs: Vec<&str>) -> Result<Self, CreateSharesError> {
         let files = db.open_tree(FILES)?;
         let dirs = db.open_tree(DIRS)?;
         dirs.set_merge_operator(addition_merge);
@@ -180,8 +173,25 @@ impl Shares {
         Ok(actual_path.join(sub_path))
     }
 
-    // TODO this should find the old total size of share dir and subtract it from the "" entry
     fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
+        // First find the old total size of share dir and subtract it from the "" entry
+        if let Some(existing_size) = self.get_dir_size(share_name) {
+            self.dirs
+                .fetch_and_update("", |root_size_option: Option<&[u8]>| {
+                    let new_size = match root_size_option {
+                        Some(root_size_buf) => match root_size_buf.to_vec().try_into() {
+                            Ok(root_size_arr) => {
+                                let root_size = u64::from_le_bytes(root_size_arr);
+                                root_size - existing_size
+                            }
+                            Err(_) => 0,
+                        },
+                        None => 0,
+                    };
+                    Some(new_size.to_le_bytes().to_vec())
+                })?;
+        }
+
         for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
             debug!("Deleting existing entry {:?}", entry);
             self.dirs.remove(entry)?;
@@ -191,6 +201,11 @@ impl Shares {
             self.files.remove(entry)?;
         }
         Ok(())
+    }
+
+    fn get_dir_size(&mut self, dir_name: &str) -> Option<u64> {
+        let existing_ivec = self.dirs.get(dir_name).ok()??;
+        Some(u64::from_le_bytes(existing_ivec.to_vec().try_into().ok()?))
     }
 }
 
@@ -299,6 +314,8 @@ pub enum ScanDirError {
     GetParentError,
     #[error("Got entry which does not appear to be a child of the given directory")]
     PrefixError(#[from] std::path::StripPrefixError),
+    #[error("Error converting database value to u64")]
+    U64ConversionError,
 }
 
 /// Error when parsing a Db entry
@@ -379,7 +396,7 @@ mod tests {
         db_dir.push("db");
         let db = sled::open(db_dir).expect("open");
 
-        let mut shares = Shares::new(db, Vec::new()).await.unwrap();
+        let mut shares = Shares::new(db.clone(), Vec::new()).await.unwrap();
         let added = shares.scan("tests/test-data").await.unwrap();
         assert_eq!(added, 3);
 
@@ -401,10 +418,36 @@ mod tests {
         // Make sure we found every entry
         assert_eq!(test_entries.len(), 0);
 
+        // Try resolving a path name
         let resolved = shares
             .resolve_path("test-data/df/aslkjdsal.asds".to_string())
             .unwrap();
         assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
+
+        // Repeat the process with a new shares instance using the same db, to simulate restarting
+        // the program
+        let mut shares_2 = Shares::new(db, Vec::new()).await.unwrap();
+
+        let added = shares_2.scan("tests/test-data").await.unwrap();
+        assert_eq!(added, 3);
+
+        let mut test_entries = create_test_entries();
+        let responses = shares_2.query(None, None, true).unwrap();
+        for res in responses {
+            match res {
+                LsResponse::Success(entries) => {
+                    for entry in entries {
+                        let i = test_entries.iter().position(|e| e == &entry).unwrap();
+                        test_entries.remove(i);
+                    }
+                }
+                LsResponse::Err(err) => {
+                    panic!("Got error response {:?}", err);
+                }
+            }
+        }
+        // Make sure we found every entry
+        assert_eq!(test_entries.len(), 0);
     }
 
     // #[tokio::test]

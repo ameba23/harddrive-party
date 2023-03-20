@@ -34,10 +34,17 @@ enum CliCommand {
         searchterm: Option<String>,
         recursive: Option<bool>,
     },
+    /// Download a single file
     Read {
         path: String,
         start: Option<u64>,
         end: Option<u64>,
+    },
+    /// Query your shared files
+    Shares {
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: Option<bool>,
     },
 }
 
@@ -159,6 +166,53 @@ async fn main() -> anyhow::Result<()> {
                     Ok(some_other_response) => {
                         println!("Got unexpected response {:?}", some_other_response);
                         break;
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        CliCommand::Shares {
+            path,
+            searchterm,
+            recursive,
+        } => {
+            let mut responses = harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::Shares {
+                    path,
+                    searchterm,
+                    recursive: recursive.unwrap_or(true),
+                },
+            )
+            .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::Shares(ls_response)) => match ls_response {
+                        LsResponse::Success(entries) => {
+                            for entry in entries {
+                                if entry.is_dir {
+                                    println!(
+                                        "{} {} bytes",
+                                        format!("[{}]", entry.name).blue(),
+                                        entry.size
+                                    );
+                                } else {
+                                    println!("{} {}", entry.name, entry.size);
+                                }
+                            }
+                        }
+                        LsResponse::Err(err) => {
+                            println!("Error from peer {:?}", err);
+                        }
+                    },
+                    Ok(UiResponse::EndResponse) => {
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
                     }
                     Err(e) => {
                         println!("Error from WS server {:?}", e);

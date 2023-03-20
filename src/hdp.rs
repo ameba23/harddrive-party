@@ -607,6 +607,43 @@ impl Hdp {
                     };
                 }
             }
+            Command::Shares {
+                path,
+                searchterm,
+                recursive,
+            } => {
+                match self.rpc.shares.query(path, searchterm, recursive) {
+                    Ok(response_iterator) => {
+                        for res in response_iterator {
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::Shares(res)),
+                                })
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                                break;
+                            };
+                        }
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .is_err()
+                        {
+                            warn!("Response channel closed");
+                        }
+                    }
+                    Err(error) => {
+                        warn!("Error querying own shares {:?}", error);
+                        // TODO send this err to UI
+                    }
+                }
+            }
             Command::Download {
                 entry: _entry,
                 peer_name: _peer_name,

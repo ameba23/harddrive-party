@@ -21,6 +21,12 @@ pub enum Command {
     Request(Request, String),
     /// Download a file or dir
     Download { entry: String, peer_name: String },
+    /// Query our own shares
+    Shares {
+        path: Option<String>,
+        searchterm: Option<String>,
+        recursive: bool,
+    },
     /// Shutdown gracefully
     Close,
 }
@@ -53,6 +59,7 @@ pub struct UploadInfo {
 pub enum UiResponse {
     Read(ReadResponse),
     Ls(LsResponse, String),
+    Shares(LsResponse),
     Connect,
     EndResponse,
 }
