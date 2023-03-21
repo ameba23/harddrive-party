@@ -65,7 +65,13 @@ async fn main() -> anyhow::Result<()> {
             let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir], vec![&topic])
                 .await
                 .unwrap();
-            println!("Listening on {}", hdp.endpoint.local_addr().unwrap());
+
+            println!(
+                "{} listening for peers on {}",
+                hdp.name.green(),
+                hdp.endpoint.local_addr().unwrap().to_string().yellow(),
+            );
+
             let command_tx = hdp.command_tx.clone();
 
             tokio::spawn(async move {

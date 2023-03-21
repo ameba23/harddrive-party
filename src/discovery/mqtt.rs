@@ -1,3 +1,5 @@
+//! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
+
 use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer, NatType, SessionToken};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
@@ -11,11 +13,17 @@ use mqtt::{
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
 use serde::{Deserialize, Serialize};
-use std::{net::SocketAddr, str, time::Duration};
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    str,
+    time::Duration,
+};
 use tokio::{io::AsyncWriteExt, net::TcpStream, sync::mpsc::UnboundedSender};
 
 const KEEP_ALIVE: u16 = 10;
+const TCP_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Start a client, subscribe to given topics, and announce ourselves on those topics
 pub async fn mqtt_client(
     client_id: String,
     topics: Vec<Topic>,
@@ -25,9 +33,14 @@ pub async fn mqtt_client(
     peers_tx: UnboundedSender<DiscoveredPeer>,
     hole_puncher: HolePuncher,
 ) -> anyhow::Result<()> {
-    let server_addr: SocketAddr = "52.29.173.150:1883".parse()?; // broker.hivemq.com
+    let server_addr = "broker.hivemq.com:1883"
+        .to_socket_addrs()?
+        .find(|x| x.is_ipv4())
+        .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
+    // TODO - An alternative: public.mqtthq.com:1883
+
     info!("Connecting to MQTT broker {:?} ... ", server_addr);
-    let mut stream = TcpStream::connect(server_addr).await?;
+    let mut stream = tokio::time::timeout(TCP_TIMEOUT, TcpStream::connect(server_addr)).await??;
     // let (mut mqtt_read, mut mqtt_write) = stream.split();
 
     info!("MQTT Client identifier {:?}", client_id);
@@ -195,7 +208,7 @@ pub async fn mqtt_client(
                     };
                     if stream.write_all(&buf).await.is_err() {
                         error!("Cannot write MQTT ping packet");
-                        break;
+                        // break;
                     };
                 }
             }

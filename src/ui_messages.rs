@@ -1,9 +1,9 @@
+//! Messages for communicating with the user interface over websocket
+
 use crate::wire_messages::{LsResponse, Request};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use thiserror::Error;
-
-/// Messages for communicating with the user interface over websocket
 
 /// A command from the Ui
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -43,8 +43,8 @@ pub enum UiServerMessage {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
-    PeerConnected(String),
-    PeerDisconnected(String),
+    PeerConnected { name: String, is_self: bool },
+    PeerDisconnected { name: String },
     Uploaded(UploadInfo),
 }
 

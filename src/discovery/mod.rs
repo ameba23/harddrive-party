@@ -26,7 +26,7 @@ pub struct DiscoveredPeer {
 }
 
 // TODO allow dynamically adding / removing topics
-
+/// Setup peer discovery
 pub async fn discover_peers(
     topics: Vec<Topic>,
     use_mdns: bool,

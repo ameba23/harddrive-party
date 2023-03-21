@@ -1,6 +1,8 @@
+//! Main program loop handling connections to/from peers and messages to/from the UI
+
 use crate::{
-    connect::{generate_certificate, make_server_endpoint},
     discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
+    quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
     ui_messages::{
@@ -63,6 +65,8 @@ pub struct Hdp {
     download_dir: PathBuf,
     /// Cache for remote peer's file index
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
+    /// A name derived from our public key
+    pub name: String,
 }
 
 impl Hdp {
@@ -87,7 +91,7 @@ impl Hdp {
         download_dir.push("downloads");
         create_dir_all(&download_dir).await?;
 
-        // Attempt to get keypair from storage, and otherwise generate them and store
+        // Attempt to get keypair / certificate from storage, and otherwise generate them and store
         let (cert_der, priv_key_der) = {
             let existing_cert = config_db.get(b"cert");
             let existing_priv = config_db.get(b"priv");
@@ -104,13 +108,25 @@ impl Hdp {
             }
         };
 
+        let name = certificate_to_name(Certificate(cert_der.clone()));
+        // Notify the UI of our own name
+        send_event(
+            response_tx.clone(),
+            UiEvent::PeerConnected {
+                name: name.clone(),
+                is_self: true,
+            },
+        );
+
         let topics = topic_names
             .iter()
             .map(|name| Topic::new(name.to_string()))
             .collect();
 
-        let (socket, peers_rx, token) = discover_peers(topics, false, true).await?;
+        // Setup peer discovery
+        let (socket, peers_rx, token) = discover_peers(topics, true, true).await?;
 
+        // Create QUIC endpoint
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
 
         Ok((
@@ -125,7 +141,7 @@ impl Hdp {
                 token,
                 download_dir,
                 // public_key,
-                // name: to_hex_string(public_key),
+                name,
                 ls_cache: Default::default(),
             },
             response_rx,
@@ -163,7 +179,7 @@ impl Hdp {
         token: Option<SessionToken>,
         remote_cert: Certificate,
     ) {
-        let peer_name = self.certificate_to_name(remote_cert);
+        let peer_name = certificate_to_name(remote_cert);
         debug!("Connected to peer {}", peer_name);
         let response_tx = self.response_tx.clone();
 
@@ -205,7 +221,10 @@ impl Hdp {
                 info!("[{}] connected to {} peers", direction, peers.len());
                 send_event(
                     response_tx.clone(),
-                    UiEvent::PeerConnected(peer_name.clone()),
+                    UiEvent::PeerConnected {
+                        name: peer_name.clone(),
+                        is_self: false,
+                    },
                 );
             }
 
@@ -267,8 +286,12 @@ impl Hdp {
             match peers.remove(&peer_name) {
                 Some(_) => {
                     debug!("Connection closed - removed peer");
-                    // TODO here we should send a peer disconnected event to the UI
-                    send_event(response_tx, UiEvent::PeerConnected(peer_name.clone()));
+                    send_event(
+                        response_tx,
+                        UiEvent::PeerDisconnected {
+                            name: peer_name.clone(),
+                        },
+                    );
                 }
                 None => {
                     warn!("Connection closed but peer not present in map");
@@ -681,34 +704,20 @@ impl Hdp {
         debug!("message sent");
         Ok(recv)
     }
+}
 
-    fn certificate_to_name(&self, cert: Certificate) -> String {
-        let mut hash = [0u8; 32];
-        let mut topic_hash = Blake2b::new(32);
-        topic_hash.input(cert.as_ref());
-        topic_hash.result(&mut hash);
-        key_to_animal::key_to_name(&hash)
-    }
+fn certificate_to_name(cert: Certificate) -> String {
+    let mut hash = [0u8; 32];
+    let mut topic_hash = Blake2b::new(32);
+    topic_hash.input(cert.as_ref());
+    topic_hash.result(&mut hash);
+    key_to_animal::key_to_name(&hash)
 }
 
 fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {
     if sender.send(UiServerMessage::Event(event)).is_err() {
         warn!("UI response channel closed");
     }
-}
-
-fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
-    let identity = conn
-        .peer_identity()
-        .ok_or_else(|| anyhow!("No peer certificate"))?;
-
-    let remote_cert = identity
-        .downcast::<Vec<Certificate>>()
-        .map_err(|_| anyhow!("No cert"))?;
-    remote_cert
-        .first()
-        .ok_or_else(|| anyhow!("No cert"))
-        .cloned()
 }
 
 async fn setup_download(file_path: PathBuf, start: Option<u64>) -> anyhow::Result<File> {

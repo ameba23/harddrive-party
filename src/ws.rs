@@ -1,4 +1,8 @@
-use crate::ui_messages::{Command, UiClientMessage, UiResponse, UiServerError, UiServerMessage};
+//! Websocket server / client for communication with UI
+
+use crate::ui_messages::{
+    Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
+};
 use bincode::{deserialize, serialize};
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -28,6 +32,7 @@ pub async fn server(
     mut response_rx: UnboundedReceiver<UiServerMessage>,
 ) -> anyhow::Result<()> {
     let state = ClientMap::new(Mutex::new(HashMap::new()));
+    let event_cache = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
 
     // Create the event loop and TCP listener we'll accept connections on.
     let try_socket = TcpListener::bind(&addr).await;
@@ -36,10 +41,17 @@ pub async fn server(
 
     // Loop over response channel and send to each connected client
     let state_clone = state.clone();
+    let event_cache_clone = event_cache.clone();
     tokio::spawn(async move {
         while let Some(msg) = response_rx.recv().await {
             let clients = state_clone.lock().unwrap();
             debug!("{} connected clients", clients.len());
+
+            {
+                let mut cache = event_cache_clone.lock().unwrap();
+                cache_event(&msg, &mut cache);
+            }
+
             for client in clients.values() {
                 match client.send(msg.clone()) {
                     Ok(_) => {}
@@ -54,10 +66,12 @@ pub async fn server(
     // Accept connections from UI clients
     while let Ok((stream, client_addr)) = listener.accept().await {
         let (tx, mut rx) = unbounded_channel();
+        // TODO err handle
         state.lock().unwrap().insert(client_addr, tx);
 
         let state_clone = state.clone();
         let command_tx = command_tx.clone();
+        let event_cache_clone = event_cache.clone();
         tokio::spawn(async move {
             debug!("Incoming WS connection from: {}", client_addr);
 
@@ -66,6 +80,23 @@ pub async fn server(
                 .expect("Error during the websocket handshake occurred");
 
             let (mut outgoing, mut incoming) = ws_stream.split();
+
+            // Send cached messages that this client has missed out on
+            {
+                let cache = {
+                    let cache = event_cache_clone.lock().unwrap();
+                    cache.clone()
+                };
+                for event in cache.iter() {
+                    let message = UiServerMessage::Event(event.clone());
+                    let message_buf = serialize(&message).unwrap();
+                    if let Err(err) = outgoing.send(Message::Binary(message_buf)).await {
+                        warn!("Cannot send ws message {:?}", err);
+                        break;
+                    };
+                }
+            }
+
             loop {
                 select! {
                     // Receive next message from UI client and send to application
@@ -194,4 +225,30 @@ pub async fn read_responses(
         println!("Cannot read more responses, closing connection");
     });
     rx
+}
+
+// Decide which messages to cache so that clients who connect later dont miss them
+fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
+    if let UiServerMessage::Event(ui_event) = server_message {
+        match ui_event {
+            UiEvent::Uploaded(_) => {}
+            UiEvent::PeerConnected { .. } => {
+                cache.push(ui_event.clone());
+            }
+            UiEvent::PeerDisconnected { name } => {
+                // Remove related PeerConnected message from cache
+                cache.retain(|event| {
+                    if let UiEvent::PeerConnected {
+                        name: existing_name,
+                        is_self: _,
+                    } = event
+                    {
+                        name != existing_name
+                    } else {
+                        true
+                    }
+                })
+            }
+        }
+    }
 }

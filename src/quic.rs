@@ -1,9 +1,9 @@
 use crate::discovery::hole_punch::PunchingUdpSocket;
 use anyhow::anyhow;
 use log::{debug, warn};
-use quinn::{ClientConfig, Endpoint, ServerConfig};
+use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
-use rustls::SignatureScheme;
+use rustls::{Certificate, SignatureScheme};
 use std::{sync::Arc, time::Duration};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -197,4 +197,18 @@ impl rustls::sign::Signer for OurSigner {
     fn scheme(&self) -> SignatureScheme {
         SignatureScheme::ED25519
     }
+}
+
+pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+    let identity = conn
+        .peer_identity()
+        .ok_or_else(|| anyhow!("No peer certificate"))?;
+
+    let remote_cert = identity
+        .downcast::<Vec<Certificate>>()
+        .map_err(|_| anyhow!("No cert"))?;
+    remote_cert
+        .first()
+        .ok_or_else(|| anyhow!("No cert"))
+        .cloned()
 }
