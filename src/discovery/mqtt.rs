@@ -1,6 +1,6 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 
-use super::{hole_punch::HolePuncher, topic::Topic, DiscoveredPeer, NatType, SessionToken};
+use super::{hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, SessionToken};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use log::{error, info, trace, warn};
