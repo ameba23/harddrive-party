@@ -11,8 +11,10 @@ use crate::{
     wire_messages::{Entry, LsResponse, Request},
 };
 use anyhow::anyhow;
+use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
+use futures::{pin_mut, stream::BoxStream, StreamExt};
 use log::{debug, info, warn};
 use lru::LruCache;
 use quinn::{Connection, Endpoint, RecvStream};
@@ -466,52 +468,34 @@ impl Hdp {
                                         searchterm: _,
                                         recursive: _,
                                     } => {
-                                        // TODO Factor out the length prefix processing into a fn that takes a
-                                        // recv stream and returns a stream of messages
+                                        let ls_response_stream =
+                                            process_length_prefix(recv).await.unwrap();
+                                        pin_mut!(ls_response_stream);
+
                                         let mut cached_entries = Vec::new();
-                                        // Read the length prefix
-                                        // TODO this should be a varint
-                                        let mut length_buf: [u8; 8] = [0; 8];
-                                        while let Ok(()) = recv.read_exact(&mut length_buf).await {
-                                            let length: u64 = u64::from_le_bytes(length_buf);
-                                            debug!("Read prefix {length}");
+                                        while let Some(Ok(ls_response)) =
+                                            ls_response_stream.next().await
+                                        {
+                                            // If it is not an err, add it to the local
+                                            // cache
+                                            if let LsResponse::Success(entries) =
+                                                ls_response.clone()
+                                            {
+                                                cached_entries.push(entries);
+                                            }
 
-                                            // Read a message
-                                            let mut msg_buf = vec![
-                                                Default::default();
-                                                length.try_into().unwrap()
-                                            ];
-                                            match recv.read_exact(&mut msg_buf).await {
-                                                Ok(()) => {
-                                                    let ls_response: LsResponse =
-                                                        deserialize(&msg_buf).unwrap();
-
-                                                    // If it is not an err, add it to the local
-                                                    // cache
-                                                    if let LsResponse::Success(entries) =
-                                                        ls_response.clone()
-                                                    {
-                                                        cached_entries.push(entries);
-                                                    }
-
-                                                    if response_tx
-                                                        .send(UiServerMessage::Response {
-                                                            id,
-                                                            response: Ok(UiResponse::Ls(
-                                                                ls_response,
-                                                                peer_name_clone.to_string(),
-                                                            )),
-                                                        })
-                                                        .is_err()
-                                                    {
-                                                        warn!("Response channel closed");
-                                                        break;
-                                                    }
-                                                }
-                                                Err(_) => {
-                                                    warn!("Bad prefix / read error");
-                                                    break;
-                                                }
+                                            if response_tx
+                                                .send(UiServerMessage::Response {
+                                                    id,
+                                                    response: Ok(UiResponse::Ls(
+                                                        ls_response,
+                                                        peer_name_clone.to_string(),
+                                                    )),
+                                                })
+                                                .is_err()
+                                            {
+                                                warn!("Response channel closed");
+                                                break;
                                             }
                                         }
                                         if !cached_entries.is_empty() {
@@ -664,14 +648,63 @@ impl Hdp {
                     Err(error) => {
                         warn!("Error querying own shares {:?}", error);
                         // TODO send this err to UI
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::RequestError),
+                            })
+                            .is_err()
+                        {
+                            warn!("Response channel closed");
+                        };
                     }
                 }
             }
-            Command::Download {
-                entry: _entry,
-                peer_name: _peer_name,
-            } => {
+            Command::Download { path, peer_name } => {
                 // Check if entry is a file or dir
+                let ls_request = Request::Ls {
+                    path: Some(path),
+                    searchterm: None,
+                    recursive: true,
+                };
+                debug!("download");
+                // let mut cache = self.ls_cache.lock().await;
+                //
+                // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
+                //     cache.entry(peer_name.clone())
+                // {
+                //     let peer_cache = peer_cache_entry.get_mut();
+                //     if let Some(responses) = peer_cache.get(&ls_request) {
+                //         debug!("Found existing responses in cache");
+                //         for entries in responses.iter() {
+                //             for entry in entries.iter() {
+                //                 debug!("Adding {} to wishlist dir: {}", entry.name, entry.is_dir);
+                //             }
+                //         }
+                //     } else {
+                //         debug!("Found nothing in cache");
+                //     }
+                // }
+
+                match self.request(ls_request, &peer_name).await {
+                    Ok(recv) => {
+                        let ls_response_stream = process_length_prefix(recv).await.unwrap();
+                        pin_mut!(ls_response_stream);
+
+                        while let Some(Ok(ls_response)) = ls_response_stream.next().await {
+                            if let LsResponse::Success(entries) = ls_response {
+                                for entry in entries.iter() {
+                                    debug!(
+                                        "Adding {} to wishlist dir: {}",
+                                        entry.name, entry.is_dir
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {}
+                }
                 // file - download it
                 // dir - query and download
             }
@@ -737,6 +770,33 @@ async fn setup_download(file_path: PathBuf, start: Option<u64>) -> anyhow::Resul
         file.seek(std::io::SeekFrom::Start(pos)).await?;
     };
     Ok(file)
+}
+
+type LsResponseStream = BoxStream<'static, anyhow::Result<LsResponse>>;
+async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsResponseStream> {
+    // Read the length prefix
+    // TODO this should be a varint
+    let mut length_buf: [u8; 8] = [0; 8];
+    let stream = try_stream! {
+        while let Ok(()) = recv.read_exact(&mut length_buf).await {
+            let length: u64 = u64::from_le_bytes(length_buf);
+            debug!("Read prefix {length}");
+
+            // Read a message
+            let mut msg_buf = vec![Default::default(); length.try_into().unwrap()];
+            match recv.read_exact(&mut msg_buf).await {
+                Ok(()) => {
+                    let ls_response: LsResponse = deserialize(&msg_buf).unwrap();
+                    yield ls_response;
+                }
+                Err(_) => {
+                    warn!("Bad prefix / read error");
+                    break;
+                }
+            }
+        }
+    };
+    Ok(stream.boxed())
 }
 
 /// Error on making a request to a given remote peer

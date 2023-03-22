@@ -118,9 +118,11 @@ impl Shares {
     ) -> Result<Box<dyn Iterator<Item = LsResponse> + Send>, EntryParseError> {
         let path = path_option.unwrap_or_default();
 
-        // Check that the given subdir exists
+        // Check that the given subdir / file exists
         if let Ok(None) = self.dirs.get(&path) {
-            return Err(EntryParseError::PathNotFound);
+            if let Ok(None) = self.files.get(&path) {
+                return Err(EntryParseError::PathNotFound);
+            }
         }
 
         let path_len = path.len();

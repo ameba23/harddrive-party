@@ -4,6 +4,7 @@ use harddrive_party::{
     hdp::Hdp,
     ui_messages::{Command, UiResponse},
     wire_messages::{LsResponse, Request},
+    ws::single_client_command,
 };
 use std::{net::SocketAddr, path::PathBuf};
 
@@ -46,6 +47,8 @@ enum CliCommand {
         searchterm: Option<String>,
         recursive: Option<bool>,
     },
+    /// Download a file or dir
+    Download { path: String },
 }
 
 #[tokio::main]
@@ -214,6 +217,34 @@ async fn main() -> anyhow::Result<()> {
                             println!("Error from peer {:?}", err);
                         }
                     },
+                    Ok(UiResponse::EndResponse) => {
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        CliCommand::Download { path } => {
+            // Split path into peername and path components
+            let (peer_name, peer_path) = path_to_peer_path(path);
+
+            let mut responses = single_client_command(
+                ui_addr,
+                Command::Download {
+                    path: peer_path,
+                    peer_name,
+                },
+            )
+            .await?;
+
+            while let Some(response) = responses.recv().await {
+                match response {
                     Ok(UiResponse::EndResponse) => {
                         break;
                     }

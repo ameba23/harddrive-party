@@ -20,7 +20,7 @@ pub enum Command {
     /// Issue a request
     Request(Request, String),
     /// Download a file or dir
-    Download { entry: String, peer_name: String },
+    Download { path: String, peer_name: String },
     /// Query our own shares
     Shares {
         path: Option<String>,
