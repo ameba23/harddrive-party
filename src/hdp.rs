@@ -15,7 +15,7 @@ use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Connection, Endpoint, RecvStream};
 use rustls::Certificate;
@@ -598,7 +598,7 @@ impl Hdp {
                             });
                         }
                         Err(err) => {
-                            println!("Error from remote peer {:?}", err);
+                            error!("Error from remote peer {:?}", err);
                             // TODO map the error
                             if self
                                 .response_tx
@@ -695,18 +695,26 @@ impl Hdp {
                         while let Some(Ok(ls_response)) = ls_response_stream.next().await {
                             if let LsResponse::Success(entries) = ls_response {
                                 for entry in entries.iter() {
-                                    debug!(
-                                        "Adding {} to wishlist dir: {}",
-                                        entry.name, entry.is_dir
-                                    );
+                                    if !entry.is_dir {
+                                        debug!("Adding {} to wishlist", entry.name);
+                                    }
                                 }
                             }
                         }
                     }
-                    Err(_) => {}
+                    Err(error) => {
+                        error!("Error from remote peer when making ls query {:?}", error);
+                        //     if self
+                        //         .response_tx
+                        //         .send(UiServerMessage::Response {
+                        //             id,
+                        //             response: Err(UiServerError::RequestError),
+                        //         })
+                        //         .is_err()
+                        //     {
+                        //     }
+                    }
                 }
-                // file - download it
-                // dir - query and download
             }
         };
         Ok(())
@@ -772,7 +780,9 @@ async fn setup_download(file_path: PathBuf, start: Option<u64>) -> anyhow::Resul
     Ok(file)
 }
 
+/// A stream of Ls responses
 type LsResponseStream = BoxStream<'static, anyhow::Result<LsResponse>>;
+/// Process responses that are prefixed with their length in bytes
 async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsResponseStream> {
     // Read the length prefix
     // TODO this should be a varint
@@ -783,10 +793,11 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
             debug!("Read prefix {length}");
 
             // Read a message
-            let mut msg_buf = vec![Default::default(); length.try_into().unwrap()];
+            let length_usize: usize = length.try_into()?;
+            let mut msg_buf = vec![Default::default(); length_usize];
             match recv.read_exact(&mut msg_buf).await {
                 Ok(()) => {
-                    let ls_response: LsResponse = deserialize(&msg_buf).unwrap();
+                    let ls_response: LsResponse = deserialize(&msg_buf)?;
                     yield ls_response;
                 }
                 Err(_) => {

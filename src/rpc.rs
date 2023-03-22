@@ -65,12 +65,17 @@ impl Rpc {
 
                     // Write the length prefix
                     // TODO this should be a varint
-                    let length: u64 = buf.len().try_into().unwrap();
+                    let length: u64 = buf
+                        .len()
+                        .try_into()
+                        .map_err(|_| RpcError::U64ConvertError)?;
                     debug!("Writing prefix {length}");
                     output.write(&length.to_le_bytes()).await?;
+                    // TODO display a warning if length would be more than u32::MAX - so that
+                    // the conversion back to usize will work on 32 bit machines
 
                     output.write(&buf).await?;
-                    debug!("Written buf {:?}", buf);
+                    debug!("Written ls response");
                 }
                 output.finish().await?;
                 Ok(())
@@ -223,6 +228,8 @@ pub enum RpcError {
     SerializeError,
     #[error("Channel closed")]
     ChannelClosed,
+    #[error("Cannot convert to u64")]
+    U64ConvertError,
 }
 
 // fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {
