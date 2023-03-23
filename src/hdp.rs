@@ -2,6 +2,7 @@
 
 use crate::{
     discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
+    peer::{DownloadRequest, Peer},
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
@@ -17,7 +18,7 @@ use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
 use log::{debug, error, info, warn};
 use lru::LruCache;
-use quinn::{Connection, Endpoint, RecvStream};
+use quinn::{Endpoint, RecvStream};
 use rustls::Certificate;
 use speedometer::Speedometer;
 use std::{
@@ -42,13 +43,14 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
+const WISHLIST: &[u8; 1] = b"w";
 const CACHE_SIZE: usize = 256;
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 pub struct Hdp {
     /// A map of peernames to peer connections
-    peers: Arc<Mutex<HashMap<String, Connection>>>,
+    peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// Remote proceduce call for share queries and downloads
     rpc: Arc<Rpc>,
     /// The QUIC endpoint
@@ -131,6 +133,9 @@ impl Hdp {
         // Create QUIC endpoint
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
 
+        // Setup db for downloads requests
+        let wishlist = db.open_tree(WISHLIST)?;
+
         Ok((
             Self {
                 peers: Default::default(),
@@ -188,6 +193,7 @@ impl Hdp {
         let peers_clone = self.peers.clone();
         let our_token = self.token;
         let rpc = self.rpc.clone();
+        let download_dir = self.download_dir.clone();
         tokio::spawn(async move {
             if let Some(thier_token) = token {
                 let (mut send, _recv) = conn.open_bi().await.unwrap();
@@ -215,11 +221,14 @@ impl Hdp {
 
             {
                 // Add peer to our hashmap
-                let direction = if incoming { "incoming" } else { "outgoing" };
+                let peer = Peer::new(conn.clone(), response_tx.clone(), download_dir);
+                // TODO here we should check our wishlist and make any outstanding requests to this
+                // peer
                 let mut peers = peers_clone.lock().await;
-                if let Some(_existing_connection) = peers.insert(peer_name.clone(), conn.clone()) {
+                if let Some(_existing_connection) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
+                let direction = if incoming { "incoming" } else { "outgoing" };
                 info!("[{}] connected to {} peers", direction, peers.len());
                 send_event(
                     response_tx.clone(),
@@ -697,6 +706,16 @@ impl Hdp {
                                 for entry in entries.iter() {
                                     if !entry.is_dir {
                                         debug!("Adding {} to wishlist", entry.name);
+                                        let peers = self.peers.lock().await;
+                                        let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
+                                        peer.download_request_tx
+                                            .send(DownloadRequest {
+                                                path: entry.name.clone(),
+                                                start: None,
+                                                end: None,
+                                                id,
+                                            })
+                                            .unwrap();
                                     }
                                 }
                             }
@@ -736,8 +755,8 @@ impl Hdp {
     /// Open a request stream and write a request to the given peer
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
         let peers = self.peers.lock().await;
-        let connection = peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        let (mut send, recv) = connection.open_bi().await?;
+        let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        let (mut send, recv) = peer.connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
         send.write_all(&buf).await?;
