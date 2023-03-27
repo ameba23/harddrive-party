@@ -2,7 +2,7 @@
 
 use crate::{
     discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
-    peer::{DownloadRequest, Peer},
+    peer::Peer,
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
@@ -10,6 +10,7 @@ use crate::{
         Command, ReadResponse, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
     },
     wire_messages::{Entry, LsResponse, Request},
+    wishlist::{DownloadRequest, WishList},
 };
 use anyhow::anyhow;
 use async_stream::try_stream;
@@ -43,7 +44,7 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
-const WISHLIST: &[u8; 1] = b"w";
+// const WISHLIST: &[u8; 1] = b"w";
 const CACHE_SIZE: usize = 256;
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
@@ -71,6 +72,8 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
+    /// Requested files
+    wishlist: WishList,
 }
 
 impl Hdp {
@@ -112,7 +115,7 @@ impl Hdp {
             }
         };
 
-        let name = certificate_to_name(Certificate(cert_der.clone()));
+        let (name, _pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
         // Notify the UI of our own name
         send_event(
             response_tx.clone(),
@@ -134,7 +137,7 @@ impl Hdp {
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
 
         // Setup db for downloads requests
-        let wishlist = db.open_tree(WISHLIST)?;
+        let wishlist = WishList::new(&db)?;
 
         Ok((
             Self {
@@ -150,6 +153,7 @@ impl Hdp {
                 // public_key,
                 name,
                 ls_cache: Default::default(),
+                wishlist,
             },
             response_rx,
         ))
@@ -186,7 +190,7 @@ impl Hdp {
         token: Option<SessionToken>,
         remote_cert: Certificate,
     ) {
-        let peer_name = certificate_to_name(remote_cert);
+        let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("Connected to peer {}", peer_name);
         let response_tx = self.response_tx.clone();
 
@@ -194,7 +198,9 @@ impl Hdp {
         let our_token = self.token;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
+        let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
+            // Check the session token
             if let Some(thier_token) = token {
                 let (mut send, _recv) = conn.open_bi().await.unwrap();
                 send.write_all(&thier_token).await.unwrap();
@@ -211,38 +217,49 @@ impl Hdp {
                             return;
                         }
                     }
-                    Err(_) => {
+                    Err(err) => {
+                        error!("Error reading token {:?}", err);
                         return;
                     }
                 }
             } else {
+                error!("Err accepting connection from peer");
                 return;
             }
 
             {
                 // Add peer to our hashmap
-                let peer = Peer::new(conn.clone(), response_tx.clone(), download_dir);
+                let peer = Peer::new(
+                    conn.clone(),
+                    response_tx.clone(),
+                    download_dir,
+                    peer_public_key,
+                    wishlist,
+                );
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
                 let mut peers = peers_clone.lock().await;
-                if let Some(_existing_connection) = peers.insert(peer_name.clone(), peer) {
+                if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
                 let direction = if incoming { "incoming" } else { "outgoing" };
                 info!("[{}] connected to {} peers", direction, peers.len());
-                send_event(
-                    response_tx.clone(),
-                    UiEvent::PeerConnected {
-                        name: peer_name.clone(),
-                        is_self: false,
-                    },
-                );
             }
+
+            // Inform the UI that a new peer has connected
+            send_event(
+                response_tx.clone(),
+                UiEvent::PeerConnected {
+                    name: peer_name.clone(),
+                    is_self: false,
+                },
+            );
 
             // Loop over incoming requests from this peer
             loop {
                 match conn.accept_bi().await {
                     Ok((send, recv)) => {
+                        // Read a request
                         match recv.read_to_end(MAX_REQUEST_SIZE).await {
                             Ok(buf) => {
                                 let request: Result<Request, Box<bincode::ErrorKind>> =
@@ -260,12 +277,14 @@ impl Hdp {
                                                     rpc.ls(path, searchterm, recursive, send).await
                                                 {
                                                 };
+                                                // TODO else
                                             }
                                             Request::Read { path, start, end } => {
                                                 if let Ok(()) =
                                                     rpc.read(path, start, end, send).await
                                                 {
                                                 };
+                                                // TODO else
                                             }
                                         }
                                     }
@@ -677,7 +696,6 @@ impl Hdp {
                     searchterm: None,
                     recursive: true,
                 };
-                debug!("download");
                 // let mut cache = self.ls_cache.lock().await;
                 //
                 // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
@@ -706,16 +724,21 @@ impl Hdp {
                                 for entry in entries.iter() {
                                     if !entry.is_dir {
                                         debug!("Adding {} to wishlist", entry.name);
-                                        let peers = self.peers.lock().await;
-                                        let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
-                                        peer.download_request_tx
-                                            .send(DownloadRequest {
-                                                path: entry.name.clone(),
-                                                start: None,
-                                                end: None,
-                                                id,
-                                            })
-                                            .unwrap();
+                                        let peer_public_key = {
+                                            let peers = self.peers.lock().await;
+                                            let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
+                                            peer.public_key
+                                        };
+
+                                        if let Err(err) = self.wishlist.add(&DownloadRequest::new(
+                                            entry.name.clone(),
+                                            None,
+                                            None,
+                                            id,
+                                            peer_public_key,
+                                        )) {
+                                            error!("Cannot make download request {:?}", err);
+                                        };
                                     }
                                 }
                             }
@@ -766,12 +789,12 @@ impl Hdp {
     }
 }
 
-fn certificate_to_name(cert: Certificate) -> String {
+fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
     let mut topic_hash = Blake2b::new(32);
     topic_hash.input(cert.as_ref());
     topic_hash.result(&mut hash);
-    key_to_animal::key_to_name(&hash)
+    (key_to_animal::key_to_name(&hash), hash)
 }
 
 fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {

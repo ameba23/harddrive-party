@@ -1,35 +1,31 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use crate::{
     ui_messages::{ReadResponse, UiResponse, UiServerMessage},
     wire_messages::Request,
+    wishlist::{DownloadRequest, WishList},
 };
 use anyhow::anyhow;
 use bincode::serialize;
+use futures::{pin_mut, StreamExt};
 use log::{debug, warn};
 use quinn::{Connection, RecvStream};
 use speedometer::Speedometer;
 use tokio::{
     fs::{create_dir_all, File, OpenOptions},
     io::{AsyncSeekExt, AsyncWriteExt},
-    sync::mpsc::{unbounded_channel, UnboundedSender},
+    sync::mpsc::UnboundedSender,
 };
 
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
-#[derive(Debug)]
-pub struct DownloadRequest {
-    pub path: String,
-    pub start: Option<u64>,
-    pub end: Option<u64>,
-    // This id is not unique - it references which request this came from
-    // requesting a directory will be split into requests for each file
-    pub id: u32,
-}
-
 pub struct Peer {
     pub connection: Connection,
-    pub download_request_tx: UnboundedSender<DownloadRequest>,
+    // pub download_request_tx: UnboundedSender<DownloadRequest>,
+    pub public_key: [u8; 32],
 }
 
 impl Peer {
@@ -37,42 +33,52 @@ impl Peer {
         connection: Connection,
         response_tx: UnboundedSender<UiServerMessage>,
         download_dir: PathBuf,
+        public_key: [u8; 32],
+        wishlist: WishList,
     ) -> Self {
-        let (download_request_tx, mut download_request_rx) = unbounded_channel();
-
         let connection_clone = connection.clone();
         tokio::spawn(async move {
+            let request_stream = wishlist.requests_for_peer(&public_key);
+            pin_mut!(request_stream);
             // Handle download requests for this peer in serial
-            while let Some(request) = download_request_rx.recv().await {
-                if let Err(e) = download(
-                    request,
+            while let Some(request) = request_stream.next().await {
+                match download(
+                    &request,
                     &connection_clone,
                     &download_dir,
                     response_tx.clone(),
                 )
                 .await
                 {
-                    warn!("Error downloading {:?}", e);
+                    Ok(()) => {
+                        if let Err(e) = wishlist.completed(request) {
+                            warn!("Could not remove item from wishlist {:?}", e)
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Error downloading {:?}", e);
+                    }
                 }
             }
         });
 
         Self {
             connection,
-            download_request_tx,
+            public_key,
+            // download_request_tx,
         }
     }
 }
 
 async fn download(
-    download_request: DownloadRequest,
+    download_request: &DownloadRequest,
     connection: &Connection,
-    download_dir: &PathBuf,
+    download_dir: &Path,
     response_tx: UnboundedSender<UiServerMessage>,
 ) -> anyhow::Result<()> {
-    let mut recv = make_read_request(connection, &download_request).await?;
-    let id = download_request.id;
-    // TODO write
+    let mut recv = make_read_request(connection, download_request).await?;
+    let id = download_request.request_id;
+    // TODO check if the file already exists, and resume
     //
     let output_path = download_dir.join(download_request.path.clone());
     match setup_download(output_path, download_request.start).await {
@@ -127,9 +133,6 @@ async fn download(
             return Err(error);
         }
     };
-    //
-    //
-    //
     Ok(())
 }
 
