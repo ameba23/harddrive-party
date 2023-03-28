@@ -12,7 +12,6 @@ use crate::{
     wire_messages::{Entry, LsResponse, Request},
     wishlist::{DownloadRequest, WishList},
 };
-use anyhow::anyhow;
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
@@ -32,8 +31,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    fs::{create_dir_all, File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
+    fs::create_dir_all,
     select,
     sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -483,7 +481,6 @@ impl Hdp {
                     info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
                     let peer_name_clone = peer_name.clone();
-                    let download_dir = self.download_dir.clone();
                     match self.request(request, &peer_name).await {
                         Ok(mut recv) => {
                             let response_tx = self.response_tx.clone();
@@ -555,72 +552,52 @@ impl Hdp {
                                     }
                                     Request::Read {
                                         path,
-                                        start,
+                                        start: _,
                                         end: _,
                                     } => {
-                                        let output_path = download_dir.join(path.clone());
-                                        match setup_download(output_path, start).await {
-                                            Ok(mut file) => {
-                                                let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
-                                                    [0; DOWNLOAD_BLOCK_SIZE];
-                                                let mut bytes_read: u64 = 0;
-                                                let mut total_bytes_read = 0;
-                                                let mut speedometer =
-                                                    Speedometer::new(Duration::from_secs(5));
-                                                // TODO handle errors here
-                                                while let Ok(Some(n)) = recv.read(&mut buf).await {
-                                                    debug!("Read {} bytes", n);
-                                                    speedometer.entry(n);
-                                                    bytes_read += n as u64;
-                                                    total_bytes_read += n as u64;
+                                        let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
+                                            [0; DOWNLOAD_BLOCK_SIZE];
+                                        let mut bytes_read: u64 = 0;
+                                        let mut total_bytes_read = 0;
+                                        let mut speedometer =
+                                            Speedometer::new(Duration::from_secs(5));
+                                        // TODO handle errors here
+                                        while let Ok(Some(n)) = recv.read(&mut buf).await {
+                                            debug!("Read {} bytes", n);
+                                            speedometer.entry(n);
+                                            bytes_read += n as u64;
+                                            total_bytes_read += n as u64;
 
-                                                    if let Err(error) = file.write(&buf[..n]).await
-                                                    {
-                                                        warn!(
-                                                            "Cannot write downloading file {:?}",
-                                                            error
-                                                        );
-                                                        break;
-                                                    }
-                                                    if response_tx
-                                                        .send(UiServerMessage::Response {
-                                                            id,
-                                                            response: Ok(UiResponse::Read(
-                                                                ReadResponse {
-                                                                    path: path.clone(),
-                                                                    bytes_read,
-                                                                    total_bytes_read,
-                                                                    speed: speedometer
-                                                                        .measure()
-                                                                        .unwrap(),
-                                                                },
-                                                                // buf[..n].to_vec(),
-                                                            )),
-                                                        })
-                                                        .is_err()
-                                                    {
-                                                        warn!("Response channel closed");
-                                                        break;
-                                                    };
-                                                }
-                                                // Terminate with an endresponse
-                                                if response_tx
-                                                    .send(UiServerMessage::Response {
-                                                        id,
-                                                        response: Ok(UiResponse::EndResponse),
-                                                    })
-                                                    .is_err()
-                                                {
-                                                    warn!("Response channel closed");
-                                                }
-                                            }
-                                            Err(error) => {
-                                                warn!(
-                                                    "Cannot setup output file for download {:?}",
-                                                    error
-                                                );
-                                            }
-                                        };
+                                            // TODO include buf[..n] in the response
+                                            if response_tx
+                                                .send(UiServerMessage::Response {
+                                                    id,
+                                                    response: Ok(UiResponse::Read(
+                                                        ReadResponse {
+                                                            path: path.clone(),
+                                                            bytes_read,
+                                                            total_bytes_read,
+                                                            speed: speedometer.measure().unwrap(),
+                                                        },
+                                                        // buf[..n].to_vec(),
+                                                    )),
+                                                })
+                                                .is_err()
+                                            {
+                                                warn!("Response channel closed");
+                                                break;
+                                            };
+                                        }
+                                        // Terminate with an endresponse
+                                        if response_tx
+                                            .send(UiServerMessage::Response {
+                                                id,
+                                                response: Ok(UiResponse::EndResponse),
+                                            })
+                                            .is_err()
+                                        {
+                                            warn!("Response channel closed");
+                                        }
                                     }
                                 }
                             });
@@ -732,8 +709,7 @@ impl Hdp {
 
                                         if let Err(err) = self.wishlist.add(&DownloadRequest::new(
                                             entry.name.clone(),
-                                            None,
-                                            None,
+                                            entry.size,
                                             id,
                                             peer_public_key,
                                         )) {
@@ -801,25 +777,6 @@ fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {
     if sender.send(UiServerMessage::Event(event)).is_err() {
         warn!("UI response channel closed");
     }
-}
-
-async fn setup_download(file_path: PathBuf, start: Option<u64>) -> anyhow::Result<File> {
-    create_dir_all(
-        file_path
-            .parent()
-            .ok_or_else(|| anyhow!("Cannot get parent"))?,
-    )
-    .await?;
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(file_path)
-        .await?;
-    if let Some(pos) = start {
-        file.seek(std::io::SeekFrom::Start(pos)).await?;
-    };
-    Ok(file)
 }
 
 /// A stream of Ls responses

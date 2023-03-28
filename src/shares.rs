@@ -150,9 +150,21 @@ impl Shares {
 
     /// Resolve a path from a request by looking up the absolute path associated with its share name
     /// component
-    /// Note this currently does not check if the file exists in the db or on disk
-    pub fn resolve_path(&self, input_path: String) -> Result<PathBuf, ResolvePathError> {
+    pub fn resolve_path(&self, input_path: String) -> Result<(PathBuf, u64), ResolvePathError> {
         info!("Resolving path {}", input_path);
+
+        let size = match self.files.get(&input_path)? {
+            Some(size_buf) => u64::from_le_bytes(
+                size_buf
+                    .to_vec()
+                    .try_into()
+                    .map_err(|_| ResolvePathError::BadShareName)?,
+            ),
+            None => {
+                return Err(ResolvePathError::FileNotFound);
+            }
+        };
+
         let input_path_path_buf = PathBuf::from(input_path);
         let mut input_path_iter = input_path_path_buf.iter();
         let share_name = input_path_iter
@@ -172,7 +184,7 @@ impl Shares {
             .ok_or(ResolvePathError::BadShareName)?;
 
         let actual_path = PathBuf::from(std::str::from_utf8(&actual_path_bytes)?);
-        Ok(actual_path.join(sub_path))
+        Ok((actual_path.join(sub_path), size))
     }
 
     fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
@@ -344,6 +356,8 @@ pub enum ResolvePathError {
     BadShareName,
     #[error("Error parsing UTF8")]
     Utf8Error(#[from] std::str::Utf8Error),
+    #[error("File does not exist in db")]
+    FileNotFound,
 }
 
 #[cfg(test)]
@@ -421,7 +435,7 @@ mod tests {
         assert_eq!(test_entries.len(), 0);
 
         // Try resolving a path name
-        let resolved = shares
+        let (resolved, size) = shares
             .resolve_path("test-data/df/aslkjdsal.asds".to_string())
             .unwrap();
         assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));

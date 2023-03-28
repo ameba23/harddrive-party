@@ -5,43 +5,40 @@ use futures::{stream::BoxStream, StreamExt};
 
 type KeyValue = (Vec<u8>, Vec<u8>);
 
+/// A requested file
 #[derive(Debug)]
 pub struct DownloadRequest {
+    /// The path of the file on the remote
     pub path: String,
-    pub start: Option<u64>,
-    pub end: Option<u64>,
+    /// The size in bytes
+    pub size: u64,
     /// This id is not unique - it references which request this came from
     /// requesting a directory will be split into requests for each file
     pub request_id: u32,
+    /// Time when request made relative to unix epoch
     pub timestamp: Duration,
+    /// Public key of peer holding file
     pub peer_public_key: [u8; 32],
 }
 
 impl DownloadRequest {
-    pub fn new(
-        path: String,
-        start: Option<u64>,
-        end: Option<u64>,
-        request_id: u32,
-        peer_public_key: [u8; 32],
-    ) -> Self {
+    pub fn new(path: String, size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
         let system_time = SystemTime::now();
         let timestamp = system_time
             .duration_since(SystemTime::UNIX_EPOCH)
             .expect("Time went backwards");
         // let timestamp = seconds * 1000 + (nanos % 1_000_000_000) / 1_000_000;
-        println!("SystemTime: {:?}", system_time);
         Self {
             path,
-            start,
-            end,
+            size,
             request_id,
             timestamp,
             peer_public_key,
         }
     }
 
-    /// key: <peer_public_key><timestamp><path> value: <request_id>
+    /// Given a wishlist db entry, make a DownloadRequest
+    /// key: <peer_public_key><timestamp><path> value: <request_id><size>
     pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
         let peer_public_key: [u8; 32] = key[0..32].try_into()?;
 
@@ -54,16 +51,19 @@ impl DownloadRequest {
         let request_id_buf: [u8; 4] = value[0..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
 
+        let size_buf: [u8; 8] = value[4..4 + 8].try_into()?;
+        let size = u64::from_be_bytes(size_buf);
+
         Ok(Self {
             path,
-            start: None,
-            end: None,
+            size,
             request_id,
             timestamp,
             peer_public_key,
         })
     }
 
+    /// Convert to a db entry for both 'by peer' and 'by timestamp'
     fn to_db_key_value(&self) -> (KeyValue, KeyValue) {
         let path_buf = self.path.as_bytes();
         let mut key: Vec<u8> = Vec::with_capacity(32 + 8 + path_buf.len());
@@ -78,12 +78,17 @@ impl DownloadRequest {
         key.append(&mut path_buf.to_vec());
 
         let request_id_buf = self.request_id.to_be_bytes();
+        let size_buf = self.size.to_be_bytes();
+
+        let mut value: [u8; 4 + 8] = [0u8; 4 + 8];
+        value[0..4].copy_from_slice(&request_id_buf);
+        value[4..4 + 8].copy_from_slice(&size_buf);
+        let kv1 = (key.to_vec(), value.to_vec());
 
         let mut key2: [u8; 8 + 4] = [0u8; 8 + 4];
         key2[0..8].copy_from_slice(&timestamp_secs_buf);
         key2[8..8 + 4].copy_from_slice(&request_id_buf);
 
-        let kv1 = (key.to_vec(), request_id_buf.to_vec());
         let kv2 = (key2.to_vec(), self.peer_public_key.clone().to_vec());
         (kv1, kv2)
     }
@@ -91,7 +96,7 @@ impl DownloadRequest {
 
 #[derive(Clone)]
 pub struct WishList {
-    /// key: <peer_public_key><timestamp><path> value: <request_id> TODO <size>
+    /// key: <peer_public_key><timestamp><path> value: <request_id><size>
     db_by_peer: sled::Tree,
     /// key: <timestamp><request_id> value: <peer_public_key>
     db_by_timestamp: sled::Tree,
@@ -193,14 +198,14 @@ mod tests {
     fn create_download_request() {
         let dl_req = DownloadRequest::new(
             "books/book.pdf".to_string(),
-            None,
-            None,
+            501546,
             5144,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
         let ((key, value), (_key2, _value2)) = dl_req.to_db_key_value();
         let decoded_request = DownloadRequest::from_db_key_value(key, value).unwrap();
         assert_eq!(dl_req.path, decoded_request.path);
+        assert_eq!(dl_req.size, decoded_request.size);
         assert_eq!(dl_req.request_id, decoded_request.request_id);
         // This will fail if we compare durations due to the missing nanoseconds
         assert_eq!(
@@ -223,8 +228,7 @@ mod tests {
 
         let dl_req = DownloadRequest::new(
             "books/book.pdf".to_string(),
-            None,
-            None,
+            501546,
             5144,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
@@ -234,6 +238,7 @@ mod tests {
         let all_items = wishlist.all().unwrap();
         for item in all_items {
             assert_eq!(dl_req.path, item.path);
+            assert_eq!(dl_req.size, item.size);
             assert_eq!(dl_req.request_id, item.request_id);
             // This will fail if we compare durations due to the missing nanoseconds
             assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
