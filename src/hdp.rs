@@ -2,6 +2,7 @@
 
 use crate::{
     discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
+    peer::Peer,
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
@@ -9,15 +10,15 @@ use crate::{
         Command, ReadResponse, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
     },
     wire_messages::{Entry, LsResponse, Request},
+    wishlist::{DownloadRequest, WishList},
 };
-use anyhow::anyhow;
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
 use log::{debug, error, info, warn};
 use lru::LruCache;
-use quinn::{Connection, Endpoint, RecvStream};
+use quinn::{Endpoint, RecvStream};
 use rustls::Certificate;
 use speedometer::Speedometer;
 use std::{
@@ -30,8 +31,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    fs::{create_dir_all, File, OpenOptions},
-    io::{AsyncSeekExt, AsyncWriteExt},
+    fs::create_dir_all,
     select,
     sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -42,13 +42,14 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
+// const WISHLIST: &[u8; 1] = b"w";
 const CACHE_SIZE: usize = 256;
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 pub struct Hdp {
     /// A map of peernames to peer connections
-    peers: Arc<Mutex<HashMap<String, Connection>>>,
+    peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// Remote proceduce call for share queries and downloads
     rpc: Arc<Rpc>,
     /// The QUIC endpoint
@@ -69,6 +70,8 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
+    /// Requested files
+    wishlist: WishList,
 }
 
 impl Hdp {
@@ -110,7 +113,7 @@ impl Hdp {
             }
         };
 
-        let name = certificate_to_name(Certificate(cert_der.clone()));
+        let (name, _pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
         // Notify the UI of our own name
         send_event(
             response_tx.clone(),
@@ -131,6 +134,9 @@ impl Hdp {
         // Create QUIC endpoint
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
 
+        // Setup db for downloads requests
+        let wishlist = WishList::new(&db)?;
+
         Ok((
             Self {
                 peers: Default::default(),
@@ -145,6 +151,7 @@ impl Hdp {
                 // public_key,
                 name,
                 ls_cache: Default::default(),
+                wishlist,
             },
             response_rx,
         ))
@@ -181,14 +188,17 @@ impl Hdp {
         token: Option<SessionToken>,
         remote_cert: Certificate,
     ) {
-        let peer_name = certificate_to_name(remote_cert);
+        let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("Connected to peer {}", peer_name);
         let response_tx = self.response_tx.clone();
 
         let peers_clone = self.peers.clone();
         let our_token = self.token;
         let rpc = self.rpc.clone();
+        let download_dir = self.download_dir.clone();
+        let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
+            // Check the session token
             if let Some(thier_token) = token {
                 let (mut send, _recv) = conn.open_bi().await.unwrap();
                 send.write_all(&thier_token).await.unwrap();
@@ -205,35 +215,49 @@ impl Hdp {
                             return;
                         }
                     }
-                    Err(_) => {
+                    Err(err) => {
+                        error!("Error reading token {:?}", err);
                         return;
                     }
                 }
             } else {
+                error!("Err accepting connection from peer");
                 return;
             }
 
             {
                 // Add peer to our hashmap
-                let direction = if incoming { "incoming" } else { "outgoing" };
+                let peer = Peer::new(
+                    conn.clone(),
+                    response_tx.clone(),
+                    download_dir,
+                    peer_public_key,
+                    wishlist,
+                );
+                // TODO here we should check our wishlist and make any outstanding requests to this
+                // peer
                 let mut peers = peers_clone.lock().await;
-                if let Some(_existing_connection) = peers.insert(peer_name.clone(), conn.clone()) {
+                if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
+                let direction = if incoming { "incoming" } else { "outgoing" };
                 info!("[{}] connected to {} peers", direction, peers.len());
-                send_event(
-                    response_tx.clone(),
-                    UiEvent::PeerConnected {
-                        name: peer_name.clone(),
-                        is_self: false,
-                    },
-                );
             }
+
+            // Inform the UI that a new peer has connected
+            send_event(
+                response_tx.clone(),
+                UiEvent::PeerConnected {
+                    name: peer_name.clone(),
+                    is_self: false,
+                },
+            );
 
             // Loop over incoming requests from this peer
             loop {
                 match conn.accept_bi().await {
                     Ok((send, recv)) => {
+                        // Read a request
                         match recv.read_to_end(MAX_REQUEST_SIZE).await {
                             Ok(buf) => {
                                 let request: Result<Request, Box<bincode::ErrorKind>> =
@@ -251,12 +275,14 @@ impl Hdp {
                                                     rpc.ls(path, searchterm, recursive, send).await
                                                 {
                                                 };
+                                                // TODO else
                                             }
                                             Request::Read { path, start, end } => {
                                                 if let Ok(()) =
                                                     rpc.read(path, start, end, send).await
                                                 {
                                                 };
+                                                // TODO else
                                             }
                                         }
                                     }
@@ -455,7 +481,6 @@ impl Hdp {
                     info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
                     let peer_name_clone = peer_name.clone();
-                    let download_dir = self.download_dir.clone();
                     match self.request(request, &peer_name).await {
                         Ok(mut recv) => {
                             let response_tx = self.response_tx.clone();
@@ -527,72 +552,52 @@ impl Hdp {
                                     }
                                     Request::Read {
                                         path,
-                                        start,
+                                        start: _,
                                         end: _,
                                     } => {
-                                        let output_path = download_dir.join(path.clone());
-                                        match setup_download(output_path, start).await {
-                                            Ok(mut file) => {
-                                                let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
-                                                    [0; DOWNLOAD_BLOCK_SIZE];
-                                                let mut bytes_read: u64 = 0;
-                                                let mut total_bytes_read = 0;
-                                                let mut speedometer =
-                                                    Speedometer::new(Duration::from_secs(5));
-                                                // TODO handle errors here
-                                                while let Ok(Some(n)) = recv.read(&mut buf).await {
-                                                    debug!("Read {} bytes", n);
-                                                    speedometer.entry(n);
-                                                    bytes_read += n as u64;
-                                                    total_bytes_read += n as u64;
+                                        let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
+                                            [0; DOWNLOAD_BLOCK_SIZE];
+                                        let mut bytes_read: u64 = 0;
+                                        let mut total_bytes_read = 0;
+                                        let mut speedometer =
+                                            Speedometer::new(Duration::from_secs(5));
+                                        // TODO handle errors here
+                                        while let Ok(Some(n)) = recv.read(&mut buf).await {
+                                            debug!("Read {} bytes", n);
+                                            speedometer.entry(n);
+                                            bytes_read += n as u64;
+                                            total_bytes_read += n as u64;
 
-                                                    if let Err(error) = file.write(&buf[..n]).await
-                                                    {
-                                                        warn!(
-                                                            "Cannot write downloading file {:?}",
-                                                            error
-                                                        );
-                                                        break;
-                                                    }
-                                                    if response_tx
-                                                        .send(UiServerMessage::Response {
-                                                            id,
-                                                            response: Ok(UiResponse::Read(
-                                                                ReadResponse {
-                                                                    path: path.clone(),
-                                                                    bytes_read,
-                                                                    total_bytes_read,
-                                                                    speed: speedometer
-                                                                        .measure()
-                                                                        .unwrap(),
-                                                                },
-                                                                // buf[..n].to_vec(),
-                                                            )),
-                                                        })
-                                                        .is_err()
-                                                    {
-                                                        warn!("Response channel closed");
-                                                        break;
-                                                    };
-                                                }
-                                                // Terminate with an endresponse
-                                                if response_tx
-                                                    .send(UiServerMessage::Response {
-                                                        id,
-                                                        response: Ok(UiResponse::EndResponse),
-                                                    })
-                                                    .is_err()
-                                                {
-                                                    warn!("Response channel closed");
-                                                }
-                                            }
-                                            Err(error) => {
-                                                warn!(
-                                                    "Cannot setup output file for download {:?}",
-                                                    error
-                                                );
-                                            }
-                                        };
+                                            // TODO include buf[..n] in the response
+                                            if response_tx
+                                                .send(UiServerMessage::Response {
+                                                    id,
+                                                    response: Ok(UiResponse::Read(
+                                                        ReadResponse {
+                                                            path: path.clone(),
+                                                            bytes_read,
+                                                            total_bytes_read,
+                                                            speed: speedometer.measure().unwrap(),
+                                                        },
+                                                        // buf[..n].to_vec(),
+                                                    )),
+                                                })
+                                                .is_err()
+                                            {
+                                                warn!("Response channel closed");
+                                                break;
+                                            };
+                                        }
+                                        // Terminate with an endresponse
+                                        if response_tx
+                                            .send(UiServerMessage::Response {
+                                                id,
+                                                response: Ok(UiResponse::EndResponse),
+                                            })
+                                            .is_err()
+                                        {
+                                            warn!("Response channel closed");
+                                        }
                                     }
                                 }
                             });
@@ -668,7 +673,6 @@ impl Hdp {
                     searchterm: None,
                     recursive: true,
                 };
-                debug!("download");
                 // let mut cache = self.ls_cache.lock().await;
                 //
                 // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
@@ -697,6 +701,20 @@ impl Hdp {
                                 for entry in entries.iter() {
                                     if !entry.is_dir {
                                         debug!("Adding {} to wishlist", entry.name);
+                                        let peer_public_key = {
+                                            let peers = self.peers.lock().await;
+                                            let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
+                                            peer.public_key
+                                        };
+
+                                        if let Err(err) = self.wishlist.add(&DownloadRequest::new(
+                                            entry.name.clone(),
+                                            entry.size,
+                                            id,
+                                            peer_public_key,
+                                        )) {
+                                            error!("Cannot make download request {:?}", err);
+                                        };
                                     }
                                 }
                             }
@@ -736,8 +754,8 @@ impl Hdp {
     /// Open a request stream and write a request to the given peer
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
         let peers = self.peers.lock().await;
-        let connection = peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        let (mut send, recv) = connection.open_bi().await?;
+        let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        let (mut send, recv) = peer.connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
         send.write_all(&buf).await?;
@@ -747,37 +765,18 @@ impl Hdp {
     }
 }
 
-fn certificate_to_name(cert: Certificate) -> String {
+fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
     let mut topic_hash = Blake2b::new(32);
     topic_hash.input(cert.as_ref());
     topic_hash.result(&mut hash);
-    key_to_animal::key_to_name(&hash)
+    (key_to_animal::key_to_name(&hash), hash)
 }
 
 fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {
     if sender.send(UiServerMessage::Event(event)).is_err() {
         warn!("UI response channel closed");
     }
-}
-
-async fn setup_download(file_path: PathBuf, start: Option<u64>) -> anyhow::Result<File> {
-    create_dir_all(
-        file_path
-            .parent()
-            .ok_or_else(|| anyhow!("Cannot get parent"))?,
-    )
-    .await?;
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(file_path)
-        .await?;
-    if let Some(pos) = start {
-        file.seek(std::io::SeekFrom::Start(pos)).await?;
-    };
-    Ok(file)
 }
 
 /// A stream of Ls responses

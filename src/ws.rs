@@ -8,7 +8,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use rand::{rngs::ThreadRng, Rng};
 use std::{
     collections::HashMap,
@@ -45,7 +45,7 @@ pub async fn server(
     tokio::spawn(async move {
         while let Some(msg) = response_rx.recv().await {
             let clients = state_clone.lock().unwrap();
-            debug!("{} connected clients", clients.len());
+            trace!("{} connected clients", clients.len());
 
             {
                 let mut cache = event_cache_clone.lock().unwrap();

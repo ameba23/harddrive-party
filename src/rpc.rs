@@ -1,9 +1,11 @@
+//! Remote procedure call for share index queries and file uploading
+
 use crate::{
     shares::{EntryParseError, Shares},
     ui_messages::{UiEvent, UiServerMessage, UploadInfo},
 };
 use bincode::serialize;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
 use tokio::{
@@ -21,10 +23,11 @@ struct ReadRequest {
     output: quinn::SendStream,
 }
 
-/// Remote Procedure Call - process remote requests (or requests from ourself to query our own
-/// share index)
+/// Remote Procedure Call - process remote requests
 pub struct Rpc {
+    /// The file index database
     pub shares: Shares,
+    /// Channel for sending upload requests
     upload_tx: UnboundedSender<ReadRequest>,
     // upload_rx: UnboundedReceiver<ReadRequest>,
 }
@@ -70,11 +73,11 @@ impl Rpc {
                         .try_into()
                         .map_err(|_| RpcError::U64ConvertError)?;
                     debug!("Writing prefix {length}");
-                    output.write(&length.to_le_bytes()).await?;
+                    output.write_all(&length.to_le_bytes()).await?;
                     // TODO display a warning if length would be more than u32::MAX - so that
                     // the conversion back to usize will work on 32 bit machines
 
-                    output.write(&buf).await?;
+                    output.write_all(&buf).await?;
                     debug!("Written ls response");
                 }
                 output.finish().await?;
@@ -129,6 +132,8 @@ impl Uploader {
         }
     }
 
+    // Possibly here we could adjust the block size based on conjestion
+    // by using output.write and checking the number of bytes written in one go
     async fn do_read(&self, read_request: ReadRequest) -> Result<(), RpcError> {
         let ReadRequest {
             path,
@@ -137,17 +142,16 @@ impl Uploader {
             mut output,
         } = read_request;
         match self.get_file_portion(path.clone(), start, end).await {
-            Ok(file) => {
+            Ok((file, size)) => {
                 // TODO output.write success header
                 // io::copy(&mut Box::into_pin(file), &mut output).await?;
                 let mut buf: [u8; UPLOAD_BLOCK_SIZE] = [0; UPLOAD_BLOCK_SIZE];
                 let mut file = Box::into_pin(file);
-                let mut bytes_read: u64 = 0; // TODO this should depend on start
+                let mut bytes_read: u64 = start.unwrap_or(0);
                 while let Ok(n) = file.read(&mut buf).await {
                     if n == 0 {
                         break;
                     }
-                    debug!("Uploaded {} bytes", n);
                     bytes_read += n as u64;
                     if self
                         .event_tx
@@ -160,7 +164,8 @@ impl Uploader {
                     {
                         warn!("Ui response channel closed");
                     };
-                    output.write(&buf[..n]).await?;
+                    output.write_all(&buf[..n]).await?;
+                    debug!("Uploaded {} bytes of {}", bytes_read, size);
                 }
                 output.finish().await?;
                 Ok(())
@@ -174,7 +179,7 @@ impl Uploader {
         path: String,
         start: Option<u64>,
         end: Option<u64>,
-    ) -> Result<Box<dyn AsyncRead + Send>, RpcError> {
+    ) -> Result<(Box<dyn AsyncRead + Send>, u64), RpcError> {
         let start = start.unwrap_or(0);
 
         if let Some(end_offset) = end {
@@ -184,17 +189,24 @@ impl Uploader {
         }
 
         match self.shares.resolve_path(path) {
-            Ok(resolved_path) => match fs::File::open(resolved_path).await {
+            Ok((resolved_path, size)) => match fs::File::open(resolved_path).await {
                 Ok(mut file) => {
+                    // Check file size matches what we have in the db
+                    let metadata = file.metadata().await?;
+                    let size_on_disk = metadata.len();
+                    if size_on_disk != size {
+                        error!("File size does not match that from db!");
+                    }
+
                     file.seek(std::io::SeekFrom::Start(start))
                         .await
                         .map_err(|_| RpcError::BadOffset)?;
                     match end {
                         Some(e) => {
                             // TODO should this be just e?
-                            Ok(Box::new(file.take(start + e)))
+                            Ok((Box::new(file.take(start + e)), size))
                         }
-                        None => Ok(Box::new(file)),
+                        None => Ok((Box::new(file), size)),
                     }
                 }
                 Err(_) => Err(RpcError::PathNotFound),
@@ -206,7 +218,7 @@ impl Uploader {
 
 async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
     // TODO send serialised version of the error
-    output.write(&[0]).await?;
+    output.write_all(&[0]).await?;
     output.finish().await?;
     Err(error)
 }
