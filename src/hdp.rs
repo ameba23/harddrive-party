@@ -6,10 +6,8 @@ use crate::{
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
-    ui_messages::{
-        Command, ReadResponse, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
-    },
-    wire_messages::{Entry, LsResponse, Request},
+    ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
+    wire_messages::{Entry, IndexQuery, LsResponse, ReadQuery, Request},
     wishlist::{DownloadRequest, WishList},
 };
 use async_stream::try_stream;
@@ -266,18 +264,18 @@ impl Hdp {
                                     Ok(req) => {
                                         debug!("Got request from peer {:?}", req);
                                         match req {
-                                            Request::Ls {
+                                            Request::Ls(IndexQuery {
                                                 path,
                                                 searchterm,
                                                 recursive,
-                                            } => {
+                                            }) => {
                                                 if let Ok(()) =
                                                     rpc.ls(path, searchterm, recursive, send).await
                                                 {
                                                 };
                                                 // TODO else
                                             }
-                                            Request::Read { path, start, end } => {
+                                            Request::Read(ReadQuery { path, start, end }) => {
                                                 if let Ok(()) =
                                                     rpc.read(path, start, end, send).await
                                                 {
@@ -407,9 +405,9 @@ impl Hdp {
                     return Err(HandleUiCommandError::ChannelClosed);
                 }
             }
-            Command::Request(req, name) => {
+            Command::Ls(query, peer_name_option) => {
                 // Some querys are to be sent to multiple peers
-                let requests = self.expand_request(req, name).await;
+                let requests = self.expand_request(query, peer_name_option).await;
 
                 debug!("making request to {} peers", requests.len());
                 // If there is no request to make, end the response
@@ -481,124 +479,62 @@ impl Hdp {
                     info!("Sending request to {}", peer_name);
                     let req_clone = request.clone();
                     let peer_name_clone = peer_name.clone();
+
                     match self.request(request, &peer_name).await {
-                        Ok(mut recv) => {
+                        Ok(recv) => {
                             let response_tx = self.response_tx.clone();
                             let remaining_responses_clone = remaining_responses.clone();
                             let ls_cache = self.ls_cache.clone();
                             tokio::spawn(async move {
-                                match req_clone {
-                                    Request::Ls {
-                                        path: _,
-                                        searchterm: _,
-                                        recursive: _,
-                                    } => {
-                                        let ls_response_stream =
-                                            process_length_prefix(recv).await.unwrap();
-                                        pin_mut!(ls_response_stream);
+                                let ls_response_stream = process_length_prefix(recv).await.unwrap();
+                                pin_mut!(ls_response_stream);
 
-                                        let mut cached_entries = Vec::new();
-                                        while let Some(Ok(ls_response)) =
-                                            ls_response_stream.next().await
-                                        {
-                                            // If it is not an err, add it to the local
-                                            // cache
-                                            if let LsResponse::Success(entries) =
-                                                ls_response.clone()
-                                            {
-                                                cached_entries.push(entries);
-                                            }
-
-                                            if response_tx
-                                                .send(UiServerMessage::Response {
-                                                    id,
-                                                    response: Ok(UiResponse::Ls(
-                                                        ls_response,
-                                                        peer_name_clone.to_string(),
-                                                    )),
-                                                })
-                                                .is_err()
-                                            {
-                                                warn!("Response channel closed");
-                                                break;
-                                            }
-                                        }
-                                        if !cached_entries.is_empty() {
-                                            debug!("Writing ls cache {}", cached_entries.len());
-                                            let mut cache = ls_cache.lock().await;
-                                            let peer_cache = cache
-                                                .entry(peer_name_clone.clone())
-                                                .or_insert(LruCache::new(
-                                                    NonZeroUsize::new(CACHE_SIZE).unwrap(),
-                                                ));
-                                            peer_cache.put(req_clone, cached_entries);
-                                        }
-
-                                        // Terminate with an endresponse
-                                        // If there was more then one peer we need to only
-                                        // send this if we are the last one
-                                        let mut remaining = remaining_responses_clone.lock().await;
-                                        *remaining -= 1;
-                                        if *remaining == 0
-                                            && response_tx
-                                                .send(UiServerMessage::Response {
-                                                    id,
-                                                    response: Ok(UiResponse::EndResponse),
-                                                })
-                                                .is_err()
-                                        {
-                                            warn!("Response channel closed");
-                                        }
+                                let mut cached_entries = Vec::new();
+                                while let Some(Ok(ls_response)) = ls_response_stream.next().await {
+                                    // If it is not an err, add it to the local
+                                    // cache
+                                    if let LsResponse::Success(entries) = ls_response.clone() {
+                                        cached_entries.push(entries);
                                     }
-                                    Request::Read {
-                                        path,
-                                        start: _,
-                                        end: _,
-                                    } => {
-                                        let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
-                                            [0; DOWNLOAD_BLOCK_SIZE];
-                                        let mut bytes_read: u64 = 0;
-                                        let mut total_bytes_read = 0;
-                                        let mut speedometer =
-                                            Speedometer::new(Duration::from_secs(5));
-                                        // TODO handle errors here
-                                        while let Ok(Some(n)) = recv.read(&mut buf).await {
-                                            debug!("Read {} bytes", n);
-                                            speedometer.entry(n);
-                                            bytes_read += n as u64;
-                                            total_bytes_read += n as u64;
 
-                                            // TODO include buf[..n] in the response
-                                            if response_tx
-                                                .send(UiServerMessage::Response {
-                                                    id,
-                                                    response: Ok(UiResponse::Read(
-                                                        ReadResponse {
-                                                            path: path.clone(),
-                                                            bytes_read,
-                                                            total_bytes_read,
-                                                            speed: speedometer.measure().unwrap(),
-                                                        },
-                                                        // buf[..n].to_vec(),
-                                                    )),
-                                                })
-                                                .is_err()
-                                            {
-                                                warn!("Response channel closed");
-                                                break;
-                                            };
-                                        }
-                                        // Terminate with an endresponse
-                                        if response_tx
-                                            .send(UiServerMessage::Response {
-                                                id,
-                                                response: Ok(UiResponse::EndResponse),
-                                            })
-                                            .is_err()
-                                        {
-                                            warn!("Response channel closed");
-                                        }
+                                    if response_tx
+                                        .send(UiServerMessage::Response {
+                                            id,
+                                            response: Ok(UiResponse::Ls(
+                                                ls_response,
+                                                peer_name_clone.to_string(),
+                                            )),
+                                        })
+                                        .is_err()
+                                    {
+                                        warn!("Response channel closed");
+                                        break;
                                     }
+                                }
+                                if !cached_entries.is_empty() {
+                                    debug!("Writing ls cache {}", cached_entries.len());
+                                    let mut cache = ls_cache.lock().await;
+                                    let peer_cache =
+                                        cache.entry(peer_name_clone.clone()).or_insert(
+                                            LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
+                                        );
+                                    peer_cache.put(req_clone, cached_entries);
+                                }
+
+                                // Terminate with an endresponse
+                                // If there was more then one peer we need to only
+                                // send this if we are the last one
+                                let mut remaining = remaining_responses_clone.lock().await;
+                                *remaining -= 1;
+                                if *remaining == 0
+                                    && response_tx
+                                        .send(UiServerMessage::Response {
+                                            id,
+                                            response: Ok(UiResponse::EndResponse),
+                                        })
+                                        .is_err()
+                                {
+                                    warn!("Response channel closed");
                                 }
                             });
                         }
@@ -616,15 +552,15 @@ impl Hdp {
                                 return Err(HandleUiCommandError::ChannelClosed);
                             }
                         }
-                    };
+                    }
                 }
             }
-            Command::Shares {
-                path,
-                searchterm,
-                recursive,
-            } => {
-                match self.rpc.shares.query(path, searchterm, recursive) {
+            Command::Shares(query) => {
+                match self
+                    .rpc
+                    .shares
+                    .query(query.path, query.searchterm, query.recursive)
+                {
                     Ok(response_iterator) => {
                         for res in response_iterator {
                             if self
@@ -668,11 +604,11 @@ impl Hdp {
             }
             Command::Download { path, peer_name } => {
                 // Check if entry is a file or dir
-                let ls_request = Request::Ls {
+                let ls_request = Request::Ls(IndexQuery {
                     path: Some(path),
                     searchterm: None,
                     recursive: true,
-                };
+                });
                 // let mut cache = self.ls_cache.lock().await;
                 //
                 // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
@@ -734,20 +670,76 @@ impl Hdp {
                     }
                 }
             }
+            Command::Read(read_query, peer_name) => {
+                // DO the request, then:
+                //             let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] =
+                //                 [0; DOWNLOAD_BLOCK_SIZE];
+                //             let mut bytes_read: u64 = 0;
+                //             let mut total_bytes_read = 0;
+                //             let mut speedometer =
+                //                 Speedometer::new(Duration::from_secs(5));
+                //             // TODO handle errors here
+                //             while let Ok(Some(n)) = recv.read(&mut buf).await {
+                //                 debug!("Read {} bytes", n);
+                //                 speedometer.entry(n);
+                //                 bytes_read += n as u64;
+                //                 total_bytes_read += n as u64;
+                //
+                //                 // TODO include buf[..n] in the response
+                //                 if response_tx
+                //                     .send(UiServerMessage::Response {
+                //                         id,
+                //                         response: Ok(UiResponse::Read(
+                //                             ReadResponse {
+                //                                 path: path.clone(),
+                //                                 bytes_read,
+                //                                 total_bytes_read,
+                //                                 speed: speedometer.measure().unwrap(),
+                //                             },
+                //                             // buf[..n].to_vec(),
+                //                         )),
+                //                     })
+                //                     .is_err()
+                //                 {
+                //                     warn!("Response channel closed");
+                //                     break;
+                //                 };
+                //             }
+                //             // Terminate with an endresponse
+                //             if response_tx
+                //                 .send(UiServerMessage::Response {
+                //                     id,
+                //                     response: Ok(UiResponse::EndResponse),
+                //                 })
+                //                 .is_err()
+                //             {
+                //                 warn!("Response channel closed");
+                //             }
+                //         }
+                //     }
+                // });
+            }
         };
         Ok(())
     }
 
     /// Turn a single request into potentially a set of requests to all peers
-    async fn expand_request(&self, request: Request, name: String) -> Vec<(Request, String)> {
-        if name.is_empty() {
-            let peers = self.peers.lock().await;
-            peers
-                .keys()
-                .map(|peer_name| (request.clone(), peer_name.to_string()))
-                .collect()
-        } else {
-            vec![(request, name)]
+    async fn expand_request(
+        &self,
+        query: IndexQuery,
+        name_option: Option<String>,
+    ) -> Vec<(Request, String)> {
+        match name_option {
+            Some(name) => {
+                vec![(Request::Ls(query), name)]
+            }
+            None => {
+                let peers = self.peers.lock().await;
+                peers
+                    .keys()
+                    .map(|peer_name| (Request::Ls(query.clone()), peer_name.to_string()))
+                    .collect()
+            }
         }
     }
 

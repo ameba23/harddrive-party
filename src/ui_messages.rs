@@ -1,6 +1,6 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::wire_messages::{LsResponse, Request};
+use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use thiserror::Error;
@@ -17,16 +17,14 @@ pub struct UiClientMessage {
 pub enum Command {
     /// Directly connected to a peer with the given socketaddr (temporary)
     Connect(SocketAddr),
-    /// Issue a request
-    Request(Request, String),
+    /// Query peers' files
+    Ls(IndexQuery, Option<String>),
+    /// Read a portion a of a file
+    Read(ReadQuery, String),
     /// Download a file or dir
     Download { path: String, peer_name: String },
     /// Query our own shares
-    Shares {
-        path: Option<String>,
-        searchterm: Option<String>,
-        recursive: bool,
-    },
+    Shares(IndexQuery),
     /// Shutdown gracefully
     Close,
 }
@@ -57,7 +55,8 @@ pub struct UploadInfo {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiResponse {
-    Read(ReadResponse),
+    Download(DownloadResponse),
+    Read(Vec<u8>),
     Ls(LsResponse, String),
     Shares(LsResponse),
     Connect,
@@ -73,7 +72,7 @@ pub enum UiServerError {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct ReadResponse {
+pub struct DownloadResponse {
     pub path: String,
     pub bytes_read: u64,
     pub total_bytes_read: u64,

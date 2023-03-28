@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    ui_messages::{ReadResponse, UiResponse, UiServerMessage},
-    wire_messages::Request,
+    ui_messages::{DownloadResponse, UiResponse, UiServerMessage},
+    wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, WishList},
 };
 use anyhow::anyhow;
@@ -120,8 +120,8 @@ async fn download(
                         if response_tx
                             .send(UiServerMessage::Response {
                                 id,
-                                response: Ok(UiResponse::Read(
-                                    ReadResponse {
+                                response: Ok(UiResponse::Download(
+                                    DownloadResponse {
                                         path: download_request.path.clone(),
                                         bytes_read,
                                         total_bytes_read,
@@ -178,11 +178,11 @@ async fn make_read_request(
     download_request: &DownloadRequest,
     start: Option<u64>,
 ) -> anyhow::Result<RecvStream> {
-    let request = Request::Read {
+    let request = Request::Read(ReadQuery {
         path: download_request.path.clone(),
         start,
         end: None,
-    };
+    });
 
     let (mut send, recv) = connection.open_bi().await?;
     let buf = serialize(&request)?;

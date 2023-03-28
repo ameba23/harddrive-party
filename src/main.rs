@@ -3,7 +3,7 @@ use colored::Colorize;
 use harddrive_party::{
     hdp::Hdp,
     ui_messages::{Command, UiResponse},
-    wire_messages::{LsResponse, Request},
+    wire_messages::{IndexQuery, LsResponse, ReadQuery},
     ws::single_client_command,
 };
 use std::{net::SocketAddr, path::PathBuf};
@@ -99,13 +99,13 @@ async fn main() -> anyhow::Result<()> {
                     let (peer_name, peer_path) = path_to_peer_path(given_path);
                     (peer_name, Some(peer_path))
                 }
-                None => ("".to_string(), None),
+                None => (None, None),
             };
 
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Request(
-                    Request::Ls {
+                Command::Ls(
+                    IndexQuery {
                         path: peer_path,
                         searchterm,
                         recursive: recursive.unwrap_or(true),
@@ -153,13 +153,13 @@ async fn main() -> anyhow::Result<()> {
 
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Request(
-                    Request::Read {
+                Command::Read(
+                    ReadQuery {
                         path: peer_path,
                         start,
                         end,
                     },
-                    peer_name,
+                    peer_name.unwrap_or_default(),
                 ),
             )
             .await?;
@@ -190,11 +190,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Shares {
+                Command::Shares(IndexQuery {
                     path,
                     searchterm,
                     recursive: recursive.unwrap_or(true),
-                },
+                }),
             )
             .await?;
             while let Some(response) = responses.recv().await {
@@ -238,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
                 ui_addr,
                 Command::Download {
                     path: peer_path,
-                    peer_name,
+                    peer_name: peer_name.unwrap_or_default(),
                 },
             )
             .await?;
@@ -262,7 +262,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn path_to_peer_path(path: String) -> (String, String) {
+fn path_to_peer_path(path: String) -> (Option<String>, String) {
     let path_buf = PathBuf::from(path);
     if let Some(first_component) = path_buf.iter().next() {
         let peer_name = first_component.to_str().unwrap();
@@ -272,8 +272,8 @@ fn path_to_peer_path(path: String) -> (String, String) {
             .to_str()
             .unwrap()
             .to_string();
-        (peer_name.to_string(), remaining_path)
+        (Some(peer_name.to_string()), remaining_path)
     } else {
-        ("".to_string(), "".to_string())
+        (None, "".to_string())
     }
 }
