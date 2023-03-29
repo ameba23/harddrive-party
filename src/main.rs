@@ -20,26 +20,20 @@ struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 enum CliCommand {
-    /// Start the process
+    /// Start the process - all other commands will communicate with this instance
     Start {
         storage: String,
         share_dir: String,
         topic: String,
         ws_addr: Option<SocketAddr>,
     },
-    /// Connect to a peer
-    Connect { addr: SocketAddr },
-    /// Query remote peers
+    /// Download a file or dir
+    Download { path: String },
+    /// Query remote peers' file index
     Ls {
         path: Option<String>,
         searchterm: Option<String>,
         recursive: Option<bool>,
-    },
-    /// Download a single file
-    Read {
-        path: String,
-        start: Option<u64>,
-        end: Option<u64>,
     },
     /// Query your shared files
     Shares {
@@ -47,8 +41,14 @@ enum CliCommand {
         searchterm: Option<String>,
         recursive: Option<bool>,
     },
-    /// Download a file or dir
-    Download { path: String },
+    /// Read a single remote file directly to stdout
+    Read {
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+    },
+    /// Connect to a peer - directly (temporary)
+    Connect { addr: SocketAddr },
 }
 
 #[tokio::main]
@@ -147,42 +147,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::Read { path, start, end } => {
-            // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
-
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::Read(
-                    ReadQuery {
-                        path: peer_path,
-                        start,
-                        end,
-                    },
-                    peer_name.unwrap_or_default(),
-                ),
-            )
-            .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Read(read_response)) => {
-                        println!("{:?}", read_response);
-                        // println!("{}", std::str::from_utf8(&data).unwrap());
-                    }
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                        break;
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
-        }
         CliCommand::Shares {
             path,
             searchterm,
@@ -245,11 +209,49 @@ async fn main() -> anyhow::Result<()> {
 
             while let Some(response) = responses.recv().await {
                 match response {
+                    Ok(UiResponse::Download(download_response)) => {
+                        println!("Downloaded {}", download_response);
+                    }
                     Ok(UiResponse::EndResponse) => {
                         break;
                     }
                     Ok(some_other_response) => {
                         println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        CliCommand::Read { path, start, end } => {
+            // Split path into peername and path components
+            let (peer_name, peer_path) = path_to_peer_path(path);
+
+            let mut responses = harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::Read(
+                    ReadQuery {
+                        path: peer_path,
+                        start,
+                        end,
+                    },
+                    peer_name.unwrap_or_default(),
+                ),
+            )
+            .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::Read(data)) => {
+                        print!("{}", std::str::from_utf8(&data).unwrap());
+                    }
+                    Ok(UiResponse::EndResponse) => {
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                        break;
                     }
                     Err(e) => {
                         println!("Error from WS server {:?}", e);

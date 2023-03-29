@@ -1,9 +1,12 @@
+//! Topic name for connecting peers
+
 use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
 use rand::{thread_rng, Rng};
 
 const AAD: [u8; 0] = [];
 
-// This is the Blake2b hash of the string "harddrive-party"
+/// This is the Blake2b hash of the string "harddrive-party"
+/// it is hashed together with the topic name
 const CONTEXT: [u8; 32] = [
     201, 150, 87, 104, 91, 62, 47, 60, 2, 5, 31, 221, 42, 53, 91, 14, 115, 133, 124, 79, 115, 180,
     210, 81, 113, 98, 32, 171, 11, 228, 240, 2,

@@ -26,11 +26,15 @@ pub struct DiscoveredPeer {
 }
 
 // TODO allow dynamically adding / removing topics
+// TODO allow separate lists of announce topics and lookup topic
 /// Setup peer discovery
 pub async fn discover_peers(
     topics: Vec<Topic>,
+    // Whether to use mdns
     use_mdns: bool,
+    // Whether to use mqtt
     use_mqtt: bool,
+    public_key: [u8; 32],
 ) -> anyhow::Result<(
     PunchingUdpSocket,
     UnboundedReceiver<DiscoveredPeer>,
@@ -46,18 +50,19 @@ pub async fn discover_peers(
     let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
     let addr = socket.local_addr()?;
 
-    let id = &addr.to_string(); // TODO id should be derived from public key (probably)
+    // TODO this should maybe be hashed
+    let id = hex::encode(public_key);
 
     let mut rng = rand::thread_rng();
     let token: [u8; 32] = rng.gen();
     let single_topic = topics[0].clone();
 
     if use_mdns && is_private(my_local_ip) {
-        mdns_server(id, addr, single_topic, peers_tx.clone(), token).await?;
+        mdns_server(&id, addr, single_topic, peers_tx.clone(), token).await?;
     };
     if use_mqtt {
         mqtt_client(
-            id.to_string(),
+            id,
             topics,
             public_addr,
             nat_type,

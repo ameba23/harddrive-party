@@ -1,3 +1,5 @@
+//! Public address / NAT type discovery using STUN
+
 use anyhow::anyhow;
 use log::debug;
 use serde::{Deserialize, Serialize};

@@ -2,7 +2,7 @@
 
 use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{fmt, net::SocketAddr};
 use thiserror::Error;
 
 /// A command from the Ui
@@ -39,6 +39,8 @@ pub enum UiServerMessage {
     Event(UiEvent),
 }
 
+/// 'Events' are messages sent from the server which are not in response to a particular
+/// request - eg: to inform the UI that a peer connected or disconnected
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
     PeerConnected { name: String, is_self: bool },
@@ -77,4 +79,14 @@ pub struct DownloadResponse {
     pub bytes_read: u64,
     pub total_bytes_read: u64,
     pub speed: usize,
+}
+
+impl fmt::Display for DownloadResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} bytes read, {} bytes per second.",
+            self.path, self.bytes_read, self.speed
+        )
+    }
 }
