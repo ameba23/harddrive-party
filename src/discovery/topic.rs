@@ -12,7 +12,7 @@ const CONTEXT: [u8; 32] = [
     210, 81, 113, 98, 32, 171, 11, 228, 240, 2,
 ];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Topic {
     pub name: String,
     pub hash: [u8; 32],

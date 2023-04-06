@@ -1,5 +1,5 @@
 use self::{
-    hole_punch::PunchingUdpSocket, mdns::mdns_server, mqtt::mqtt_client, stun::stun_test,
+    hole_punch::PunchingUdpSocket, mdns::mdns_server, mqtt::MqttClient, stun::stun_test,
     topic::Topic,
 };
 use local_ip_address::local_ip;
@@ -61,7 +61,7 @@ pub async fn discover_peers(
         mdns_server(&id, addr, single_topic, peers_tx.clone(), token).await?;
     };
     if use_mqtt {
-        mqtt_client(
+        MqttClient::new(
             id,
             topics,
             public_addr,
