@@ -7,7 +7,8 @@ use log::{error, info, trace, warn};
 use mqtt::{
     control::variable_header::ConnectReturnCode,
     packet::{
-        ConnectPacket, PublishPacket, QoSWithPacketIdentifier, SubscribePacket, VariablePacket,
+        ConnectPacket, PublishPacket, QoSWithPacketIdentifier, SubscribePacket, UnsubscribePacket,
+        VariablePacket,
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
@@ -16,80 +17,29 @@ use std::{
     collections::HashMap,
     net::{SocketAddr, ToSocketAddrs},
     str,
-    sync::Arc,
     time::Duration,
 };
 use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
-    sync::{mpsc::UnboundedSender, Mutex},
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
 };
 
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
 
-#[derive(Hash, Eq, PartialEq)]
-struct MqttTopic {
-    // topic: Topic,
-    publish_packet: Option<Vec<u8>>,
-    subscribe: bool,
-}
-
-impl MqttTopic {
-    fn new(
-        topic: &Topic,
-        publish: bool,
-        subscribe: bool,
-        announce_address: &AnnounceAddress,
-        client_id: &str,
-    ) -> anyhow::Result<Self> {
-        let publish_packet = if publish {
-            Some(create_publish_packet(topic, announce_address, client_id)?)
-        } else {
-            None
-        };
-
-        Ok(Self {
-            // topic,
-            publish_packet,
-            subscribe,
-        })
-    }
-}
-
-fn create_publish_packet(
-    topic: &Topic,
-    announce_address: &AnnounceAddress,
-    client_id: &str,
-) -> anyhow::Result<Vec<u8>> {
-    let announce_cleartext = serialize(&announce_address)?;
-
-    // TODO do we need a unique topic for each peer?
-    let channel_name = TopicName::new(format!("hdp/{}/{}", topic.public_id, client_id))?;
-
-    let encrypted_announce = topic.encrypt(&announce_cleartext);
-    let mut publish_packet = PublishPacket::new(
-        channel_name,
-        QoSWithPacketIdentifier::Level0,
-        encrypted_announce,
-    );
-    publish_packet.set_retain(false);
-    let mut publish_packet_buf = Vec::new();
-    publish_packet.encode(&mut publish_packet_buf)?;
-    Ok(publish_packet_buf)
-}
-
 pub struct MqttClient {
-    topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
+    // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
     client_id: String,
     announce_address: AnnounceAddress,
+    topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
 }
 
 impl MqttClient {
     pub async fn new(
         client_id: String,
-        topics: Vec<Topic>,
+        initial_topics: Vec<Topic>,
         public_addr: SocketAddr,
         nat_type: NatType,
         our_token: SessionToken,
@@ -105,17 +55,21 @@ impl MqttClient {
         let client_id_clone = client_id.clone();
         let announce_address_clone = announce_address.clone();
 
+        let (topic_events_tx, topic_events_rx) = unbounded_channel();
+
         let mqtt_client = Self {
-            topics: Default::default(),
             announce_address: announce_address_clone,
             client_id: client_id_clone,
+            topic_events_tx,
         };
 
-        for topic in topics {
-            mqtt_client.add_topic(topic).await?;
+        for topic in initial_topics {
+            mqtt_client.add_topic(topic)?;
         }
 
-        mqtt_client.run(peers_tx, hole_puncher).await?;
+        mqtt_client
+            .run(peers_tx, hole_puncher, topic_events_rx)
+            .await?;
 
         Ok(mqtt_client)
     }
@@ -124,6 +78,7 @@ impl MqttClient {
         &self,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         hole_puncher: HolePuncher,
+        mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         let server_addr = "broker.hivemq.com:1883"
             .to_socket_addrs()?
@@ -159,53 +114,82 @@ impl MqttClient {
             return Err(anyhow!("Got unexpected packet - expecting Connack"));
         }
 
-        // Subscribe to given topics
-        {
-            let topics = self.topics.lock().await;
-            let channel_filters: Vec<(TopicFilter, QualityOfService)> = topics
-                .keys()
-                .map(|topic| {
-                    (
-                        TopicFilter::new(format!("hdp/{}/#", topic.public_id)).unwrap(),
-                        QualityOfService::Level0,
-                    )
-                })
-                .collect();
-            info!("Applying channel filters {:?} ...", channel_filters);
-            let sub = SubscribePacket::new(10, channel_filters); // TODO the first arg is the packet id
-            let mut buf = Vec::new();
-            sub.encode(&mut buf)?;
-            stream.write_all(&buf[..]).await?;
-        }
-
         // Check the response for the subscribe message
-        loop {
-            let packet = match VariablePacket::parse(&mut stream).await {
-                Ok(pk) => pk,
-                Err(err) => {
-                    error!("Error in receiving packet {:?}", err);
-                    continue;
-                }
-            };
-            trace!("PACKET {:?}", packet);
+        // loop {
+        //     let packet = match VariablePacket::parse(&mut stream).await {
+        //         Ok(pk) => pk,
+        //         Err(err) => {
+        //             error!("Error in receiving packet {:?}", err);
+        //             continue;
+        //         }
+        //     };
+        //     trace!("PACKET {:?}", packet);
+        //
+        //     if let VariablePacket::SubackPacket(ref ack) = packet {
+        //         if ack.packet_identifier() != 10 {
+        //             error!("SUBACK packet identifier did not match");
+        //         } else {
+        //             info!("Subscribed!");
+        //         }
+        //         break;
+        //     }
+        // }
 
-            if let VariablePacket::SubackPacket(ref ack) = packet {
-                if ack.packet_identifier() != 10 {
-                    error!("SUBACK packet identifier did not match");
-                } else {
-                    info!("Subscribed!");
-                }
-                break;
-            }
-        }
-
-        // Start a loop processing messages
-        let topics_mutex = self.topics.clone();
+        // Start a loop processing messages as a separate task
+        let mut topics = HashMap::<Topic, MqttTopic>::new();
         let client_id = self.client_id.clone();
         let announce_address = self.announce_address.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
+                    Some(topic_event) = topic_events_rx.recv() => {
+                        match topic_event {
+                            JoinOrLeaveEvent::Join(topic) => {
+                                if let Ok(mqtt_topic) =
+                                MqttTopic::new(&topic, true, true, &announce_address, &client_id) {
+                                    // Send a 'subscribe' message
+                                    if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
+                                        let channel_filters = vec![(topic_filter, QualityOfService::Level0)];
+                                        info!("Subscribing to channel {:?} ...", channel_filters);
+                                        let sub = SubscribePacket::new(10, channel_filters); // TODO the first arg is the packet id (u16)
+                                        let mut buf = Vec::new();
+                                        if sub.encode(&mut buf).is_ok() && stream.write_all(&buf[..]).await.is_err() {
+                                            warn!("Error writing subscribe packet");
+                                        };
+
+                                        // Publish our details to this topic
+                                        if let Some(publish_packet) = &mqtt_topic.publish_packet {
+                                            if let Err(e) = stream.write_all(&publish_packet[..]).await {
+                                                error!("Error when writing to mqtt broker {:?}", e);
+                                                break;
+                                            };
+                                        }
+
+                                        // Add the topic to our map so we keep sending publish
+                                        // packets
+                                        topics.insert(topic, mqtt_topic);
+                                    } else {
+                                        warn!("Could not create topic filter when subscribing to channel");
+                                    }
+                                };
+                            }
+                            JoinOrLeaveEvent::Leave(topic) => {
+                                // Publish an 'unsubscribe' message
+                                if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
+                                    let unsub = UnsubscribePacket::new(10, vec![topic_filter]); // TODO the first arg is the packet id
+                                    let mut buf = Vec::new();
+                                    if unsub.encode(&mut buf).is_ok() && stream.write_all(&buf[..]).await.is_err() {
+                                            warn!("Error writing unsubscribe packet");
+                                    };
+                                } else {
+                                    warn!("Could not create topic filter when unsubscribing to channel");
+                                };
+
+                                // Remove the topic from our map so we stop announcing ourselves
+                                topics.remove(&topic);
+                            }
+                        }
+                    }
                     Ok(packet) = VariablePacket::parse(&mut stream) => {
                         trace!("PACKET {:?}", packet);
 
@@ -220,7 +204,7 @@ impl MqttClient {
                                 }
                                 // Find the associated topic
                                 // TODO handle err
-                                let topics = topics_mutex.lock().await;
+                                // let topics = topics_mutex.lock().await;
 
                                 if let Some(associated_topic) = topics.keys().find(|&topic| {
                                     let tn = &publ.topic_name();
@@ -297,7 +281,6 @@ impl MqttClient {
                     () = tokio::time::sleep(Duration::from_secs(KEEP_ALIVE as u64 / 2)) => {
                         // TODO this should be run immediately as well as after delay
                         info!("Sending publish packets");
-                        let topics = topics_mutex.lock().await;
                         // For each topic in the set, send publish message
                         for (_topic, mqtt_topic) in topics.iter() {
                             if let Some(publish_packet) = &mqtt_topic.publish_packet {
@@ -314,19 +297,15 @@ impl MqttClient {
         Ok(())
     }
 
-    pub async fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
-        // TODO publish a subscribe message
-        let mqtt_topic =
-            MqttTopic::new(&topic, true, true, &self.announce_address, &self.client_id)?;
-        let mut topics = self.topics.lock().await;
-        topics.insert(topic, mqtt_topic);
+    pub fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
+        // TODO this could contain a oneshot with a result showing if subscribing was successful
+        self.topic_events_tx.send(JoinOrLeaveEvent::Join(topic))?;
         Ok(())
     }
 
-    pub async fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
-        // TODO publish an unsubscribe message
-        let mut topics = self.topics.lock().await;
-        topics.remove(&topic);
+    pub fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
+        // TODO this could contain a oneshot with a result showing if unsubscribing was successful
+        self.topic_events_tx.send(JoinOrLeaveEvent::Leave(topic))?;
         Ok(())
     }
 }
@@ -348,4 +327,61 @@ fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddre
         }
     }
     None
+}
+
+#[derive(Debug)]
+pub enum JoinOrLeaveEvent {
+    Join(Topic),
+    Leave(Topic),
+}
+
+#[derive(Hash, Eq, PartialEq)]
+struct MqttTopic {
+    // topic: Topic,
+    publish_packet: Option<Vec<u8>>,
+    subscribe: bool,
+}
+
+impl MqttTopic {
+    fn new(
+        topic: &Topic,
+        publish: bool,
+        subscribe: bool,
+        announce_address: &AnnounceAddress,
+        client_id: &str,
+    ) -> anyhow::Result<Self> {
+        let publish_packet = if publish {
+            Some(create_publish_packet(topic, announce_address, client_id)?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            // topic,
+            publish_packet,
+            subscribe,
+        })
+    }
+}
+
+fn create_publish_packet(
+    topic: &Topic,
+    announce_address: &AnnounceAddress,
+    client_id: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let announce_cleartext = serialize(&announce_address)?;
+
+    // TODO do we need a unique topic for each peer?
+    let channel_name = TopicName::new(format!("hdp/{}/{}", topic.public_id, client_id))?;
+
+    let encrypted_announce = topic.encrypt(&announce_cleartext);
+    let mut publish_packet = PublishPacket::new(
+        channel_name,
+        QoSWithPacketIdentifier::Level0,
+        encrypted_announce,
+    );
+    publish_packet.set_retain(false);
+    let mut publish_packet_buf = Vec::new();
+    publish_packet.encode(&mut publish_packet_buf)?;
+    Ok(publish_packet_buf)
 }
