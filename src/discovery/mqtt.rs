@@ -3,7 +3,7 @@
 use super::{hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, SessionToken};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
-use log::{error, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use mqtt::{
     control::variable_header::ConnectReturnCode,
     packet::{
@@ -22,7 +22,10 @@ use std::{
 use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
 };
 
 // Keep alive timeout in seconds
@@ -64,7 +67,7 @@ impl MqttClient {
         };
 
         for topic in initial_topics {
-            mqtt_client.add_topic(topic)?;
+            mqtt_client.add_topic(topic).await?;
         }
 
         mqtt_client
@@ -114,48 +117,38 @@ impl MqttClient {
             return Err(anyhow!("Got unexpected packet - expecting Connack"));
         }
 
-        // Check the response for the subscribe message
-        // loop {
-        //     let packet = match VariablePacket::parse(&mut stream).await {
-        //         Ok(pk) => pk,
-        //         Err(err) => {
-        //             error!("Error in receiving packet {:?}", err);
-        //             continue;
-        //         }
-        //     };
-        //     trace!("PACKET {:?}", packet);
-        //
-        //     if let VariablePacket::SubackPacket(ref ack) = packet {
-        //         if ack.packet_identifier() != 10 {
-        //             error!("SUBACK packet identifier did not match");
-        //         } else {
-        //             info!("Subscribed!");
-        //         }
-        //         break;
-        //     }
-        // }
-
         // Start a loop processing messages as a separate task
-        let mut topics = HashMap::<Topic, MqttTopic>::new();
         let client_id = self.client_id.clone();
         let announce_address = self.announce_address.clone();
         tokio::spawn(async move {
+            let mut topics = HashMap::<Topic, MqttTopic>::new();
+            let mut subscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
+            let mut unsubscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
+            let mut packet_id_count = 0;
+
             loop {
                 tokio::select! {
                     Some(topic_event) = topic_events_rx.recv() => {
                         match topic_event {
-                            JoinOrLeaveEvent::Join(topic) => {
+                            JoinOrLeaveEvent::Join(topic, res_tx) => {
                                 if let Ok(mqtt_topic) =
                                 MqttTopic::new(&topic, true, true, &announce_address, &client_id) {
                                     // Send a 'subscribe' message
                                     if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
                                         let channel_filters = vec![(topic_filter, QualityOfService::Level0)];
                                         info!("Subscribing to channel {:?} ...", channel_filters);
-                                        let sub = SubscribePacket::new(10, channel_filters); // TODO the first arg is the packet id (u16)
+                                        let sub = SubscribePacket::new(packet_id_count, channel_filters);
                                         let mut buf = Vec::new();
                                         if sub.encode(&mut buf).is_ok() && stream.write_all(&buf[..]).await.is_err() {
                                             warn!("Error writing subscribe packet");
+                                            if res_tx.send(false).is_err() {
+                                                error!("Channel closed");
+                                            };
+                                        } else {
+                                            subscribe_results.insert(packet_id_count, res_tx);
+                                            packet_id_count += 1;
                                         };
+
 
                                         // Publish our details to this topic
                                         if let Some(publish_packet) = &mqtt_topic.publish_packet {
@@ -170,19 +163,32 @@ impl MqttClient {
                                         topics.insert(topic, mqtt_topic);
                                     } else {
                                         warn!("Could not create topic filter when subscribing to channel");
+                                        if res_tx.send(false).is_err() {
+                                            error!("Channel closed");
+                                        };
                                     }
                                 };
                             }
-                            JoinOrLeaveEvent::Leave(topic) => {
+                            JoinOrLeaveEvent::Leave(topic, res_tx) => {
                                 // Publish an 'unsubscribe' message
                                 if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
-                                    let unsub = UnsubscribePacket::new(10, vec![topic_filter]); // TODO the first arg is the packet id
+                                    let unsub = UnsubscribePacket::new(packet_id_count, vec![topic_filter]);
                                     let mut buf = Vec::new();
                                     if unsub.encode(&mut buf).is_ok() && stream.write_all(&buf[..]).await.is_err() {
-                                            warn!("Error writing unsubscribe packet");
+                                        warn!("Error writing unsubscribe packet");
+                                        if res_tx.send(false).is_err() {
+                                            error!("Channel closed");
+                                        };
+                                    } else {
+                                        unsubscribe_results.insert(packet_id_count, res_tx);
+                                        packet_id_count += 1;
                                     };
+
                                 } else {
                                     warn!("Could not create topic filter when unsubscribing to channel");
+                                    if res_tx.send(false).is_err() {
+                                        error!("Channel closed");
+                                    };
                                 };
 
                                 // Remove the topic from our map so we stop announcing ourselves
@@ -258,6 +264,34 @@ impl MqttClient {
                                     }
                                 }
                             }
+                            VariablePacket::SubackPacket(suback_packet) => {
+                                debug!("Got suback packet");
+                                match subscribe_results.remove(&suback_packet.packet_identifier()) {
+                                    Some(res_tx) => {
+                                        // TODO suback_packet.subscribes() != SubscribeReturnCode::Failure
+                                        if res_tx.send(true).is_err() {
+                                            error!("Cannot ackknowledge joining topic - channel closed");
+                                        };
+                                    }
+                                    None => {
+                                        warn!("Got unexpected suback message");
+                                    }
+                                };
+                            },
+                            VariablePacket::UnsubackPacket(unsuback_packet) => {
+                                debug!("Got unsuback packet");
+                                match unsubscribe_results.remove(&unsuback_packet.packet_identifier()) {
+                                    Some(res_tx) => {
+                                        // TODO suback_packet.subscribes() != SubscribeReturnCode::Failure
+                                        if res_tx.send(true).is_err() {
+                                            error!("Cannot ackknowledge joining topic - channel closed");
+                                        };
+                                    }
+                                    None => {
+                                        warn!("Got unexpected suback message");
+                                    }
+                                };
+                            },
                             _ => {}
                         }
                     }
@@ -297,16 +331,29 @@ impl MqttClient {
         Ok(())
     }
 
-    pub fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
+    pub async fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
         // TODO this could contain a oneshot with a result showing if subscribing was successful
-        self.topic_events_tx.send(JoinOrLeaveEvent::Join(topic))?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.topic_events_tx
+            .send(JoinOrLeaveEvent::Join(topic, tx))?;
+        if let Ok(true) = rx.await {
+            Ok(())
+        } else {
+            Err(anyhow!("Failed to add topic"))
+        }
     }
 
-    pub fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
+    pub async fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
         // TODO this could contain a oneshot with a result showing if unsubscribing was successful
-        self.topic_events_tx.send(JoinOrLeaveEvent::Leave(topic))?;
-        Ok(())
+        let (tx, rx) = oneshot::channel();
+        self.topic_events_tx
+            .send(JoinOrLeaveEvent::Leave(topic, tx))?;
+
+        if let Ok(true) = rx.await {
+            Ok(())
+        } else {
+            Err(anyhow!("Failed to add topic"))
+        }
     }
 }
 
@@ -331,8 +378,8 @@ fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddre
 
 #[derive(Debug)]
 pub enum JoinOrLeaveEvent {
-    Join(Topic),
-    Leave(Topic),
+    Join(Topic, oneshot::Sender<bool>),
+    Leave(Topic, oneshot::Sender<bool>),
 }
 
 #[derive(Hash, Eq, PartialEq)]
