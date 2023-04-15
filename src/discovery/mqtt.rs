@@ -14,7 +14,7 @@ use mqtt::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{SocketAddr, ToSocketAddrs},
     str,
     time::Duration,
@@ -125,6 +125,7 @@ impl MqttClient {
             let mut subscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
             let mut unsubscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
             let mut packet_id_count = 0;
+            let mut announcements_already_seen = HashSet::<Vec<u8>>::new();
 
             loop {
                 tokio::select! {
@@ -208,6 +209,13 @@ impl MqttClient {
                                     info!("Found our own announce message");
                                     continue;
                                 }
+
+                                let payload = &publ.payload().to_vec();
+                                if !announcements_already_seen.insert(payload.to_vec()) {
+                                    debug!("Ignoring announce message already processed");
+                                    continue;
+                                }
+
                                 // Find the associated topic
                                 // TODO handle err
                                 // let topics = topics_mutex.lock().await;
