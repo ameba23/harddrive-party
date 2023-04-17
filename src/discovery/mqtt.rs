@@ -118,7 +118,6 @@ impl MqttClient {
         }
 
         // Start a loop processing messages as a separate task
-        let client_id = self.client_id.clone();
         let announce_address = self.announce_address.clone();
         tokio::spawn(async move {
             let mut topics = HashMap::<Topic, MqttTopic>::new();
@@ -133,9 +132,9 @@ impl MqttClient {
                         match topic_event {
                             JoinOrLeaveEvent::Join(topic, res_tx) => {
                                 if let Ok(mqtt_topic) =
-                                MqttTopic::new(&topic, true, true, &announce_address, &client_id) {
+                                MqttTopic::new(&topic, true, true, &announce_address) {
                                     // Send a 'subscribe' message
-                                    if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
+                                    if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}", topic.public_id)) {
                                         let channel_filters = vec![(topic_filter, QualityOfService::Level0)];
                                         info!("Subscribing to channel {:?} ...", channel_filters);
                                         let sub = SubscribePacket::new(packet_id_count, channel_filters);
@@ -166,7 +165,7 @@ impl MqttClient {
                             }
                             JoinOrLeaveEvent::Leave(topic, res_tx) => {
                                 // Publish an 'unsubscribe' message
-                                if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}/#", topic.public_id)) {
+                                if let Ok(topic_filter) = TopicFilter::new(format!("hdp/{}", topic.public_id)) {
                                     let unsub = UnsubscribePacket::new(packet_id_count, vec![topic_filter]);
                                     let mut buf = Vec::new();
                                     if unsub.encode(&mut buf).is_ok() && stream.write_all(&buf[..]).await.is_err() {
@@ -199,27 +198,29 @@ impl MqttClient {
                                 trace!("Received PINGRESP from broker ..");
                             }
                             VariablePacket::PublishPacket(ref publ) => {
-                                if publ.topic_name().ends_with(&client_id) {
-                                    info!("Found our own announce message");
-                                    continue;
-                                }
-
                                 let payload = &publ.payload().to_vec();
                                 if !announcements_already_seen.insert(payload.to_vec()) {
                                     debug!("Ignoring announce message already processed");
                                     continue;
                                 }
 
-                                // Find the associated topic
                                 // TODO handle err
-                                // let topics = topics_mutex.lock().await;
-
                                 if let Some((associated_topic, associated_mqtt_topic)) = topics.iter().find(|(topic, _mqtt_topic)| {
                                     let tn = &publ.topic_name();
                                     tn.contains(&topic.public_id)
                                 }) {
                                     if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
-                                        // TODO dont connect if we are both on the same IP - use mdns
+                                        if remote_peer_announce == announce_address {
+                                            debug!("Found our own announce message");
+                                            continue;
+                                        }
+
+                                        // Dont connect if we are both on the same IP - use mdns
+                                        if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
+                                            debug!("Found remote peer with the same public ip as ours - ignoring");
+                                            continue;
+                                        }
+
                                         // TODO there are more cases when we should not bother hole punching
                                         if remote_peer_announce.nat_type != NatType::Symmetric {
                                             let mut hole_puncher_clone = hole_puncher.clone();
@@ -402,10 +403,9 @@ impl MqttTopic {
         publish: bool,
         subscribe: bool,
         announce_address: &AnnounceAddress,
-        client_id: &str,
     ) -> anyhow::Result<Self> {
         let publish_packet = if publish {
-            Some(create_publish_packet(topic, announce_address, client_id)?)
+            Some(create_publish_packet(topic, announce_address)?)
         } else {
             None
         };
@@ -421,12 +421,11 @@ impl MqttTopic {
 fn create_publish_packet(
     topic: &Topic,
     announce_address: &AnnounceAddress,
-    client_id: &str,
 ) -> anyhow::Result<Vec<u8>> {
     let announce_cleartext = serialize(&announce_address)?;
 
     // TODO do we need a unique topic for each peer?
-    let channel_name = TopicName::new(format!("hdp/{}/{}", topic.public_id, client_id))?;
+    let channel_name = TopicName::new(format!("hdp/{}", topic.public_id))?;
 
     let encrypted_announce = topic.encrypt(&announce_cleartext);
     let mut publish_packet = PublishPacket::new(
