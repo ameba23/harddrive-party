@@ -56,10 +56,9 @@ pub async fn discover_peers(
 
     let mut rng = rand::thread_rng();
     let token: [u8; 32] = rng.gen();
-    let single_topic = topics[0].clone();
 
     if use_mdns && is_private(my_local_ip) {
-        mdns_server(&id, addr, single_topic, peers_tx.clone(), token).await?;
+        mdns_server(&id, addr, topics.clone(), peers_tx.clone(), token).await?;
     };
 
     if use_mqtt {

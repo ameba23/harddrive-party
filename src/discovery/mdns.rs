@@ -11,7 +11,6 @@ use tokio::sync::mpsc::UnboundedSender;
 
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 const TOPIC: &str = "topic";
-// const PORT: &str = "port";
 
 // pub struct MdnsServer {}
 //
@@ -29,19 +28,29 @@ const TOPIC: &str = "topic";
 pub async fn mdns_server(
     id: &str,
     addr: SocketAddr,
-    topic: Topic,
+    initial_topics: Vec<Topic>,
     peers_tx: UnboundedSender<DiscoveredPeer>,
     token: SessionToken,
 ) -> anyhow::Result<()> {
     let mdns = ServiceDaemon::new()?;
 
-    let capability = handshake_request(&topic, addr, token);
+    let capabilities: Vec<HandshakeRequest> = initial_topics
+        .iter()
+        .map(|topic| handshake_request(&topic, addr, token))
+        .collect();
 
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = std::collections::HashMap::new();
-    properties.insert(TOPIC.to_string(), hex::encode(capability));
-    // properties.insert(PORT.to_string(), addr.port().to_string());
+
+    let mut topic_count = 0;
+    for capability in capabilities {
+        properties.insert(
+            format!("{}{}", TOPIC.to_string(), topic_count),
+            hex::encode(capability),
+        );
+        topic_count += 1;
+    }
 
     if let IpAddr::V4(ipv4_addr) = addr.ip() {
         let my_service = ServiceInfo::new(
@@ -68,11 +77,11 @@ pub async fn mdns_server(
                     ServiceEvent::ServiceResolved(info) => {
                         debug!("Resolved a mdns service: {:?}", info);
                         match parse_peer_info(info) {
-                            Ok((their_addr, capability)) => {
+                            Ok((their_addr, capabilities)) => {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
-                                } else if let Ok(their_token) =
-                                    handshake_response(capability, &topic, their_addr)
+                                } else if let Some(their_token) =
+                                    try_topics(&initial_topics, capabilities, their_addr)
                                 {
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections
@@ -111,20 +120,23 @@ pub async fn mdns_server(
     }
 }
 
-fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, HandshakeRequest)> {
+fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<HandshakeRequest>)> {
     if info.get_type() != SERVICE_TYPE {
         return Err(anyhow!("Peer does not have expected service type"));
     }
 
     let properties = info.get_properties();
 
-    let capability = hex::decode(
-        properties
-            .get(&TOPIC.to_string())
-            .ok_or_else(|| anyhow!("Cannot get topic"))?,
-    )?
-    .try_into()
-    .map_err(|_| anyhow!("Cannot decode hex"))?;
+    let capabilities = properties
+        .values()
+        .filter_map(|capability_string| {
+            if let Ok(buf) = hex::decode(capability_string) {
+                buf.try_into().ok()
+            } else {
+                None
+            }
+        })
+        .collect();
 
     let their_ip = info
         .get_addresses()
@@ -133,11 +145,23 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, HandshakeRe
         .ok_or_else(|| anyhow!("Cannot get ip"))?;
 
     let their_port = info.get_port();
-    // let their_port = properties
-    //     .get(&PORT.to_string())
-    //     .ok_or_else(|| anyhow!("Cannot get port"))?
-    //     .parse::<u16>()?;
 
     let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
-    Ok((addr, capability))
+    Ok((addr, capabilities))
+}
+
+// Find a capability which matches one of our connected topics
+fn try_topics(
+    topics: &Vec<Topic>,
+    capabilities: Vec<HandshakeRequest>,
+    their_addr: SocketAddr,
+) -> Option<SessionToken> {
+    for capability in capabilities {
+        for topic in topics {
+            if let Ok(their_token) = handshake_response(capability, &topic, their_addr) {
+                return Some(their_token);
+            }
+        }
+    }
+    None
 }
