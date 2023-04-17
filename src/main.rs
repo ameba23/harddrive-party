@@ -65,25 +65,28 @@ async fn main() -> anyhow::Result<()> {
             topic,
         } => {
             let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
-            let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir], vec![&topic])
-                .await
-                .unwrap();
+            match Hdp::new(storage, vec![&share_dir], vec![&topic]).await {
+                Ok((mut hdp, recv)) => {
+                    println!(
+                        "{} listening for peers on {}",
+                        hdp.name.green(),
+                        hdp.endpoint.local_addr().unwrap().to_string().yellow(),
+                    );
 
-            println!(
-                "{} listening for peers on {}",
-                hdp.name.green(),
-                hdp.endpoint.local_addr().unwrap().to_string().yellow(),
-            );
+                    let command_tx = hdp.command_tx.clone();
 
-            let command_tx = hdp.command_tx.clone();
+                    tokio::spawn(async move {
+                        harddrive_party::ws::server(ws_addr, command_tx, recv)
+                            .await
+                            .unwrap();
+                    });
 
-            tokio::spawn(async move {
-                harddrive_party::ws::server(ws_addr, command_tx, recv)
-                    .await
-                    .unwrap();
-            });
-
-            hdp.run().await;
+                    hdp.run().await;
+                }
+                Err(error) => {
+                    println!("Error {}", error);
+                }
+            }
         }
         CliCommand::Connect { addr } => {
             harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;

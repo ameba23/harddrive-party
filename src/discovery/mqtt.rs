@@ -55,14 +55,13 @@ impl MqttClient {
             token: our_token,
         };
 
-        let client_id_clone = client_id.clone();
         let announce_address_clone = announce_address.clone();
 
         let (topic_events_tx, topic_events_rx) = unbounded_channel();
 
         let mqtt_client = Self {
             announce_address: announce_address_clone,
-            client_id: client_id_clone,
+            client_id,
             topic_events_tx,
         };
 

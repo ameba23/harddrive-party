@@ -11,7 +11,11 @@ pub type HandshakeRequest = [u8; 32 + 16 + 8];
 const AAD: [u8; 0] = [];
 
 /// Used only for MDNS announcements
-pub fn handshake_request(topic: &Topic, addr: SocketAddr, token: SessionToken) -> HandshakeRequest {
+pub fn handshake_request(
+    topic: &Topic,
+    addr: &SocketAddr,
+    token: &SessionToken,
+) -> HandshakeRequest {
     let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
     let mut rng = rand::thread_rng();
 
@@ -22,7 +26,7 @@ pub fn handshake_request(topic: &Topic, addr: SocketAddr, token: SessionToken) -
     let mut cipher = ChaCha20Poly1305::new(&key, &nonce, &AAD);
 
     // Encrypt the msg and append the tag at the end
-    cipher.encrypt(&token, &mut out[0..32], &mut tag);
+    cipher.encrypt(token, &mut out[0..32], &mut tag);
     out[32..32 + 16].copy_from_slice(&tag);
     out[32 + 16..].copy_from_slice(&nonce);
     out
@@ -69,7 +73,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
         let mut rng = rand::thread_rng();
         let token: [u8; 32] = rng.gen();
-        let request = handshake_request(&topic, addr, token);
+        let request = handshake_request(&topic, &addr, &token);
         let response = handshake_response(request, &topic, addr).unwrap();
         assert_eq!(token, response);
     }
@@ -80,7 +84,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
         let mut rng = rand::thread_rng();
         let token: [u8; 32] = rng.gen();
-        let request = handshake_request(&topic, addr, token);
+        let request = handshake_request(&topic, &addr, &token);
         let bad_topic = Topic::new("something else".to_string());
         assert!(handshake_response(request, &bad_topic, addr).is_err());
     }
