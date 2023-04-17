@@ -11,13 +11,23 @@ use tokio::sync::mpsc::UnboundedSender;
 
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 const TOPIC: &str = "topic";
-const PORT: &str = "port";
+// const PORT: &str = "port";
+
+// pub struct MdnsServer {}
+//
+// impl MdnsServer {
+//     pub fn new() {}
+//
+//     pub fn add_topic(topic: Topic) {}
+//
+//     pub fn remove_topic(topic: Topic) {}
+// }
 
 // TODO i dont think we need the port proptery
 // TODO allow multiple topics
 /// Announce ourself on mdns and discover other local peers
 pub async fn mdns_server(
-    name: &str,
+    id: &str,
     addr: SocketAddr,
     topic: Topic,
     peers_tx: UnboundedSender<DiscoveredPeer>,
@@ -31,12 +41,12 @@ pub async fn mdns_server(
     let host_name = "localhost"; // TODO
     let mut properties = std::collections::HashMap::new();
     properties.insert(TOPIC.to_string(), hex::encode(capability));
-    properties.insert(PORT.to_string(), addr.port().to_string());
+    // properties.insert(PORT.to_string(), addr.port().to_string());
 
     if let IpAddr::V4(ipv4_addr) = addr.ip() {
         let my_service = ServiceInfo::new(
             SERVICE_TYPE,
-            name,
+            &id[0..16],
             host_name,
             ipv4_addr,
             addr.port(), //+ 150, // TODO
@@ -122,11 +132,11 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, HandshakeRe
         .next()
         .ok_or_else(|| anyhow!("Cannot get ip"))?;
 
-    // let their_port = info.get_port();
-    let their_port = properties
-        .get(&PORT.to_string())
-        .ok_or_else(|| anyhow!("Cannot get port"))?
-        .parse::<u16>()?;
+    let their_port = info.get_port();
+    // let their_port = properties
+    //     .get(&PORT.to_string())
+    //     .ok_or_else(|| anyhow!("Cannot get port"))?
+    //     .parse::<u16>()?;
 
     let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
     Ok((addr, capability))

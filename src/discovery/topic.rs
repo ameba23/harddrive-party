@@ -31,7 +31,7 @@ impl Topic {
         let mut blake = Blake2b::new(32);
         blake.input(&hash);
         blake.result(&mut id_hash);
-        let public_id = to_hex_string(id_hash);
+        let public_id = hex::encode(id_hash);
 
         Self {
             name,
@@ -41,7 +41,7 @@ impl Topic {
     }
 
     pub fn as_hex(&self) -> String {
-        to_hex_string(self.hash)
+        hex::encode(self.hash)
     }
 
     /// Encrypt a message using this topic as the key
@@ -84,11 +84,6 @@ impl Topic {
             None
         }
     }
-}
-
-fn to_hex_string(bytes: [u8; 32]) -> String {
-    let strs: Vec<String> = bytes.iter().take(2).map(|b| format!("{:02x}", b)).collect();
-    strs.join("")
 }
 
 #[cfg(test)]

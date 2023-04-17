@@ -45,6 +45,7 @@ pub async fn discover_peers(
     let my_local_ip = local_ip()?;
     let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
 
+    // Get our public address and NAT type from a STUN server
     let (public_addr, nat_type) = stun_test(&raw_socket).await?;
 
     let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
@@ -60,6 +61,7 @@ pub async fn discover_peers(
     if use_mdns && is_private(my_local_ip) {
         mdns_server(&id, addr, single_topic, peers_tx.clone(), token).await?;
     };
+
     if use_mqtt {
         MqttClient::new(
             id,
@@ -72,6 +74,7 @@ pub async fn discover_peers(
         )
         .await?;
     };
+
     Ok((socket, peers_rx, token))
 }
 

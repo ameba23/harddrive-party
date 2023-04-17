@@ -7,8 +7,8 @@ use log::{debug, error, info, trace, warn};
 use mqtt::{
     control::variable_header::ConnectReturnCode,
     packet::{
-        ConnectPacket, PublishPacket, QoSWithPacketIdentifier, SubscribePacket, UnsubscribePacket,
-        VariablePacket,
+        ConnectPacket, PingreqPacket, PublishPacket, QoSWithPacketIdentifier, SubscribePacket,
+        UnsubscribePacket, VariablePacket,
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
@@ -66,13 +66,13 @@ impl MqttClient {
             topic_events_tx,
         };
 
-        for topic in initial_topics {
-            mqtt_client.add_topic(topic).await?;
-        }
-
         mqtt_client
             .run(peers_tx, hole_puncher, topic_events_rx)
             .await?;
+
+        for topic in initial_topics {
+            mqtt_client.add_topic(topic).await?;
+        }
 
         Ok(mqtt_client)
     }
@@ -105,7 +105,7 @@ impl MqttClient {
 
         let initial_response = VariablePacket::parse(&mut stream).await?;
         if let VariablePacket::ConnackPacket(connack) = initial_response {
-            trace!("CONNACK {:?}", connack);
+            debug!("CONNACK {:?}", connack);
 
             if connack.connect_return_code() != ConnectReturnCode::ConnectionAccepted {
                 return Err(anyhow!(
@@ -122,9 +122,9 @@ impl MqttClient {
         let announce_address = self.announce_address.clone();
         tokio::spawn(async move {
             let mut topics = HashMap::<Topic, MqttTopic>::new();
-            let mut subscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
+            let mut subscribe_results = HashMap::<u16, (oneshot::Sender<bool>, Topic)>::new();
             let mut unsubscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
-            let mut packet_id_count = 0;
+            let mut packet_id_count = 10;
             let mut announcements_already_seen = HashSet::<Vec<u8>>::new();
 
             loop {
@@ -146,18 +146,12 @@ impl MqttClient {
                                                 error!("Channel closed");
                                             };
                                         } else {
-                                            subscribe_results.insert(packet_id_count, res_tx);
+                                            debug!("Subscribed, waiting for ack");
+                                            subscribe_results.insert(packet_id_count, (res_tx, topic.clone()));
                                             packet_id_count += 1;
                                         };
 
 
-                                        // Publish our details to this topic
-                                        if let Some(publish_packet) = &mqtt_topic.publish_packet {
-                                            if let Err(e) = stream.write_all(&publish_packet[..]).await {
-                                                error!("Error when writing to mqtt broker {:?}", e);
-                                                break;
-                                            };
-                                        }
 
                                         // Add the topic to our map so we keep sending publish
                                         // packets
@@ -220,7 +214,7 @@ impl MqttClient {
                                 // TODO handle err
                                 // let topics = topics_mutex.lock().await;
 
-                                if let Some(associated_topic) = topics.keys().find(|&topic| {
+                                if let Some((associated_topic, associated_mqtt_topic)) = topics.iter().find(|(topic, _mqtt_topic)| {
                                     let tn = &publ.topic_name();
                                     tn.contains(&topic.public_id)
                                 }) {
@@ -269,17 +263,36 @@ impl MqttClient {
                                                 break;
                                             }
                                         }
+
+                                        // Say 'hello' by re-publishing our own announce message to
+                                        // this topic
+                                        if let Some(publish_packet) = &associated_mqtt_topic.publish_packet {
+                                            if let Err(e) = stream.write_all(&publish_packet[..]).await {
+                                                error!("Error when writing to mqtt broker {:?}", e);
+                                                break;
+                                            };
+                                        }
                                     }
                                 }
                             }
                             VariablePacket::SubackPacket(suback_packet) => {
                                 debug!("Got suback packet");
                                 match subscribe_results.remove(&suback_packet.packet_identifier()) {
-                                    Some(res_tx) => {
+                                    Some((res_tx, topic)) => {
                                         // TODO suback_packet.subscribes() != SubscribeReturnCode::Failure
                                         if res_tx.send(true).is_err() {
                                             error!("Cannot ackknowledge joining topic - channel closed");
                                         };
+
+                                        if let Some(mqtt_topic) = topics.get(&topic) {
+                                            // Publish our details to this topic
+                                            if let Some(publish_packet) = &mqtt_topic.publish_packet {
+                                                if let Err(e) = stream.write_all(&publish_packet[..]).await {
+                                                    error!("Error when writing to mqtt broker {:?}", e);
+                                                    break;
+                                                };
+                                            }
+                                        }
                                     }
                                     None => {
                                         warn!("Got unexpected suback message");
@@ -303,35 +316,21 @@ impl MqttClient {
                             _ => {}
                         }
                     }
-                    // // Send ping packets to keep the connection open
-                    // () = tokio::time::sleep(Duration::from_secs(KEEP_ALIVE as u64 / 2)) => {
-                    //     trace!("Sending PINGREQ to broker");
-                    //
-                    //     let pingreq_packet = PingreqPacket::new();
-                    //
-                    //     let mut pingreq_packet_buf = Vec::new();
-                    //     if pingreq_packet.encode(&mut pingreq_packet_buf).is_err() {
-                    //         error!("Cannot encode MQTT ping packet");
-                    //         break;
-                    //     };
-                    //     if stream.write_all(&pingreq_packet_buf).await.is_err() {
-                    //         error!("Cannot write MQTT ping packet");
-                    //         // break;
-                    //     };
-                    // }
-                    // Send publish packets
+                    // Send ping packets to keep the connection open
                     () = tokio::time::sleep(Duration::from_secs(KEEP_ALIVE as u64 / 2)) => {
-                        // TODO this should be run immediately as well as after delay
-                        info!("Sending publish packets");
-                        // For each topic in the set, send publish message
-                        for (_topic, mqtt_topic) in topics.iter() {
-                            if let Some(publish_packet) = &mqtt_topic.publish_packet {
-                                if let Err(e) = stream.write_all(&publish_packet[..]).await {
-                                    error!("Error when writing to mqtt broker {:?}", e);
-                                    break;
-                                };
-                            }
-                        }
+                        trace!("Sending PINGREQ to broker");
+
+                        let pingreq_packet = PingreqPacket::new();
+
+                        let mut pingreq_packet_buf = Vec::new();
+                        if pingreq_packet.encode(&mut pingreq_packet_buf).is_err() {
+                            error!("Cannot encode MQTT ping packet");
+                            break;
+                        };
+                        if stream.write_all(&pingreq_packet_buf).await.is_err() {
+                            error!("Cannot write MQTT ping packet");
+                            // break;
+                        };
                     }
                 }
             }
