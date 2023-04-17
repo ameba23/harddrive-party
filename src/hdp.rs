@@ -1,7 +1,7 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{discover_peers, topic::Topic, DiscoveredPeer, SessionToken, TOKEN_LENGTH},
+    discovery::{topic::Topic, PeerDiscovery, SessionToken, TOKEN_LENGTH},
     peer::Peer,
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
@@ -56,10 +56,8 @@ pub struct Hdp {
     command_rx: UnboundedReceiver<UiClientMessage>,
     /// Channel for responses to the UI
     response_tx: UnboundedSender<UiServerMessage>,
-    /// Channel for discovered peers
-    peers_rx: UnboundedReceiver<DiscoveredPeer>,
-    /// Session token
-    token: SessionToken,
+    /// Peer discovery
+    peer_discovery: PeerDiscovery,
     /// Download directory
     download_dir: PathBuf,
     /// Cache for remote peer's file index
@@ -74,7 +72,7 @@ impl Hdp {
     pub async fn new(
         storage: impl AsRef<Path>,
         sharedirs: Vec<&str>,
-        topic_names: Vec<&str>,
+        initial_topic_names: Vec<String>,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = unbounded_channel();
@@ -119,13 +117,14 @@ impl Hdp {
             },
         );
 
-        let topics = topic_names
+        let topics = initial_topic_names
             .iter()
             .map(|name| Topic::new(name.to_string()))
             .collect();
 
         // Setup peer discovery
-        let (socket, peers_rx, token) = discover_peers(topics, true, true, pk_hash).await?;
+        // let (socket, peers_rx, token) = discover_peers(topics, true, true, pk_hash).await?;
+        let (socket, peer_discovery) = PeerDiscovery::new(topics, true, true, pk_hash).await?;
 
         // Create QUIC endpoint
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
@@ -141,8 +140,7 @@ impl Hdp {
                 command_tx,
                 command_rx,
                 response_tx,
-                peers_rx,
-                token,
+                peer_discovery,
                 download_dir,
                 // public_key,
                 name,
@@ -166,7 +164,7 @@ impl Hdp {
                         break;
                     };
                 }
-                Some(peer) = self.peers_rx.recv() => {
+                Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {}", peer.addr);
                     if self.connect_to_peer(peer.addr, Some(peer.token)).await.is_err() {
                         warn!("Cannot connect to discovered peer");
@@ -189,7 +187,7 @@ impl Hdp {
         let response_tx = self.response_tx.clone();
 
         let peers_clone = self.peers.clone();
-        let our_token = self.token;
+        let our_token = self.peer_discovery.session_token;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
@@ -387,6 +385,68 @@ impl Hdp {
     ) -> Result<(), HandleUiCommandError> {
         let id = ui_client_message.id;
         match ui_client_message.command {
+            Command::Join(topic_name) => {
+                let topic = Topic::new(topic_name);
+                match self.peer_discovery.join_topic(topic).await {
+                    Ok(()) => {
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        warn!("Error when joining topic {}", error);
+                        // Respond with an error
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::JoinOrLeaveError),
+                            })
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                }
+            }
+            Command::Leave(topic_name) => {
+                let topic = Topic::new(topic_name);
+                match self.peer_discovery.leave_topic(topic).await {
+                    Ok(()) => {
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        warn!("Error when leaving topic {}", error);
+                        // Respond with an error
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::JoinOrLeaveError),
+                            })
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                }
+            }
             Command::Close => {
                 // TODO tidy up peer discovery / active transfers
                 self.endpoint.wait_idle().await;

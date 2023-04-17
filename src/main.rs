@@ -24,9 +24,13 @@ enum CliCommand {
     Start {
         storage: String,
         share_dir: String,
-        topic: String,
         ws_addr: Option<SocketAddr>,
+        topic: Option<String>,
     },
+    /// Join a given topic name
+    Join { topic: String },
+    /// Leave a given topic name
+    Leave { topic: String },
     /// Download a file or dir
     Download { path: String },
     /// Query remote peers' file index
@@ -65,7 +69,13 @@ async fn main() -> anyhow::Result<()> {
             topic,
         } => {
             let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
-            match Hdp::new(storage, vec![&share_dir], vec![&topic]).await {
+
+            let mut initial_topics = Vec::new();
+            if let Some(t) = topic {
+                initial_topics.push(t);
+            }
+
+            match Hdp::new(storage, vec![&share_dir], initial_topics).await {
                 Ok((mut hdp, recv)) => {
                     println!(
                         "{} listening for peers on {}",
@@ -87,6 +97,13 @@ async fn main() -> anyhow::Result<()> {
                     println!("Error {}", error);
                 }
             }
+        }
+        CliCommand::Join { topic } => {
+            harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic)).await?;
+            println!("Done joining topic");
+        }
+        CliCommand::Leave { topic } => {
+            harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic)).await?;
         }
         CliCommand::Connect { addr } => {
             harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;

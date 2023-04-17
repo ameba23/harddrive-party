@@ -337,6 +337,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<Handsha
 }
 
 // Find a capability which matches one of our connected topics
+// TODO return also the associated topic
 fn try_topics(
     topics: &HashSet<Topic>,
     capabilities: Vec<HandshakeRequest>,

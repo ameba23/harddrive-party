@@ -15,6 +15,10 @@ pub struct UiClientMessage {
 /// A command from the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
+    /// Join a given topic name
+    Join(String),
+    /// Leave a given topic name
+    Leave(String),
     /// Directly connected to a peer with the given socketaddr (temporary)
     Connect(SocketAddr),
     /// Query peers' files
@@ -71,6 +75,8 @@ pub enum UiServerError {
     ConnectionError,
     #[error("Request error")]
     RequestError, // TODO
+    #[error("Error when joining or leaving")]
+    JoinOrLeaveError,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
