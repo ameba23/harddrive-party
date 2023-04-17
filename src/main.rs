@@ -25,6 +25,7 @@ enum CliCommand {
         storage: String,
         share_dir: String,
         ws_addr: Option<SocketAddr>,
+        #[arg(short, long)]
         topic: Option<String>,
     },
     /// Join a given topic name
