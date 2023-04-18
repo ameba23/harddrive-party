@@ -155,7 +155,7 @@ pub struct WsClient {
 
 impl WsClient {
     pub async fn new(server_addr: String) -> anyhow::Result<WsClient> {
-        let (ws_stream, _) = connect_async(server_addr).await.expect("Failed to connect");
+        let (ws_stream, _) = connect_async(server_addr).await?;
         debug!("WebSocket handshake has been successfully completed");
 
         let (write, read) = ws_stream.split();
@@ -248,6 +248,10 @@ fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
                         true
                     }
                 })
+            }
+            UiEvent::ConnectedTopics(..) => {
+                cache.retain(|event| !matches!(event, UiEvent::ConnectedTopics(..)));
+                cache.push(ui_event.clone());
             }
         }
     }

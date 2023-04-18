@@ -6,16 +6,22 @@ use thiserror::Error;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
 pub enum Request {
-    Ls {
-        path: Option<String>,
-        searchterm: Option<String>,
-        recursive: bool,
-    },
-    Read {
-        path: String,
-        start: Option<u64>,
-        end: Option<u64>,
-    },
+    Ls(IndexQuery),
+    Read(ReadQuery),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+pub struct ReadQuery {
+    pub path: String,
+    pub start: Option<u64>,
+    pub end: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+pub struct IndexQuery {
+    pub path: Option<String>,
+    pub searchterm: Option<String>,
+    pub recursive: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

@@ -3,7 +3,7 @@ use colored::Colorize;
 use harddrive_party::{
     hdp::Hdp,
     ui_messages::{Command, UiResponse},
-    wire_messages::{LsResponse, Request},
+    wire_messages::{IndexQuery, LsResponse, ReadQuery},
     ws::single_client_command,
 };
 use std::{net::SocketAddr, path::PathBuf};
@@ -20,26 +20,25 @@ struct Cli {
 
 #[derive(Subcommand, Debug, Clone)]
 enum CliCommand {
-    /// Start the process
+    /// Start the process - all other commands will communicate with this instance
     Start {
         storage: String,
         share_dir: String,
-        topic: String,
         ws_addr: Option<SocketAddr>,
+        #[arg(short, long)]
+        topic: Option<String>,
     },
-    /// Connect to a peer
-    Connect { addr: SocketAddr },
-    /// Query remote peers
+    /// Join a given topic name
+    Join { topic: String },
+    /// Leave a given topic name
+    Leave { topic: String },
+    /// Download a file or dir
+    Download { path: String },
+    /// Query remote peers' file index
     Ls {
         path: Option<String>,
         searchterm: Option<String>,
         recursive: Option<bool>,
-    },
-    /// Download a single file
-    Read {
-        path: String,
-        start: Option<u64>,
-        end: Option<u64>,
     },
     /// Query your shared files
     Shares {
@@ -47,8 +46,14 @@ enum CliCommand {
         searchterm: Option<String>,
         recursive: Option<bool>,
     },
-    /// Download a file or dir
-    Download { path: String },
+    /// Read a single remote file directly to stdout
+    Read {
+        path: String,
+        start: Option<u64>,
+        end: Option<u64>,
+    },
+    /// Connect to a peer - directly (temporary)
+    Connect { addr: SocketAddr },
 }
 
 #[tokio::main]
@@ -65,25 +70,74 @@ async fn main() -> anyhow::Result<()> {
             topic,
         } => {
             let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
-            let (mut hdp, recv) = Hdp::new(storage, vec![&share_dir], vec![&topic])
-                .await
-                .unwrap();
 
-            println!(
-                "{} listening for peers on {}",
-                hdp.name.green(),
-                hdp.endpoint.local_addr().unwrap().to_string().yellow(),
-            );
+            let mut initial_topics = Vec::new();
+            if let Some(t) = topic {
+                initial_topics.push(t);
+            }
 
-            let command_tx = hdp.command_tx.clone();
+            match Hdp::new(storage, vec![&share_dir], initial_topics).await {
+                Ok((mut hdp, recv)) => {
+                    println!(
+                        "{} listening for peers on {}",
+                        hdp.name.green(),
+                        hdp.endpoint.local_addr().unwrap().to_string().yellow(),
+                    );
 
-            tokio::spawn(async move {
-                harddrive_party::ws::server(ws_addr, command_tx, recv)
-                    .await
-                    .unwrap();
-            });
+                    let command_tx = hdp.command_tx.clone();
 
-            hdp.run().await;
+                    tokio::spawn(async move {
+                        harddrive_party::ws::server(ws_addr, command_tx, recv)
+                            .await
+                            .unwrap();
+                    });
+
+                    hdp.run().await;
+                }
+                Err(error) => {
+                    println!("Error {}", error);
+                }
+            }
+        }
+        CliCommand::Join { topic } => {
+            let mut responses =
+                harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic.clone()))
+                    .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully joined topic {}", topic);
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when joining topic {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
+        CliCommand::Leave { topic } => {
+            let mut responses =
+                harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic.clone()))
+                    .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully left topic {}", topic);
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when leaving topic {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Connect { addr } => {
             harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;
@@ -99,13 +153,13 @@ async fn main() -> anyhow::Result<()> {
                     let (peer_name, peer_path) = path_to_peer_path(given_path);
                     (peer_name, Some(peer_path))
                 }
-                None => ("".to_string(), None),
+                None => (None, None),
             };
 
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Request(
-                    Request::Ls {
+                Command::Ls(
+                    IndexQuery {
                         path: peer_path,
                         searchterm,
                         recursive: recursive.unwrap_or(true),
@@ -147,42 +201,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::Read { path, start, end } => {
-            // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
-
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::Request(
-                    Request::Read {
-                        path: peer_path,
-                        start,
-                        end,
-                    },
-                    peer_name,
-                ),
-            )
-            .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Read(read_response)) => {
-                        println!("{:?}", read_response);
-                        // println!("{}", std::str::from_utf8(&data).unwrap());
-                    }
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                        break;
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
-        }
         CliCommand::Shares {
             path,
             searchterm,
@@ -190,11 +208,11 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
-                Command::Shares {
+                Command::Shares(IndexQuery {
                     path,
                     searchterm,
                     recursive: recursive.unwrap_or(true),
-                },
+                }),
             )
             .await?;
             while let Some(response) = responses.recv().await {
@@ -238,13 +256,16 @@ async fn main() -> anyhow::Result<()> {
                 ui_addr,
                 Command::Download {
                     path: peer_path,
-                    peer_name,
+                    peer_name: peer_name.unwrap_or_default(),
                 },
             )
             .await?;
 
             while let Some(response) = responses.recv().await {
                 match response {
+                    Ok(UiResponse::Download(download_response)) => {
+                        println!("Downloaded {}", download_response);
+                    }
                     Ok(UiResponse::EndResponse) => {
                         break;
                     }
@@ -258,11 +279,46 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        CliCommand::Read { path, start, end } => {
+            // Split path into peername and path components
+            let (peer_name, peer_path) = path_to_peer_path(path);
+
+            let mut responses = harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::Read(
+                    ReadQuery {
+                        path: peer_path,
+                        start,
+                        end,
+                    },
+                    peer_name.unwrap_or_default(),
+                ),
+            )
+            .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::Read(data)) => {
+                        print!("{}", std::str::from_utf8(&data).unwrap());
+                    }
+                    Ok(UiResponse::EndResponse) => {
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
     };
     Ok(())
 }
 
-fn path_to_peer_path(path: String) -> (String, String) {
+fn path_to_peer_path(path: String) -> (Option<String>, String) {
     let path_buf = PathBuf::from(path);
     if let Some(first_component) = path_buf.iter().next() {
         let peer_name = first_component.to_str().unwrap();
@@ -272,8 +328,8 @@ fn path_to_peer_path(path: String) -> (String, String) {
             .to_str()
             .unwrap()
             .to_string();
-        (peer_name.to_string(), remaining_path)
+        (Some(peer_name.to_string()), remaining_path)
     } else {
-        ("".to_string(), "".to_string())
+        (None, "".to_string())
     }
 }

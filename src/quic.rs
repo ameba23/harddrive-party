@@ -29,7 +29,6 @@ pub async fn make_server_endpoint(
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<Endpoint> {
     let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
-    // let mut endpoint = Endpoint::server(server_config, bind_addr)?;
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         Default::default(),
@@ -41,6 +40,21 @@ pub async fn make_server_endpoint(
     Ok(endpoint)
 }
 
+/// Given a Quic connection, get the TLS certificate
+pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+    let identity = conn
+        .peer_identity()
+        .ok_or_else(|| anyhow!("No peer certificate"))?;
+
+    let remote_cert = identity
+        .downcast::<Vec<Certificate>>()
+        .map_err(|_| anyhow!("No certificate"))?;
+    remote_cert
+        .first()
+        .ok_or_else(|| anyhow!("No certificate"))
+        .cloned()
+}
+
 /// Returns default server configuration along with its certificate.
 // #[allow(clippy::field_reassign_with_default)] // https://github.com/rust-lang/rust-clippy/issues/6527
 fn configure_server(
@@ -50,8 +64,6 @@ fn configure_server(
     let priv_key = rustls::PrivateKey(priv_key_der.clone());
     let cert_chain = vec![rustls::Certificate(cert_der)];
 
-    // let mut server_config = ServerConfig::with_single_cert(cert_chain, priv_key)?;
-
     let crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
         // .with_no_client_auth()
@@ -60,8 +72,6 @@ fn configure_server(
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
-    // let transport_config =
-    //     TransportConfig::default().keep_alive_interval(Some(Duration::from_secs(10)));
     Arc::get_mut(&mut server_config.transport)
         .ok_or_else(|| anyhow!("Cannot get transport config"))?
         .max_concurrent_uni_streams(0_u8.into())
@@ -70,17 +80,12 @@ fn configure_server(
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(SkipServerVerification::new())
-        // .with_no_client_auth();
         .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key_der));
 
     let client_config = ClientConfig::new(Arc::new(client_crypto));
-    // let client_config = configure_client();
 
     Ok((server_config, client_config))
 }
-
-/// Setup Quic client for outgoing connections to peers
-// fn configure_client() -> ClientConfig {}
 
 struct SkipServerVerification;
 
@@ -124,7 +129,7 @@ impl rustls::server::ClientCertVerifier for SkipClientVerification {
         _intermediates: &[rustls::Certificate],
         _now: std::time::SystemTime,
     ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
-        println!("verifying client");
+        debug!("verifying client");
         Ok(rustls::server::ClientCertVerified::assertion())
     }
 }
@@ -197,18 +202,4 @@ impl rustls::sign::Signer for OurSigner {
     fn scheme(&self) -> SignatureScheme {
         SignatureScheme::ED25519
     }
-}
-
-pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
-    let identity = conn
-        .peer_identity()
-        .ok_or_else(|| anyhow!("No peer certificate"))?;
-
-    let remote_cert = identity
-        .downcast::<Vec<Certificate>>()
-        .map_err(|_| anyhow!("No cert"))?;
-    remote_cert
-        .first()
-        .ok_or_else(|| anyhow!("No cert"))
-        .cloned()
 }

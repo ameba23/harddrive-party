@@ -25,6 +25,7 @@ Peers connect using QUIC, with client authentication using ed25519. A QUIC strea
 
 ## Roadmap
 
+- [ ] Extract public key from tls certificate (rather than just hashing the whole thing)
 - [x] Handshaking / prove knowledge of 'topic'
 - [ ] MQTT should not use `retain` but periodically publish messages
 - [ ] Support multiple topics / dynamically joining or leaving a topic
@@ -34,8 +35,9 @@ Peers connect using QUIC, with client authentication using ed25519. A QUIC strea
 - [x] Holepunching / peer discovery over internet
 - [ ] Holepunching for symmetric nat using birthday paradox. [See Tailscale nat traversal article](https://tailscale.com/blog/how-nat-traversal-works)
 - [x] Download files rather than just read them
-- [ ] Handle recursive directory download request
+- [x] Handle recursive directory download request
 - [ ] Queueing / resume downloads
+- [ ] Add suitable bounds to channels
 - [ ] Web UI (first attempt is here - using Leptos: https://gitlab.com/pegpeg/harddrive-party-web-ui )
 
 This is based on a previous NodeJS project - [pegpeg/hdp](https://gitlab.com/pegpeg/hdp) - but has many protocol-level changes.
