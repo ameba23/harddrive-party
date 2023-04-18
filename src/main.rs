@@ -100,11 +100,44 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Join { topic } => {
-            harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic)).await?;
-            println!("Done joining topic");
+            let mut responses =
+                harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic.clone()))
+                    .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully joined topic {}", topic);
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when joining topic {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Leave { topic } => {
-            harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic)).await?;
+            let mut responses =
+                harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic.clone()))
+                    .await?;
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully left topic {}", topic);
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when leaving topic {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Connect { addr } => {
             harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;
