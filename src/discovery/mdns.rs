@@ -28,7 +28,6 @@ impl MdnsServer {
     pub async fn new(
         id: &str,
         addr: SocketAddr,
-        initial_topics: Vec<Topic>,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         token: SessionToken,
     ) -> anyhow::Result<Self> {
@@ -36,10 +35,6 @@ impl MdnsServer {
         let mdns_server = Self { topic_events_tx };
 
         mdns_server.run(id, addr, token, peers_tx, topic_events_rx)?;
-
-        for topic in initial_topics {
-            mdns_server.add_topic(topic).await?;
-        }
 
         Ok(mdns_server)
     }

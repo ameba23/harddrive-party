@@ -123,7 +123,6 @@ impl Hdp {
             .collect();
 
         // Setup peer discovery
-        // let (socket, peers_rx, token) = discover_peers(topics, true, true, pk_hash).await?;
         let (socket, peer_discovery) = PeerDiscovery::new(topics, true, true, pk_hash).await?;
 
         // Create QUIC endpoint
@@ -153,6 +152,8 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
+        self.topics_updated();
+
         loop {
             select! {
                 Some(incoming_conn) = self.endpoint.accept() => {
@@ -399,6 +400,7 @@ impl Hdp {
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
                         }
+                        self.topics_updated();
                     }
                     Err(error) => {
                         warn!("Error when joining topic {}", error);
@@ -430,6 +432,7 @@ impl Hdp {
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
                         }
+                        self.topics_updated();
                     }
                     Err(error) => {
                         warn!("Error when leaving topic {}", error);
@@ -811,6 +814,25 @@ impl Hdp {
         send.finish().await?;
         debug!("message sent");
         Ok(recv)
+    }
+
+    fn topics_updated(&self) {
+        let connected_topics: Vec<String> = self
+            .peer_discovery
+            .connected_topics
+            .iter()
+            .map(|topic| topic.name.clone())
+            .collect();
+
+        if self
+            .response_tx
+            .send(UiServerMessage::Event(UiEvent::ConnectedTopics(
+                connected_topics,
+            )))
+            .is_err()
+        {
+            warn!("UI response channel closed");
+        }
     }
 }
 

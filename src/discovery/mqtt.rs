@@ -42,7 +42,6 @@ pub struct MqttClient {
 impl MqttClient {
     pub async fn new(
         client_id: String,
-        initial_topics: Vec<Topic>,
         public_addr: SocketAddr,
         nat_type: NatType,
         our_token: SessionToken,
@@ -68,10 +67,6 @@ impl MqttClient {
         mqtt_client
             .run(peers_tx, hole_puncher, topic_events_rx)
             .await?;
-
-        for topic in initial_topics {
-            mqtt_client.add_topic(topic).await?;
-        }
 
         Ok(mqtt_client)
     }

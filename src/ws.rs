@@ -249,6 +249,10 @@ fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
                     }
                 })
             }
+            UiEvent::ConnectedTopics(..) => {
+                cache.retain(|event| !matches!(event, UiEvent::ConnectedTopics(..)));
+                cache.push(ui_event.clone());
+            }
         }
     }
 }

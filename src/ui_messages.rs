@@ -50,6 +50,7 @@ pub enum UiEvent {
     PeerConnected { name: String, is_self: bool },
     PeerDisconnected { name: String },
     Uploaded(UploadInfo),
+    ConnectedTopics(Vec<String>),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

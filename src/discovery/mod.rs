@@ -5,7 +5,10 @@ use self::{
 use local_ip_address::local_ip;
 use quinn::AsyncUdpSocket;
 use rand::Rng;
-use std::net::{IpAddr, SocketAddr};
+use std::{
+    collections::HashSet,
+    net::{IpAddr, SocketAddr},
+};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 pub mod capability;
@@ -30,11 +33,12 @@ pub struct PeerDiscovery {
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
+    pub connected_topics: HashSet<Topic>,
 }
 
 impl PeerDiscovery {
     pub async fn new(
-        topics: Vec<Topic>,
+        initial_topics: Vec<Topic>,
         // Whether to use mdns
         use_mdns: bool,
         // Whether to use mqtt
@@ -60,7 +64,7 @@ impl PeerDiscovery {
         let session_token: [u8; 32] = rng.gen();
 
         let mdns_server = if use_mdns && is_private(my_local_ip) {
-            Some(MdnsServer::new(&id, addr, topics.clone(), peers_tx.clone(), session_token).await?)
+            Some(MdnsServer::new(&id, addr, peers_tx.clone(), session_token).await?)
         } else {
             None
         };
@@ -69,7 +73,6 @@ impl PeerDiscovery {
             Some(
                 MqttClient::new(
                     id,
-                    topics,
                     public_addr,
                     nat_type,
                     session_token,
@@ -82,36 +85,44 @@ impl PeerDiscovery {
             None
         };
 
-        Ok((
-            socket,
-            Self {
-                peers_rx,
-                session_token,
-                mdns_server,
-                mqtt_client,
-            },
-        ))
+        let mut peer_discovery = Self {
+            peers_rx,
+            session_token,
+            mdns_server,
+            mqtt_client,
+            connected_topics: Default::default(),
+        };
+
+        for topic in initial_topics {
+            peer_discovery.join_topic(topic).await?;
+        }
+
+        Ok((socket, peer_discovery))
     }
 
-    pub async fn join_topic(&self, topic: Topic) -> anyhow::Result<()> {
+    pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.add_topic(topic.clone()).await?;
         }
 
         if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.add_topic(topic).await?;
+            mqtt_client.add_topic(topic.clone()).await?;
         }
+
+        self.connected_topics.insert(topic);
         Ok(())
     }
 
-    pub async fn leave_topic(&self, topic: Topic) -> anyhow::Result<()> {
+    pub async fn leave_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.remove_topic(topic.clone()).await?;
         }
 
         if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.remove_topic(topic).await?;
+            mqtt_client.remove_topic(topic.clone()).await?;
         }
+
+        self.connected_topics.remove(&topic);
         Ok(())
     }
 }
