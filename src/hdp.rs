@@ -6,9 +6,12 @@ use crate::{
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
-    ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
+    ui_messages::{
+        Command, DownloadRequest, UiClientMessage, UiEvent, UiResponse, UiServerError,
+        UiServerMessage,
+    },
     wire_messages::{Entry, IndexQuery, LsResponse, ReadQuery, Request},
-    wishlist::{DownloadRequest, WishList},
+    wishlist::WishList,
 };
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
@@ -153,6 +156,7 @@ impl Hdp {
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
         self.topics_updated();
+        self.wishlist_updated();
 
         loop {
             select! {
@@ -832,6 +836,35 @@ impl Hdp {
             .is_err()
         {
             warn!("UI response channel closed");
+        }
+    }
+
+    fn wishlist_updated(&self) {
+        let requested: Vec<DownloadRequest> = match self.wishlist.requested() {
+            Ok(wishlist) => wishlist.take(10).collect(),
+            Err(error) => {
+                error!("Cannot get wishlist {}", error);
+                Vec::new()
+            }
+        };
+
+        let downloaded: Vec<DownloadRequest> = match self.wishlist.downloaded() {
+            Ok(downloaded_list) => downloaded_list.take(10).collect(),
+            Err(error) => {
+                error!("Cannot get downloaded list {}", error);
+                Vec::new()
+            }
+        };
+
+        if self
+            .response_tx
+            .send(UiServerMessage::Event(UiEvent::Wishlist {
+                requested,
+                downloaded,
+            }))
+            .is_err()
+        {
+            error!("UI response channel closed");
         }
     }
 }

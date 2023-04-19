@@ -1,7 +1,7 @@
 use crate::discovery::{
     capability::{handshake_request, handshake_response, HandshakeRequest},
     topic::Topic,
-    DiscoveredPeer, SessionToken,
+    DiscoveredPeer, JoinOrLeaveEvent, SessionToken,
 };
 use anyhow::anyhow;
 use log::{debug, error, warn};
@@ -14,8 +14,6 @@ use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot,
 };
-
-use super::mqtt::JoinOrLeaveEvent;
 
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 const TOPIC: &str = "topic";

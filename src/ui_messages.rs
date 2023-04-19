@@ -2,7 +2,11 @@
 
 use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr};
+use std::{
+    fmt,
+    net::SocketAddr,
+    time::{Duration, SystemTime},
+};
 use thiserror::Error;
 
 /// A command from the Ui
@@ -47,10 +51,52 @@ pub enum UiServerMessage {
 /// request - eg: to inform the UI that a peer connected or disconnected
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
-    PeerConnected { name: String, is_self: bool },
-    PeerDisconnected { name: String },
+    PeerConnected {
+        name: String,
+        is_self: bool,
+    },
+    PeerDisconnected {
+        name: String,
+    },
     Uploaded(UploadInfo),
     ConnectedTopics(Vec<String>),
+    Wishlist {
+        requested: Vec<DownloadRequest>,
+        downloaded: Vec<DownloadRequest>,
+    },
+}
+
+/// A requested file
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct DownloadRequest {
+    /// The path of the file on the remote
+    pub path: String,
+    /// The size in bytes
+    pub size: u64,
+    /// This id is not unique - it references which request this came from
+    /// requesting a directory will be split into requests for each file
+    pub request_id: u32,
+    /// Time when request made relative to unix epoch
+    pub timestamp: Duration,
+    /// Public key of peer holding file
+    pub peer_public_key: [u8; 32],
+}
+
+impl DownloadRequest {
+    pub fn new(path: String, size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
+        let system_time = SystemTime::now();
+        let timestamp = system_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards");
+        // let timestamp = seconds * 1000 + (nanos % 1_000_000_000) / 1_000_000;
+        Self {
+            path,
+            size,
+            request_id,
+            timestamp,
+            peer_public_key,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

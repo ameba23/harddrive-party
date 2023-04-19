@@ -1,6 +1,9 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 
-use super::{hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, SessionToken};
+use super::{
+    hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, JoinOrLeaveEvent,
+    SessionToken,
+};
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
 use log::{debug, error, info, trace, warn};
@@ -376,12 +379,6 @@ fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddre
         }
     }
     None
-}
-
-#[derive(Debug)]
-pub enum JoinOrLeaveEvent {
-    Join(Topic, oneshot::Sender<bool>),
-    Leave(Topic, oneshot::Sender<bool>),
 }
 
 #[derive(Hash, Eq, PartialEq)]

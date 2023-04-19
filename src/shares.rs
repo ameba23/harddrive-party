@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(test_entries.len(), 0);
 
         // Try resolving a path name
-        let (resolved, size) = shares
+        let (resolved, _size) = shares
             .resolve_path("test-data/df/aslkjdsal.asds".to_string())
             .unwrap();
         assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
