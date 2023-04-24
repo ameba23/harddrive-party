@@ -1,14 +1,44 @@
 use std::time::{Duration, SystemTime};
 
-use crate::ui_messages::DownloadRequest;
+use crate::ui_messages::UiDownloadRequest;
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
+use key_to_animal::key_to_name;
 
 type KeyValue = (Vec<u8>, Vec<u8>);
 
 /// A requested file
+#[derive(PartialEq, Debug, Clone)]
+pub struct DownloadRequest {
+    /// The path of the file on the remote
+    pub path: String,
+    /// The size in bytes
+    pub size: u64,
+    /// This id is not unique - it references which request this came from
+    /// requesting a directory will be split into requests for each file
+    pub request_id: u32,
+    /// Time when request made relative to unix epoch
+    pub timestamp: Duration,
+    /// Public key of peer holding file
+    pub peer_public_key: [u8; 32],
+}
 
 impl DownloadRequest {
+    pub fn new(path: String, size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
+        let system_time = SystemTime::now();
+        let timestamp = system_time
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards");
+        // let timestamp = seconds * 1000 + (nanos % 1_000_000_000) / 1_000_000;
+        Self {
+            path,
+            size,
+            request_id,
+            timestamp,
+            peer_public_key,
+        }
+    }
+
     /// Given a wishlist db entry, make a DownloadRequest
     /// key: <peer_public_key><timestamp><path> value: <request_id><size>
     pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
@@ -121,6 +151,16 @@ impl DownloadRequest {
             peer_public_key,
         })
     }
+
+    pub fn into_ui_download_request(self) -> UiDownloadRequest {
+        UiDownloadRequest {
+            path: self.path,
+            size: self.size,
+            request_id: self.request_id,
+            timestamp: self.timestamp,
+            peer_name: key_to_name(&self.peer_public_key),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -145,7 +185,7 @@ impl WishList {
     /// Get all items to send to UI
     pub fn requested(
         &self,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = DownloadRequest> + Send + '_>> {
+    ) -> anyhow::Result<Box<dyn Iterator<Item = UiDownloadRequest> + Send + '_>> {
         let iter = self
             .db_by_timestamp
             .iter()
@@ -158,8 +198,15 @@ impl WishList {
                             .scan_prefix(&by_peer_key)
                             .filter_map(|kv_result| match kv_result {
                                 Ok((key, value)) => {
-                                    DownloadRequest::from_db_key_value(key.to_vec(), value.to_vec())
-                                        .ok()
+                                    match DownloadRequest::from_db_key_value(
+                                        key.to_vec(),
+                                        value.to_vec(),
+                                    ) {
+                                        Ok(download_request) => {
+                                            Some(download_request.into_ui_download_request())
+                                        }
+                                        Err(_) => None,
+                                    }
                                 }
                                 Err(_) => None,
                             });
@@ -174,13 +221,19 @@ impl WishList {
 
     pub fn downloaded(
         &self,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = DownloadRequest> + Send + '_>> {
+    ) -> anyhow::Result<Box<dyn Iterator<Item = UiDownloadRequest> + Send + '_>> {
         let iter = self
             .db_downloaded
             .iter()
             .filter_map(|kv_result| match kv_result {
                 Ok((key, value)) => {
-                    DownloadRequest::from_downloaded_db_key_value(key.to_vec(), value.to_vec()).ok()
+                    match DownloadRequest::from_downloaded_db_key_value(
+                        key.to_vec(),
+                        value.to_vec(),
+                    ) {
+                        Ok(download_request) => Some(download_request.into_ui_download_request()),
+                        Err(_) => None,
+                    }
                 }
                 Err(_) => None,
             });
@@ -294,7 +347,7 @@ mod tests {
             assert_eq!(dl_req.request_id, item.request_id);
             // This will fail if we compare durations due to the missing nanoseconds
             assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
-            assert_eq!(dl_req.peer_public_key, item.peer_public_key);
+            assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
         }
 
         wishlist.completed(dl_req.clone()).unwrap();
@@ -307,7 +360,7 @@ mod tests {
             assert_eq!(dl_req.request_id, item.request_id);
             // This will fail if we compare durations due to the missing nanoseconds
             assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
-            assert_eq!(dl_req.peer_public_key, item.peer_public_key);
+            assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
         }
     }
 }

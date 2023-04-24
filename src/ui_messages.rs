@@ -2,11 +2,7 @@
 
 use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt,
-    net::SocketAddr,
-    time::{Duration, SystemTime},
-};
+use std::{fmt, net::SocketAddr, time::Duration};
 use thiserror::Error;
 
 /// A command from the Ui
@@ -61,14 +57,13 @@ pub enum UiEvent {
     Uploaded(UploadInfo),
     ConnectedTopics(Vec<String>),
     Wishlist {
-        requested: Vec<DownloadRequest>,
-        downloaded: Vec<DownloadRequest>,
+        requested: Vec<UiDownloadRequest>,
+        downloaded: Vec<UiDownloadRequest>,
     },
 }
 
-/// A requested file
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct DownloadRequest {
+pub struct UiDownloadRequest {
     /// The path of the file on the remote
     pub path: String,
     /// The size in bytes
@@ -78,25 +73,8 @@ pub struct DownloadRequest {
     pub request_id: u32,
     /// Time when request made relative to unix epoch
     pub timestamp: Duration,
-    /// Public key of peer holding file
-    pub peer_public_key: [u8; 32],
-}
-
-impl DownloadRequest {
-    pub fn new(path: String, size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
-        let system_time = SystemTime::now();
-        let timestamp = system_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards");
-        // let timestamp = seconds * 1000 + (nanos % 1_000_000_000) / 1_000_000;
-        Self {
-            path,
-            size,
-            request_id,
-            timestamp,
-            peer_public_key,
-        }
-    }
+    /// Name of peer who holds file
+    pub peer_name: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
