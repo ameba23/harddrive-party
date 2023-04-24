@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    ui_messages::{DownloadRequest, DownloadResponse, UiResponse, UiServerMessage},
+    ui_messages::{DownloadResponse, UiResponse, UiServerMessage},
     wire_messages::{ReadQuery, Request},
-    wishlist::WishList,
+    wishlist::{DownloadRequest, WishList},
 };
 use anyhow::anyhow;
 use bincode::serialize;

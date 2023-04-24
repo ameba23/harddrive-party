@@ -7,11 +7,11 @@ use crate::{
     rpc::Rpc,
     shares::Shares,
     ui_messages::{
-        Command, DownloadRequest, UiClientMessage, UiEvent, UiResponse, UiServerError,
+        Command, UiClientMessage, UiDownloadRequest, UiEvent, UiResponse, UiServerError,
         UiServerMessage,
     },
     wire_messages::{Entry, IndexQuery, LsResponse, ReadQuery, Request},
-    wishlist::WishList,
+    wishlist::{DownloadRequest, WishList},
 };
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
@@ -840,7 +840,7 @@ impl Hdp {
     }
 
     fn wishlist_updated(&self) {
-        let requested: Vec<DownloadRequest> = match self.wishlist.requested() {
+        let requested: Vec<UiDownloadRequest> = match self.wishlist.requested() {
             Ok(wishlist) => wishlist.take(10).collect(),
             Err(error) => {
                 error!("Cannot get wishlist {}", error);
@@ -848,7 +848,7 @@ impl Hdp {
             }
         };
 
-        let downloaded: Vec<DownloadRequest> = match self.wishlist.downloaded() {
+        let downloaded: Vec<UiDownloadRequest> = match self.wishlist.downloaded() {
             Ok(downloaded_list) => downloaded_list.take(10).collect(),
             Err(error) => {
                 error!("Cannot get downloaded list {}", error);
