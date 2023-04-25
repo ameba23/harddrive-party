@@ -210,11 +210,12 @@ async fn setup_download(file_path: PathBuf, size: u64) -> anyhow::Result<(File, 
 
     let start_offset = if existing_file_size > size {
         error!("Existing file is bigger than the remote source");
-        Some(existing_file_size)
+        // Treat as already downloaded
+        Some(size)
     } else {
         match existing_file_size {
             0 => None,
-            _ => Some(size - existing_file_size),
+            _ => Some(existing_file_size),
         }
     };
 
