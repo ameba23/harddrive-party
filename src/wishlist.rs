@@ -1,9 +1,12 @@
-use std::time::{Duration, SystemTime};
-
-use crate::ui_messages::UiDownloadRequest;
+use crate::ui_messages::{UiDownloadRequest, UiEvent, UiServerMessage};
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use key_to_animal::key_to_name;
+use std::time::{Duration, SystemTime};
+use tokio::sync::mpsc::UnboundedSender;
+
+/// How many entries to send when updating the UI
+const MAX_ENTRIES: usize = 10;
 
 type KeyValue = (Vec<u8>, Vec<u8>);
 
@@ -163,6 +166,7 @@ impl DownloadRequest {
     }
 }
 
+/// Keeps a record of requested and downloaded files
 #[derive(Clone)]
 pub struct WishList {
     /// key: <peer_public_key><timestamp><path> value: <request_id><size>
@@ -171,18 +175,23 @@ pub struct WishList {
     db_by_timestamp: sled::Tree,
     // key: <timestamp><request_id><path> value: <peer_public_key><size>
     db_downloaded: sled::Tree,
+    response_tx: UnboundedSender<UiServerMessage>,
 }
 
 impl WishList {
-    pub fn new(db: &sled::Db) -> anyhow::Result<Self> {
+    pub fn new(
+        db: &sled::Db,
+        response_tx: UnboundedSender<UiServerMessage>,
+    ) -> anyhow::Result<Self> {
         Ok(WishList {
             db_by_peer: db.open_tree(b"p")?,
             db_by_timestamp: db.open_tree(b"t")?,
             db_downloaded: db.open_tree(b"D")?,
+            response_tx,
         })
     }
 
-    /// Get all items to send to UI
+    /// Get all requested items to send to UI
     pub fn requested(
         &self,
     ) -> anyhow::Result<Box<dyn Iterator<Item = UiDownloadRequest> + Send + '_>> {
@@ -219,6 +228,7 @@ impl WishList {
         Ok(Box::new(iter))
     }
 
+    /// Get all downloaded items to send to UI
     pub fn downloaded(
         &self,
     ) -> anyhow::Result<Box<dyn Iterator<Item = UiDownloadRequest> + Send + '_>> {
@@ -241,7 +251,7 @@ impl WishList {
         Ok(Box::new(iter))
     }
 
-    // Subscribe to requests for a peer
+    /// Subscribe to requests for a particular peer
     pub fn requests_for_peer(
         &self,
         peer_public_key: &[u8; 32],
@@ -281,10 +291,12 @@ impl WishList {
         let ((key, value), (key2, value2)) = download_request.to_db_key_value();
         self.db_by_peer.insert(key, value)?;
         self.db_by_timestamp.insert(key2, value2)?;
+        self.updated()?;
         Ok(())
     }
 
-    /// Remove a specific completed item
+    /// Remove a specific completed item from the wishlist and
+    /// add it to the downloaded list
     pub fn completed(&self, download_request: DownloadRequest) -> anyhow::Result<()> {
         let ((key, _value), (key2, _value2)) = download_request.to_db_key_value();
         self.db_by_peer.remove(key)?;
@@ -293,6 +305,22 @@ impl WishList {
         // Add the item to 'downloaded' db
         let (key, value) = download_request.into_downloaded_db_key_value();
         self.db_downloaded.insert(key, value)?;
+        self.updated()?;
+        Ok(())
+    }
+
+    /// Send updated lists of requested / downloaded files to the UI
+    /// This is called when the program starts, and whenever a file
+    /// is requested or finished downloading
+    pub fn updated(&self) -> anyhow::Result<()> {
+        let requested: Vec<UiDownloadRequest> = self.requested()?.take(MAX_ENTRIES).collect();
+        let downloaded: Vec<UiDownloadRequest> = self.downloaded()?.take(MAX_ENTRIES).collect();
+
+        self.response_tx
+            .send(UiServerMessage::Event(UiEvent::Wishlist {
+                requested,
+                downloaded,
+            }))?;
         Ok(())
     }
 }
@@ -301,6 +329,7 @@ impl WishList {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn create_download_request() {
@@ -329,7 +358,8 @@ mod tests {
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir).expect("open");
-        let wishlist = WishList::new(&db).unwrap();
+        let (response_tx, _response_rx) = unbounded_channel();
+        let wishlist = WishList::new(&db, response_tx).unwrap();
 
         let dl_req = DownloadRequest::new(
             "books/book.pdf".to_string(),

@@ -263,7 +263,6 @@ fn kv_filter_map(
             .unwrap(),
     );
 
-    dbg!(name, is_dir);
     Some(Entry {
         name: name.to_string(),
         size,

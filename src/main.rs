@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
             ws_addr,
             topic,
         } => {
-            let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:5001".parse().unwrap());
+            let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:4001".parse().unwrap());
 
             let mut initial_topics = Vec::new();
             if let Some(t) = topic {

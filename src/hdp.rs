@@ -6,10 +6,7 @@ use crate::{
     quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
     rpc::Rpc,
     shares::Shares,
-    ui_messages::{
-        Command, UiClientMessage, UiDownloadRequest, UiEvent, UiResponse, UiServerError,
-        UiServerMessage,
-    },
+    ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
     wire_messages::{Entry, IndexQuery, LsResponse, ReadQuery, Request},
     wishlist::{DownloadRequest, WishList},
 };
@@ -67,7 +64,7 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
-    /// Requested files
+    /// Maintains lists of requested/downloaded files
     wishlist: WishList,
 }
 
@@ -132,7 +129,7 @@ impl Hdp {
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
 
         // Setup db for downloads requests
-        let wishlist = WishList::new(&db)?;
+        let wishlist = WishList::new(&db, response_tx.clone())?;
 
         Ok((
             Self {
@@ -156,7 +153,9 @@ impl Hdp {
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
         self.topics_updated();
-        self.wishlist_updated();
+        if let Err(err) = self.wishlist.updated() {
+            error!("Error when sending wishlist to UI {err}");
+        };
 
         loop {
             select! {
@@ -165,14 +164,14 @@ impl Hdp {
                 }
                 Some(command) = self.command_rx.recv() => {
                     if let Err(err) = self.handle_command(command).await {
-                        warn!("Closing connection {err}");
+                        error!("Closing connection {err}");
                         break;
                     };
                 }
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {}", peer.addr);
                     if self.connect_to_peer(peer.addr, Some(peer.token)).await.is_err() {
-                        warn!("Cannot connect to discovered peer");
+                        error!("Cannot connect to discovered peer");
                     };
                 }
             }
@@ -820,6 +819,7 @@ impl Hdp {
         Ok(recv)
     }
 
+    /// Called whenever the list of topics changes (user joins or leaves a topic) to inform the UI
     fn topics_updated(&self) {
         let connected_topics: Vec<String> = self
             .peer_discovery
@@ -838,37 +838,13 @@ impl Hdp {
             warn!("UI response channel closed");
         }
     }
-
-    fn wishlist_updated(&self) {
-        let requested: Vec<UiDownloadRequest> = match self.wishlist.requested() {
-            Ok(wishlist) => wishlist.take(10).collect(),
-            Err(error) => {
-                error!("Cannot get wishlist {}", error);
-                Vec::new()
-            }
-        };
-
-        let downloaded: Vec<UiDownloadRequest> = match self.wishlist.downloaded() {
-            Ok(downloaded_list) => downloaded_list.take(10).collect(),
-            Err(error) => {
-                error!("Cannot get downloaded list {}", error);
-                Vec::new()
-            }
-        };
-
-        if self
-            .response_tx
-            .send(UiServerMessage::Event(UiEvent::Wishlist {
-                requested,
-                downloaded,
-            }))
-            .is_err()
-        {
-            error!("UI response channel closed");
-        }
-    }
 }
 
+/// Given a TLS certificate, get a 32 byte ID and a human-readable
+/// name derived from it.
+// TODO the ID should actually just be the public key from the
+// certicate, but i cant figure out how to extract it so for now
+// just hash the whole thing
 fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
     let mut topic_hash = Blake2b::new(32);

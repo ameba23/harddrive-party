@@ -24,6 +24,7 @@ pub mod topic;
 pub const TOKEN_LENGTH: usize = 32;
 pub type SessionToken = [u8; 32];
 
+/// Details of a peer found through one of the discovery methods
 pub struct DiscoveredPeer {
     pub addr: SocketAddr,
     pub token: SessionToken,
