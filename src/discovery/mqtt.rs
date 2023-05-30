@@ -80,6 +80,7 @@ impl MqttClient {
         hole_puncher: HolePuncher,
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
+        // let server_addr = "public.mqtthq.com:1883"
         let server_addr = "broker.hivemq.com:1883"
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())

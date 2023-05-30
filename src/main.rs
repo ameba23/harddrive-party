@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use harddrive_party::{
     hdp::Hdp,
+    http::http_server,
     ui_messages::{Command, UiResponse},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
     ws::single_client_command,
@@ -90,6 +91,11 @@ async fn main() -> anyhow::Result<()> {
                         harddrive_party::ws::server(ws_addr, command_tx, recv)
                             .await
                             .unwrap();
+                    });
+
+                    // HTTP server
+                    tokio::spawn(async move {
+                        http_server().await;
                     });
 
                     hdp.run().await;

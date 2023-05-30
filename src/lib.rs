@@ -1,5 +1,6 @@
 pub mod discovery;
 pub mod hdp;
+pub mod http;
 pub mod peer;
 pub mod quic;
 pub mod rpc;
