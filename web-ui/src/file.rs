@@ -42,7 +42,7 @@ impl File {
 }
 
 #[component]
-pub fn File(cx: Scope, file: File) -> impl IntoView {
+pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>(cx).unwrap().0;
     let peer_details = use_context::<PeerName>(cx).unwrap().0;
     let (file_name, _set_file_name) = create_signal(cx, file.name);
@@ -91,9 +91,24 @@ pub fn File(cx: Scope, file: File) -> impl IntoView {
                 }
                 }
         }
+        {
+            // TODO fix this
+            move || {
+                if is_shared {
+                    view! { cx, <span><Preview file_path=&file_name.get() /></span> }
+                } else {
+                    view! { cx, <span /> }
+                }
+            }
+        }
         </li>
     }
 }
+
+// enum LocalStorage {
+//     Downloads,
+//     Shared(String),
+// }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DownloadStatus {
@@ -131,8 +146,7 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
                                         view! { cx, <span><DownloadingFile download_response size=file.size /></span> }
                                     }
                                     DownloadStatus::Downloaded => {
-                                        let escaped_path = urlencoding::encode(&request.path);
-                                        view! { cx, <span><a href={ format!("http://localhost:3030/downloads/{}", escaped_path)}>"view"</a></span> }
+                                        view! { cx, <span><Preview file_path=&request.path /></span> }
                                     }
                                     _ => {
                                         view! { cx, <span /> }
@@ -149,4 +163,11 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
             }
         }
     }
+}
+
+/// Allow a locally stored file to be opened / downloaded
+#[component]
+fn Preview<'a>(cx: Scope, file_path: &'a str) -> impl IntoView {
+    let escaped_path = urlencoding::encode(&file_path);
+    view! { cx, <span><a href={ format!("http://localhost:3030/downloads/{}", escaped_path)}>"view"</a></span> }
 }

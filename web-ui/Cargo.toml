@@ -1,9 +1,12 @@
 [package]
 name = "harddrive-party-web-ui"
+description = "Web UI for harddrive-party"
 version = "0.1.0"
 edition = "2021"
+license = "GPL-3.0-or-later"
 
 [dependencies]
+harddrive-party-shared = { path="../shared" }
 console_log = "0.2"
 log = "0.4"
 console_error_panic_hook = "0.1.7"

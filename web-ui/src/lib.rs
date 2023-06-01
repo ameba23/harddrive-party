@@ -1,14 +1,17 @@
 pub mod file;
 pub mod peer;
+pub mod shares;
 pub mod topics;
 pub mod transfers;
-pub mod ui_messages;
-pub mod wire_messages;
 pub mod ws;
+
+pub use harddrive_party_shared::ui_messages;
+pub use harddrive_party_shared::wire_messages;
 
 use crate::{
     file::{DownloadStatus, File},
     peer::{Peer, Peers},
+    shares::Shares,
     topics::Topics,
     transfers::Transfers,
     ui_messages::{Command, UiEvent},
@@ -385,27 +388,6 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                 </main>
             </Router>
         </div>
-    }
-}
-
-#[component]
-fn Shares(cx: Scope, shares: ReadSignal<Option<Peer>>) -> impl IntoView {
-    let selves = move || match shares.get() {
-        Some(shares) => vec![shares],
-        None => Vec::new(),
-    };
-
-    // TODO A form offerring to share another directory
-
-    view! { cx,
-            <h2 class="text-xl">"Shared files"</h2>
-            <ul class="list-disc list-inside">
-                <For
-                    each=selves
-                    key=|peer| format!("{}{}", peer.name, peer.files.len())
-                    view=move |cx, peer| view! { cx,  <Peer peer /> }
-                />
-            </ul>
     }
 }
 

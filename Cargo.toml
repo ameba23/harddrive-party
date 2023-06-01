@@ -1,5 +1,6 @@
-# [workspace]
-# members = ["harddrive-party-web-ui"]
+[workspace]
+members = [".", "shared", "web-ui"]
+# exclude = ["web-ui"]
 
 [package]
 name = "harddrive-party"
@@ -12,6 +13,7 @@ homepage = "https://gitlab.com/pegpeg"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
 
 [dependencies]
+harddrive-party-shared = { path="shared" }
 futures = "0.3.25"
 async-walkdir = "0.2.0"
 sled = "0.34.7"

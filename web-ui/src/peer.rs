@@ -59,7 +59,7 @@ pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
                 <For
                     each=files
                     key=|file| file.name.clone()
-                    view=move |cx, file: File| view! { cx,  <File file /> }
+                    view=move |cx, file: File| view! { cx,  <File file is_shared=peer.is_self/> }
                 />
         </ul>
         </li>
