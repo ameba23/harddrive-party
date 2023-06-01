@@ -38,7 +38,6 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CONFIG: &[u8; 1] = b"c";
-// const WISHLIST: &[u8; 1] = b"w";
 const CACHE_SIZE: usize = 256;
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
@@ -59,7 +58,7 @@ pub struct Hdp {
     /// Peer discovery
     peer_discovery: PeerDiscovery,
     /// Download directory
-    download_dir: PathBuf,
+    pub download_dir: PathBuf,
     /// Cache for remote peer's file index
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key

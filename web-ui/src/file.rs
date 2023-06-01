@@ -26,12 +26,16 @@ impl File {
         }
     }
 
-    pub fn from_download_request(cx: Scope, download_request: UiDownloadRequest) -> Self {
+    pub fn from_download_request(
+        cx: Scope,
+        download_request: UiDownloadRequest,
+        download_status: DownloadStatus,
+    ) -> Self {
         Self {
             name: download_request.path.clone(),
             size: download_request.size,
             is_dir: false,
-            download_status: create_rw_signal(cx, DownloadStatus::Requested),
+            download_status: create_rw_signal(cx, download_status),
             request: create_rw_signal(cx, Some(download_request)),
         }
     }
@@ -118,13 +122,17 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
             view! { cx,
                     <li>
                         { request.peer_name } " "
-                        <code>{ request.path }</code>
+                        <code>{ &request.path }</code>
                         " " { display_bytes(request.size) } " "
                         {
                             move || {
                                 match file.download_status.get() {
                                     DownloadStatus::Downloading(download_response) => {
                                         view! { cx, <span><DownloadingFile download_response size=file.size /></span> }
+                                    }
+                                    DownloadStatus::Downloaded => {
+                                        let escaped_path = urlencoding::encode(&request.path);
+                                        view! { cx, <span><a href={ format!("http://localhost:3030/downloads/{}", escaped_path)}>"view"</a></span> }
                                     }
                                     _ => {
                                         view! { cx, <span /> }

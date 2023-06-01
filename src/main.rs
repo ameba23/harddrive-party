@@ -93,9 +93,10 @@ async fn main() -> anyhow::Result<()> {
                             .unwrap();
                     });
 
+                    let download_dir = hdp.download_dir.clone();
                     // HTTP server
                     tokio::spawn(async move {
-                        http_server().await;
+                        http_server(download_dir).await;
                     });
 
                     hdp.run().await;

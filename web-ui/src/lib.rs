@@ -257,7 +257,11 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                     file.download_status.set(DownloadStatus::Requested);
                                     file.request.set(Some(request.clone()));
                                 })
-                                .or_insert(File::from_download_request(cx, request));
+                                .or_insert(File::from_download_request(
+                                    cx,
+                                    request,
+                                    DownloadStatus::Requested,
+                                ));
                         }
 
                         for request in downloaded_clone {
@@ -270,8 +274,11 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                     file.download_status.set(DownloadStatus::Downloaded);
                                     file.request.set(Some(request.clone()));
                                 })
-                                .or_insert(File::from_download_request(cx, request));
-                            // TODO
+                                .or_insert(File::from_download_request(
+                                    cx,
+                                    request,
+                                    DownloadStatus::Downloaded,
+                                ));
                         }
                     });
                     set_requested.update(|existing_requested| {
@@ -330,7 +337,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                             </li>
                             <li class="mr-2">
                                 <A href="shares" class={ ITEM_STYLE }>
-                                    "Shares"
+                                    "🖤 Shares"
                                     <span class={ NUMBER_LABEL }>
                                         { shared_files_size }
                                     </span>
@@ -338,7 +345,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                             </li>
                             <li class="mr-2" title={ move || { format!("{} connected peers", peers.get().len() ) } }>
                                 <A href="peers" class={ ITEM_STYLE }>
-                                    "Peers"
+                                    "👾 Peers"
                                     <span class={ NUMBER_LABEL }>
                                         {move || { peers.get().len() } }
                                     </span>
