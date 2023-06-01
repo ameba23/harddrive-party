@@ -5,7 +5,8 @@ pub mod peer;
 pub mod quic;
 pub mod rpc;
 pub mod shares;
-pub mod ui_messages;
-pub mod wire_messages;
 pub mod wishlist;
 pub mod ws;
+
+pub use harddrive_party_shared::ui_messages;
+pub use harddrive_party_shared::wire_messages;
