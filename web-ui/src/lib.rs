@@ -58,8 +58,10 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     };
     info!("location {}", location);
 
+    let (error_message, set_error_message) = create_signal(cx, HashSet::<AppError>::new());
+
     let ws_url = format!("ws://{}:4001", location);
-    let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url);
+    let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url, set_error_message).unwrap();
     let (requester, set_requester) = create_signal(cx, Requester::new(ws_service));
     let (peers, set_peers) = create_signal(cx, HashMap::<String, Peer>::new());
     let (shares, set_shares) = create_signal(cx, Option::<Peer>::None);
@@ -169,7 +171,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                                     }
                                                 }
                                             });
-                                            if let Some(peer) = shares.get() {
+                                            if let Some(peer) = shares.get_untracked() {
                                                 let peer_name = peer.name.clone();
                                                 set_files.update(|files| {
                                                     for entry in entries {
@@ -321,6 +323,18 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
         None => display_bytes(0),
     };
 
+    let error_message_display = move || {
+        view!(cx,
+            <For
+                each={move || error_message.get()}
+                key=|error_message| format!("{:?}", error_message)
+                view=move |cx, error_message| view! { cx,
+        <ErrorMessage message={format!("{:?}", error_message)} />
+                }
+            />
+        )
+    };
+
     view! { cx,
         <div id="root" class="container mx-auto font-serif">
             <Router>
@@ -361,6 +375,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                             </li>
                         </ul>
                     </div>
+                    { error_message_display }
                 </nav>
                 <main>
                     <Routes>
@@ -402,5 +417,33 @@ fn display_bytes(bytes: u64) -> String {
                 remove_zero_decimal: Some(true),
             }),
         ),
+    }
+}
+
+#[component]
+fn ErrorMessage(cx: Scope, message: String) -> impl IntoView {
+    view! { cx,
+    <div class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800" role="alert">
+      <div>
+        <span class="font-medium">" ⚠ "{ message }</span>
+      </div>
+    </div>
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+pub enum AppError {
+    WsConnection,
+}
+
+impl std::fmt::Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let err_msg = match self {
+            AppError::WsConnection => {
+                "Cannot connect to harddrive-party over websocket. Is harddrive party runnng?"
+            }
+        };
+
+        write!(f, "{}", err_msg)
     }
 }

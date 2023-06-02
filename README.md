@@ -25,6 +25,10 @@ Peers connect to each other using Quic, with client authentication using ed25519
 - `ls` - for querying the shared file index (with a sub-path, or search term)
 - `read` - for downloading a file, or portion of a file. 
 
+## Web front end
+
+There is a work-in-progress web front end build with [Leptos]() in [`./web-ui`](./web-ui)
+
 ## Roadmap
 
 - [ ] Extract public key from TLS certificate (rather than just hashing the whole thing)
@@ -41,6 +45,5 @@ Peers connect to each other using Quic, with client authentication using ed25519
 - [x] Handle recursive directory download request
 - [x] Queueing / resume downloads
 - [ ] Add suitable bounds to channels
-- [ ] Web UI (first attempt is here - using Leptos: https://gitlab.com/pegpeg/harddrive-party-web-ui )
 
 This is based on a previous NodeJS project - [pegpeg/hdp](https://gitlab.com/pegpeg/hdp) - but has many protocol-level changes.

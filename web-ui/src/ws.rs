@@ -1,14 +1,18 @@
-use crate::ui_messages::{Command, UiClientMessage, UiServerMessage};
+use crate::{
+    ui_messages::{Command, UiClientMessage, UiServerMessage},
+    AppError,
+};
 use bincode::{deserialize, serialize};
 use futures::{
-    channel::mpsc::{Receiver, Sender},
+    channel::mpsc::{channel, Receiver, Sender},
     SinkExt, StreamExt,
 };
+use leptos::*;
 use log::{debug, error, warn};
 use rand::{rngs::ThreadRng, Rng};
 use reqwasm::websocket::{futures::WebSocket, Message};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 use wasm_bindgen_futures::spawn_local;
@@ -20,14 +24,16 @@ pub struct WebsocketService {
 }
 
 impl WebsocketService {
-    pub fn new(url: &str) -> (Self, Receiver<UiServerMessage>) {
-        let ws = WebSocket::open(url).unwrap();
+    pub fn new(
+        url: &str,
+        set_error_message: WriteSignal<HashSet<AppError>>,
+    ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
+        let ws = WebSocket::open(url)?;
 
         let (mut write, mut read) = ws.split();
 
-        let (in_tx, mut in_rx) = futures::channel::mpsc::channel::<UiClientMessage>(1000);
-        // Result<UiResponse, UiServerError>
-        let (mut out_tx, out_rx) = futures::channel::mpsc::channel::<UiServerMessage>(1000);
+        let (in_tx, mut in_rx) = channel::<UiClientMessage>(1000);
+        let (mut out_tx, out_rx) = channel::<UiServerMessage>(1000);
 
         // Outgoing messages to the server
         spawn_local(async move {
@@ -54,20 +60,23 @@ impl WebsocketService {
                         warn!("Got unexpected text from websocket: {}", text);
                     }
                     Err(e) => {
-                        error!("ws: {:?}", e)
+                        error!("ws: {:?}", e);
+                        set_error_message.update(|error_messages| {
+                            error_messages.insert(AppError::WsConnection);
+                        });
                     }
                 }
             }
             debug!("WebSocket Closed");
         });
 
-        (
+        Ok((
             Self {
                 tx: in_tx,
                 last_event: Default::default(),
             },
             out_rx,
-        )
+        ))
     }
 }
 

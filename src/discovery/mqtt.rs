@@ -1,5 +1,4 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
-
 use super::{
     hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, JoinOrLeaveEvent,
     SessionToken,

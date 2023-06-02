@@ -1,3 +1,4 @@
+//! Peer discovery
 use self::{
     hole_punch::PunchingUdpSocket, mdns::MdnsServer, mqtt::MqttClient, stun::stun_test,
     topic::Topic,

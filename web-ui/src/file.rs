@@ -168,6 +168,13 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
 /// Allow a locally stored file to be opened / downloaded
 #[component]
 fn Preview<'a>(cx: Scope, file_path: &'a str) -> impl IntoView {
-    let escaped_path = urlencoding::encode(&file_path);
-    view! { cx, <span><a href={ format!("http://localhost:3030/downloads/{}", escaped_path)}>"view"</a></span> }
+    match document().url() {
+        Ok(url) => {
+            let escaped_path = urlencoding::encode(&file_path);
+            view! { cx, <span><a href={ format!("{}downloads/{}", url, escaped_path)} target="_blank">"view"</a></span> }
+        }
+        Err(_) => {
+            view! { cx, <span>"Cannot get URL"</span> }
+        }
+    }
 }
