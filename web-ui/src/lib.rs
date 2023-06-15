@@ -329,7 +329,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                 each={move || error_message.get()}
                 key=|error_message| format!("{:?}", error_message)
                 view=move |cx, error_message| view! { cx,
-        <ErrorMessage message={format!("{:?}", error_message)} />
+                    <ErrorMessage message={format!("{}", error_message)} />
                 }
             />
         )

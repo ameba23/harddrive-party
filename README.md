@@ -9,12 +9,17 @@ Currently **work-in-progress**.
 
 ## Design goals
 
-- Minimal initial setup - don't need to wait long for files to index
+- Minimal initial setup - don't need to wait long for shared files to index (no hashing)
 - Practical for transferring large media collections
 - Remote control via ws / http interface. Can be run on an ARM device or NAS and controlled from another computer
-- Minimal reliance on centralised infrastructure
+- Minimal reliance on centralised infrastructure - servers are only used for peer discovery
+- Offline-first - peers can find each other on local network using mDNS
 - Support slow / intermittent connections
 - Hackable open source protocol
+
+## Usage
+
+Decide on a 'topic' to meet on. This can be any string. You will be able to connect to anyone who 'joins' the same topic name.
 
 ## Protocol
 
@@ -27,7 +32,7 @@ Peers connect to each other using Quic, with client authentication using ed25519
 
 ## Web front end
 
-There is a work-in-progress web front end build with [Leptos]() in [`./web-ui`](./web-ui)
+There is a work-in-progress web front end build with [Leptos](https://docs.rs/leptos) in [`./web-ui`](./web-ui)
 
 ## Roadmap
 
@@ -45,5 +50,10 @@ There is a work-in-progress web front end build with [Leptos]() in [`./web-ui`](
 - [x] Handle recursive directory download request
 - [x] Queueing / resume downloads
 - [ ] Add suitable bounds to channels
+- [ ] Cancelling downloads / removing items from wishlist
+- [ ] Command to disconnect from a peer
+- [ ] Allow adding / updating / removing share directories at runtime
+- [ ] Search files in web ui
+- [ ] Expand / collapse directories in web ui
 
 This is based on a previous NodeJS project - [pegpeg/hdp](https://gitlab.com/pegpeg/hdp) - but has many protocol-level changes.
