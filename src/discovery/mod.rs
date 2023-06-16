@@ -1,11 +1,17 @@
 //! Peer discovery
 use self::{
-    hole_punch::PunchingUdpSocket, mdns::MdnsServer, mqtt::MqttClient, stun::stun_test,
+    hole_punch::PunchingUdpSocket,
+    mdns::MdnsServer,
+    mqtt::MqttClient,
+    stun::{stun_test, NatType},
     topic::Topic,
+    waku::WakuDiscovery,
 };
 use local_ip_address::local_ip;
+use log::debug;
 use quinn::AsyncUdpSocket;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     net::{IpAddr, SocketAddr},
@@ -21,6 +27,7 @@ pub mod mdns;
 pub mod mqtt;
 pub mod stun;
 pub mod topic;
+pub mod waku;
 
 pub const TOKEN_LENGTH: usize = 32;
 pub type SessionToken = [u8; 32];
@@ -38,6 +45,7 @@ pub struct PeerDiscovery {
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
+    waku_discovery: Option<WakuDiscovery>,
     pub connected_topics: HashSet<Topic>,
 }
 
@@ -47,7 +55,9 @@ impl PeerDiscovery {
         // Whether to use mdns
         use_mdns: bool,
         // Whether to use mqtt
-        use_mqtt: bool,
+        // use_mqtt: bool,
+        // Wheter to use waku discovery
+        use_waku: bool,
         public_key: [u8; 32],
     ) -> anyhow::Result<(PunchingUdpSocket, Self)> {
         let (peers_tx, peers_rx) = unbounded_channel();
@@ -74,13 +84,32 @@ impl PeerDiscovery {
             None
         };
 
-        let mqtt_client = if use_mqtt {
+        let mqtt_client = None;
+        // let mqtt_client = if use_mqtt {
+        //     Some(
+        //         MqttClient::new(
+        //             id.clone(),
+        //             public_addr,
+        //             nat_type,
+        //             session_token,
+        //             peers_tx.clone(),
+        //             hole_puncher,
+        //         )
+        //         .await?,
+        //     )
+        // } else {
+        //     None
+        // };
+
+        let waku_discovery = if use_waku {
             Some(
-                MqttClient::new(
+                WakuDiscovery::new(
                     id,
-                    public_addr,
-                    nat_type,
-                    session_token,
+                    AnnounceAddress {
+                        public_addr,
+                        nat_type,
+                        token: session_token,
+                    },
                     peers_tx,
                     hole_puncher,
                 )
@@ -95,6 +124,7 @@ impl PeerDiscovery {
             session_token,
             mdns_server,
             mqtt_client,
+            waku_discovery,
             connected_topics: Default::default(),
         };
 
@@ -110,8 +140,8 @@ impl PeerDiscovery {
             mdns_server.add_topic(topic.clone()).await?;
         }
 
-        if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.add_topic(topic.clone()).await?;
+        if let Some(waku_discovery) = &self.waku_discovery {
+            waku_discovery.add_topic(topic.clone()).await?;
         }
 
         self.connected_topics.insert(topic);
@@ -123,8 +153,8 @@ impl PeerDiscovery {
             mdns_server.remove_topic(topic.clone()).await?;
         }
 
-        if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.remove_topic(topic.clone()).await?;
+        if let Some(waku_discovery) = &self.waku_discovery {
+            waku_discovery.remove_topic(topic.clone()).await?;
         }
 
         self.connected_topics.remove(&topic);
@@ -149,4 +179,49 @@ fn is_private(ip: IpAddr) -> bool {
 pub enum JoinOrLeaveEvent {
     Join(Topic, oneshot::Sender<bool>),
     Leave(Topic, oneshot::Sender<bool>),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct AnnounceAddress {
+    public_addr: SocketAddr,
+    nat_type: NatType,
+    token: SessionToken,
+}
+
+/// Decide whether to connect to a peer
+pub fn should_connect_to_peer(
+    remote_peer_announce: &AnnounceAddress,
+    announce_address: &AnnounceAddress,
+) -> (bool, bool) {
+    if remote_peer_announce == announce_address {
+        debug!("Found our own announce message");
+        return (false, false);
+    }
+
+    // Dont connect if we are both on the same IP - use mdns
+    if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
+        debug!("Found remote peer with the same public ip as ours - ignoring");
+        return (false, false);
+    }
+
+    // TODO there are more cases when we should not bother hole punching
+    let should_hole_punch = remote_peer_announce.nat_type != NatType::Symmetric;
+
+    // Decide whether to initiate the connection deterministically
+    // so that only one party initiates
+    let our_nat_badness = announce_address.nat_type as u8;
+    let their_nat_badness = remote_peer_announce.nat_type as u8;
+    let should_initiate_connection = if our_nat_badness == their_nat_badness {
+        // If we both have the same NAT type, use the socket address
+        // as a tie breaker
+        let us = announce_address.public_addr.to_string();
+        let them = remote_peer_announce.public_addr.to_string();
+        us > them
+    } else {
+        // Otherwise the peer with the worst NAT type initiates the
+        // connection
+        our_nat_badness > their_nat_badness
+    };
+
+    (should_initiate_connection, should_hole_punch)
 }
