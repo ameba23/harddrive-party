@@ -3,4 +3,3 @@ Cargo.lock
 /extra-test-data
 /alice-db
 /bob-db
-/web-ui/dist
