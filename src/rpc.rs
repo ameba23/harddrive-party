@@ -24,6 +24,7 @@ struct ReadRequest {
 }
 
 /// Remote Procedure Call - process remote requests
+#[derive(Clone)]
 pub struct Rpc {
     /// The file index database
     pub shares: Shares,

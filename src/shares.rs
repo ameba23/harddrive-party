@@ -10,8 +10,8 @@ const FILES: &[u8; 1] = b"f";
 const DIRS: &[u8; 1] = b"d";
 const SHARE_NAMES: &[u8; 1] = b"s";
 
-// This will be a higher value - but keeping it small to test chunking
-pub const MAX_ENTRIES_PER_MESSAGE: usize = 3;
+/// The maximum number of query results we can store in a single message
+pub const MAX_ENTRIES_PER_MESSAGE: usize = 64;
 
 /// The share index
 #[derive(Clone)]
@@ -46,11 +46,13 @@ impl Shares {
     }
 
     /// Index a given directory and return the number of entries added to the database
+    // TODO handle share name collisions
     pub async fn scan(&mut self, root: &str) -> Result<u32, ScanDirError> {
         let mut added_entries = 0;
         let path = PathBuf::from(root);
         let path_clone = &path.clone();
 
+        // share_name is what we refer to the shared dir by
         let path_clone_2 = path.clone();
         let share_name = path_clone_2
             .file_name()
@@ -187,7 +189,8 @@ impl Shares {
         Ok((actual_path.join(sub_path), size))
     }
 
-    fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
+    /// Stop sharing a directory by removing related entries from the database
+    pub fn remove_share_dir(&mut self, share_name: &str) -> Result<(), ScanDirError> {
         // First find the old total size of share dir and subtract it from the "" entry
         if let Some(existing_size) = self.get_dir_size(share_name) {
             self.dirs

@@ -9,8 +9,9 @@ authors = ["peg <peg@magmacollective.org>"]
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "Share files peer-to-peer"
-homepage = "https://gitlab.com/pegpeg"
+homepage = "https://gitlab.com/pegpeg/harddrive-party"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
+keywords = ["peer-to-peer", "filesharing", "p2p"]
 
 [dependencies]
 harddrive-party-shared = { path = "shared" }
@@ -39,7 +40,6 @@ hex = "0.4.3"
 key-to-animal = { git = "https://gitlab.com/pegpeg/key-to-animal" }
 ring = "0.16.20"
 speedometer = "0.2.2"
-mqtt-protocol = { version = "0.11.2", features = ["tokio"] }
 stunclient = "0.4.0"
 lru = "0.10.0"
 async-stream = "0.3.4"

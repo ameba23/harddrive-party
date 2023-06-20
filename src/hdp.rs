@@ -46,7 +46,7 @@ pub struct Hdp {
     /// A map of peernames to peer connections
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// Remote proceduce call for share queries and downloads
-    rpc: Arc<Rpc>,
+    rpc: Rpc,
     /// The QUIC endpoint
     pub endpoint: Endpoint,
     /// Channel for commands from the UI
@@ -133,7 +133,7 @@ impl Hdp {
         Ok((
             Self {
                 peers: Default::default(),
-                rpc: Arc::new(Rpc::new(shares, response_tx.clone())),
+                rpc: Rpc::new(shares, response_tx.clone()),
                 endpoint,
                 command_tx,
                 command_rx,
@@ -800,6 +800,80 @@ impl Hdp {
                         }
                     }
                 }
+            }
+            // Add a directory to share
+            Command::AddShare(share_dir) => {
+                let response_tx = self.response_tx.clone();
+                let mut shares = self.rpc.shares.clone();
+                tokio::spawn(async move {
+                    match shares.scan(&share_dir).await {
+                        Ok(num_added) => {
+                            info!("{} shares added", num_added);
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::AddShare(num_added)),
+                                })
+                                .is_err()
+                            {
+                                error!("Channel closed");
+                            }
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::EndResponse),
+                                })
+                                .is_err()
+                            {
+                                error!("Channel closed");
+                            }
+                        }
+                        Err(err) => {
+                            warn!("Error adding share dir {}", err);
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Err(UiServerError::ShareError(err.to_string())),
+                                })
+                                .is_err()
+                            {
+                                error!("Channel closed");
+                            }
+                        }
+                    };
+                });
+            }
+            Command::RemoveShare(share_name) => {
+                let response_tx = self.response_tx.clone();
+                let mut shares = self.rpc.shares.clone();
+                tokio::spawn(async move {
+                    match shares.remove_share_dir(&share_name) {
+                        Ok(()) => {
+                            info!("{} no longer shared", share_name);
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::EndResponse),
+                                })
+                                .is_err()
+                            {
+                                error!("Channel closed");
+                            }
+                        }
+                        Err(err) => {
+                            warn!("Error removing share dir {}", err);
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Err(UiServerError::ShareError(err.to_string())),
+                                })
+                                .is_err()
+                            {
+                                error!("Channel closed");
+                            }
+                        }
+                    };
+                });
             }
         };
         Ok(())

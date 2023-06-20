@@ -31,6 +31,7 @@ use waku_message::WakuMessage;
 const RELAY_PROTOCOL_ID: &str = "/vac/waku/relay/2.0.0";
 const DEFAULT_PUBSUB_TOPIC: &str = "/waku/2/default-waku/proto";
 
+// Waku bootstrap nodes
 const NODES: &[&str] = &[
     "/dns4/node-01.ac-cn-hongkong-c.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAkvWiyFsgRhuJEb9JfjYxEkoHLgnUQmr1N5mKWnYjxYRVm",
     "/dns4/node-01.do-ams3.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
@@ -38,15 +39,12 @@ const NODES: &[&str] = &[
 ];
 
 pub struct WakuDiscovery {
-    // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
-    client_id: String,
     announce_address: AnnounceAddress,
     topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
 }
 
 impl WakuDiscovery {
     pub async fn new(
-        client_id: String,
         announce_address: AnnounceAddress,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         hole_puncher: HolePuncher,
@@ -57,7 +55,6 @@ impl WakuDiscovery {
 
         let waku_discovery = Self {
             announce_address,
-            client_id,
             topic_events_tx,
         };
 
@@ -105,11 +102,13 @@ impl WakuDiscovery {
             SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-        // TODO connect to all 3 nodes
-        let address: Multiaddr = NODES[0].parse()?;
-        match swarm.dial(address.clone()) {
-            Ok(_) => info!("Dialed {:?}", address),
-            Err(e) => panic!("failed to dial address: {:?} {:?}", address, e),
+        // Connect to all default nodes
+        for node in NODES {
+            let address: Multiaddr = node.parse()?;
+            match swarm.dial(address.clone()) {
+                Ok(_) => info!("Dialed {:?}", address),
+                Err(e) => error!("failed to dial address: {:?} {:?}", address, e),
+            }
         }
 
         let mut already_seen_announcements = HashSet::new();
@@ -121,7 +120,7 @@ impl WakuDiscovery {
                     event = swarm.select_next_some() => {
                         match event {
                             SwarmEvent::Behaviour(Event::Subscribed { peer_id: _, topic }) => {
-                                println!(" Suscribed to {:?}", topic);
+                                info!(" Suscribed to {:?}", topic);
                                 if topic.as_str() == DEFAULT_PUBSUB_TOPIC {
                                     // When we have subscibed, we send our topic messages
                                     for announce in topics.values() {
@@ -147,7 +146,7 @@ impl WakuDiscovery {
                             }) => {
                                 let topic = message.topic;
                                 if let Ok(waku_message) = WakuMessage::parse_from_bytes(&message.data) {
-                                    println!("Topic: {} Msg: {:?}", topic, waku_message);
+                                    info!("Topic: {} Msg: {:?}", topic, waku_message);
                                     if already_seen_announcements.insert(waku_message.payload.clone()) {
                                         // Check if the content_topic matches one of ours
                                         if let Some(announce) = topics.get(&waku_message.content_topic) {

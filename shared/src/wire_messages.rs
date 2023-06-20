@@ -1,7 +1,7 @@
+//! Wire messages for communicating with other Peers
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Wire messages
 // TODO read error
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]

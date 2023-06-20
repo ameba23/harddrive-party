@@ -17,6 +17,8 @@ struct Cli {
     command: CliCommand,
     #[arg(short, long)]
     ui_addr: Option<String>,
+    #[arg(short, long)]
+    verbose: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -59,10 +61,19 @@ enum CliCommand {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
-    let default_ui_addr = "ws://localhost:5001".to_string();
     let cli = Cli::parse();
+
+    let default_ui_addr = "ws://localhost:5001".to_string();
     let ui_addr = cli.ui_addr.unwrap_or(default_ui_addr);
+
+    if cli.verbose {
+        std::env::set_var(
+            "RUST_LOG",
+            std::env::var_os("RUST_LOG").unwrap_or_else(|| "harddrive_party=debug".into()),
+        );
+    }
+    env_logger::init();
+
     match cli.command {
         CliCommand::Start {
             storage,

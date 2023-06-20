@@ -2,7 +2,6 @@
 use self::{
     hole_punch::PunchingUdpSocket,
     mdns::MdnsServer,
-    mqtt::MqttClient,
     stun::{stun_test, NatType},
     topic::Topic,
     waku::WakuDiscovery,
@@ -24,7 +23,6 @@ use tokio::sync::{
 pub mod capability;
 pub mod hole_punch;
 pub mod mdns;
-pub mod mqtt;
 pub mod stun;
 pub mod topic;
 pub mod waku;
@@ -44,7 +42,6 @@ pub struct PeerDiscovery {
     pub peers_rx: UnboundedReceiver<DiscoveredPeer>,
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
-    mqtt_client: Option<MqttClient>,
     waku_discovery: Option<WakuDiscovery>,
     pub connected_topics: HashSet<Topic>,
 }
@@ -54,8 +51,6 @@ impl PeerDiscovery {
         initial_topics: Vec<Topic>,
         // Whether to use mdns
         use_mdns: bool,
-        // Whether to use mqtt
-        // use_mqtt: bool,
         // Wheter to use waku discovery
         use_waku: bool,
         public_key: [u8; 32],
@@ -71,7 +66,7 @@ impl PeerDiscovery {
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
         let addr = socket.local_addr()?;
 
-        // Id is used as an identifier for the mqtt server, and mdns services
+        // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
 
@@ -84,27 +79,9 @@ impl PeerDiscovery {
             None
         };
 
-        let mqtt_client = None;
-        // let mqtt_client = if use_mqtt {
-        //     Some(
-        //         MqttClient::new(
-        //             id.clone(),
-        //             public_addr,
-        //             nat_type,
-        //             session_token,
-        //             peers_tx.clone(),
-        //             hole_puncher,
-        //         )
-        //         .await?,
-        //     )
-        // } else {
-        //     None
-        // };
-
         let waku_discovery = if use_waku {
             Some(
                 WakuDiscovery::new(
-                    id,
                     AnnounceAddress {
                         public_addr,
                         nat_type,
@@ -123,7 +100,6 @@ impl PeerDiscovery {
             peers_rx,
             session_token,
             mdns_server,
-            mqtt_client,
             waku_discovery,
             connected_topics: Default::default(),
         };
