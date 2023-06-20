@@ -50,9 +50,7 @@ There is a work-in-progress web front end build with [Leptos](https://docs.rs/le
 
 - [ ] Extract public key from TLS certificate (rather than just hashing the whole thing)
 - [x] Handshaking / prove knowledge of 'topic'
-- [x] MQTT should not use `retain` but periodically publish messages
 - [x] Support multiple topics / dynamically joining or leaving a topic
-- [ ] Offer a DHT as another discovery method (either bittorrent, libp2p or hyperswarm)
 - [x] Persistent cryptographic identities / derived peer names
 - [x] Query own files
 - [ ] Attempt to reconnect to peers after loosing connection
@@ -64,7 +62,7 @@ There is a work-in-progress web front end build with [Leptos](https://docs.rs/le
 - [ ] Add suitable bounds to channels
 - [ ] Cancelling downloads / removing items from wishlist
 - [ ] Command to disconnect from a peer
-- [ ] Allow adding / updating / removing share directories at runtime
+- [x] Allow adding / updating / removing share directories at runtime
 - [ ] Search files in web ui
 - [ ] Expand / collapse directories in web ui
 
