@@ -1,3 +1,4 @@
+//! Representation of remote peer, and download handling
 use std::{
     path::{Path, PathBuf},
     time::Duration,

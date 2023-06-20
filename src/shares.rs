@@ -1,3 +1,4 @@
+//! Index shared directories
 use crate::wire_messages::{Entry, LsResponse};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;

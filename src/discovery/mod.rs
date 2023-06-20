@@ -27,7 +27,9 @@ pub mod stun;
 pub mod topic;
 pub mod waku;
 
+/// Length of a SessionToken
 pub const TOKEN_LENGTH: usize = 32;
+/// A session token used in capability verification (proof of knowledge of topic name)
 pub type SessionToken = [u8; 32];
 
 /// Details of a peer found through one of the discovery methods
@@ -38,6 +40,7 @@ pub struct DiscoveredPeer {
     // pub discovery_method,
 }
 
+/// Handles the different peer discovery methods
 pub struct PeerDiscovery {
     pub peers_rx: UnboundedReceiver<DiscoveredPeer>,
     pub session_token: SessionToken,
@@ -157,6 +160,7 @@ pub enum JoinOrLeaveEvent {
     Leave(Topic, oneshot::Sender<bool>),
 }
 
+/// The payload of the encrypted message used to announce ourselves to remote peers
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct AnnounceAddress {
     public_addr: SocketAddr,

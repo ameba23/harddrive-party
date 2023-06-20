@@ -1,3 +1,4 @@
+//! Track requested and downloaded files
 use crate::ui_messages::{UiDownloadRequest, UiEvent, UiServerMessage};
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};

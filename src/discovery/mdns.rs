@@ -1,3 +1,4 @@
+//! Peer discovery on local network using mDNS
 use crate::discovery::{
     capability::{handshake_request, handshake_response, HandshakeRequest},
     topic::Topic,

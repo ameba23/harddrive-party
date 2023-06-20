@@ -1,3 +1,4 @@
+//! Peer discovery using Waku / Gossipsub
 use super::{
     hole_punch::HolePuncher, should_connect_to_peer, topic::Topic, AnnounceAddress, DiscoveredPeer,
     JoinOrLeaveEvent,

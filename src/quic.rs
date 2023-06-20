@@ -1,3 +1,4 @@
+//! Configuration for QUIC connections to remote peers
 use crate::discovery::hole_punch::PunchingUdpSocket;
 use anyhow::anyhow;
 use log::{debug, warn};

@@ -1,3 +1,4 @@
+//! Proof of knowledge of topic name
 use crate::discovery::topic::Topic;
 use anyhow::anyhow;
 use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};

@@ -1,3 +1,5 @@
+//! Udp hole-punch logic
+//! A lot of this is copied from https://github.com/Frando/quinn-holepunch
 use anyhow::anyhow;
 use futures::ready;
 use log::{debug, info, warn};
@@ -12,8 +14,6 @@ use tokio::{
     io::Interest,
     sync::{broadcast, mpsc},
 };
-
-/// Most of this is copied from https://github.com/Frando/quinn-holepunch
 
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;

@@ -1,3 +1,4 @@
+//! Http server for serving web-ui as well as static locally available files
 use rust_embed::RustEmbed;
 use std::path::PathBuf;
 use warp::Filter;
