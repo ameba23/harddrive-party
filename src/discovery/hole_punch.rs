@@ -1,6 +1,6 @@
 use anyhow::anyhow;
 use futures::ready;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::{
     io,
     net::SocketAddr,
@@ -209,5 +209,17 @@ impl HolePuncher {
             }
         }
         Ok(())
+    }
+
+    pub fn spawn_hole_punch_peer(&mut self, addr: SocketAddr) {
+        let mut hole_puncher_clone = self.clone();
+        tokio::spawn(async move {
+            info!("Attempting hole punch...");
+            if hole_puncher_clone.hole_punch_peer(addr).await.is_err() {
+                warn!("Hole punching failed");
+            } else {
+                info!("Hole punching succeeded");
+            };
+        });
     }
 }

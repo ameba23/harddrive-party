@@ -20,10 +20,10 @@ pub fn Topics(cx: Scope, topics: leptos::ReadSignal<Vec<String>>) -> impl IntoVi
 
     view! { cx,
         <h2 class="text-xl">"Connected topics"</h2>
-        <input class="border-2 mx-1" node_ref=input_ref />
-        <button class={ BUTTON_STYLE } on:click=join_topic>
-            "Join"
-        </button>
+        <form action="javascript:void(0);">
+            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name" />
+            <input type="submit" value="Join" class={ BUTTON_STYLE } on:click=join_topic />
+        </form>
         <ul>
             <For
                 each={move || topics.get()}

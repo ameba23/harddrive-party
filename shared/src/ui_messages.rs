@@ -29,6 +29,10 @@ pub enum Command {
     Download { path: String, peer_name: String },
     /// Query our own shares
     Shares(IndexQuery),
+    /// Add or update a directory to share
+    AddShare(String),
+    /// Stop sharing a directory
+    RemoveShare(String),
     /// Shutdown gracefully
     Close,
 }
@@ -90,6 +94,8 @@ pub enum UiResponse {
     Read(Vec<u8>),
     Ls(LsResponse, String),
     Shares(LsResponse),
+    AddShare(u32),
+    RemoveShare,
     Connect,
     EndResponse,
 }
@@ -102,6 +108,8 @@ pub enum UiServerError {
     RequestError, // TODO
     #[error("Error when joining or leaving")]
     JoinOrLeaveError,
+    #[error("Error when updating shared directory")]
+    ShareError(String),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

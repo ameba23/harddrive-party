@@ -6,6 +6,7 @@ pub mod transfers;
 pub mod ws;
 
 pub use harddrive_party_shared::ui_messages;
+use harddrive_party_shared::ui_messages::UiServerError;
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
@@ -65,6 +66,8 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     let (requester, set_requester) = create_signal(cx, Requester::new(ws_service));
     let (peers, set_peers) = create_signal(cx, HashMap::<String, Peer>::new());
     let (shares, set_shares) = create_signal(cx, Option::<Peer>::None);
+    let (add_or_remove_share_message, set_add_or_remove_share_message) =
+        create_signal(cx, Option::<Result<String, String>>::None);
     let (topics, set_topics) = create_signal(cx, Vec::<String>::new());
     let (requested, set_requested) = create_signal(cx, HashSet::<PeerPath>::new());
     let (downloaded, set_downloaded) = create_signal(cx, HashSet::<PeerPath>::new());
@@ -192,9 +195,52 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                         }
                                     }
                                 }
+                                Ok(UiResponse::AddShare(number_of_shares)) => {
+                                    debug!("Got add share response");
+                                    set_add_or_remove_share_message.update(|message| {
+                                        *message =
+                                            Some(Ok(format!("Added {} shares", number_of_shares)))
+                                    });
+
+                                    // Re-query shares to reflect changes
+                                    let share_query_request = Command::Shares(IndexQuery {
+                                        path: Default::default(),
+                                        searchterm: None,
+                                        recursive: true,
+                                    });
+                                    set_requester.update(|requester| {
+                                        requester.make_request(share_query_request)
+                                    });
+                                }
+                                Ok(UiResponse::RemoveShare) => {
+                                    debug!("Got remove share response");
+                                    set_add_or_remove_share_message.update(|message| {
+                                        *message = Some(Ok("No longer sharing".to_string()))
+                                    });
+
+                                    // Re-query shares to reflect changes
+                                    let share_query_request = Command::Shares(IndexQuery {
+                                        path: Default::default(),
+                                        searchterm: None,
+                                        recursive: true,
+                                    });
+                                    set_requester.update(|requester| {
+                                        requester.make_request(share_query_request)
+                                    });
+                                }
                                 Err(server_error) => {
                                     warn!("Got error from server {:?}", server_error);
                                     remove_request(&id);
+                                    match server_error {
+                                        UiServerError::ShareError(error_message) => {
+                                            set_add_or_remove_share_message.update(|message| {
+                                                *message = Some(Err(error_message))
+                                            });
+                                        }
+                                        _ => {
+                                            warn!("Not handling error");
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -389,7 +435,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                         />
                         <Route
                             path="shares"
-                            view=move |cx| view! { cx,  <Shares shares /> }
+                            view=move |cx| view! { cx,  <Shares shares add_or_remove_share_message /> }
                         />
                         <Route
                             path="peers"
@@ -421,11 +467,22 @@ fn display_bytes(bytes: u64) -> String {
 }
 
 #[component]
-fn ErrorMessage(cx: Scope, message: String) -> impl IntoView {
+pub fn ErrorMessage(cx: Scope, message: String) -> impl IntoView {
     view! { cx,
     <div class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800" role="alert">
       <div>
         <span class="font-medium">" ⚠ "{ message }</span>
+      </div>
+    </div>
+    }
+}
+
+#[component]
+pub fn SuccessMessage(cx: Scope, message: String) -> impl IntoView {
+    view! { cx,
+    <div class="flex p-4 my-4 text-sm text-green-800 border border-green-300 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-800" role="alert">
+      <div>
+        <span class="font-medium">" ✅ "{ message }</span>
       </div>
     </div>
     }
