@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, net::SocketAddr, time::Duration};
 use thiserror::Error;
 
-/// A command from the Ui
+/// A command from the UI together with a random ID used to refer to it
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct UiClientMessage {
     pub id: u32,
@@ -40,10 +40,12 @@ pub enum Command {
 /// A message to the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiServerMessage {
+    /// The response to a `Command`
     Response {
         id: u32,
         response: Result<UiResponse, UiServerError>,
     },
+    /// Some server message which is not responding to a particular command
     Event(UiEvent),
 }
 
@@ -51,21 +53,26 @@ pub enum UiServerMessage {
 /// request - eg: to inform the UI that a peer connected or disconnected
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
+    /// A peer has connected
     PeerConnected {
         name: String,
+        /// Is the peer me? This is used to pass our own details to the UI
         is_self: bool,
     },
-    PeerDisconnected {
-        name: String,
-    },
+    /// A peer has disconnected
+    PeerDisconnected { name: String },
+    /// Part of a file has been uploaded
     Uploaded(UploadInfo),
+    /// The topics connected to has changed
     ConnectedTopics(Vec<String>),
+    /// The requested or downloaded files have changed
     Wishlist {
         requested: Vec<UiDownloadRequest>,
         downloaded: Vec<UiDownloadRequest>,
     },
 }
 
+/// A request to download a file from a particular peer
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct UiDownloadRequest {
     /// The path of the file on the remote
@@ -81,6 +88,7 @@ pub struct UiDownloadRequest {
     pub peer_name: String,
 }
 
+/// Information about a current running upload
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct UploadInfo {
     pub path: String,
@@ -88,6 +96,7 @@ pub struct UploadInfo {
     pub speed: usize,
 }
 
+/// Response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiResponse {
     Download(DownloadResponse),
@@ -100,6 +109,7 @@ pub enum UiResponse {
     EndResponse,
 }
 
+/// An error in response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
 pub enum UiServerError {
     #[error("Cannot connect")]
@@ -112,6 +122,7 @@ pub enum UiServerError {
     ShareError(String),
 }
 
+/// Information about a currently running download
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct DownloadResponse {
     pub path: String,
