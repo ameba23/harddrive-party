@@ -1,11 +1,13 @@
 
+![](./web-ui/public/img/hdd.png)
+
 ## harddrive-party
 
 Allows two or more peers to share files. Peers can choose directories to share, and a 'topic' name to meet at.
 
 Currently **work-in-progress**.
 
-`RUST_LOG=harddrive_party=debug cargo run -- start <path to store local db> <path of some files to share>`
+`cargo run -- --verbose start <path to store local db> <path of some files to share>`
 
 ## Design goals
 
@@ -23,12 +25,22 @@ Decide on a 'topic' to meet on. This can be any string. You will be able to conn
 
 ## Protocol
 
-Peers discover each other using by announcing themselves on an MQTT server, as well as to mDNS for peers connected to the same local network. Announcement messages are encrypted using a 'topic name', so it is only possible to find peers who know the topic name. Udp hole-punching is used to connect peers who are behind a NAT or firewall.
+### Peer discovery
+
+Peers discover each other using by announcing themselves using [Waku](https://waku.org) [relay protocol](https://rfc.vac.dev/spec/11), which is based on Libp2p's [gossipsub protocol](https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/README.md).
+
+mDNS is also used to find peers connected to the same local network.
+
+Announcement messages are encrypted using a 'topic name', so it is only possible to find peers who know the topic name. Udp hole-punching is used to connect peers who are behind a NAT or firewall.
+
+### Transport
 
 Peers connect to each other using Quic, with client authentication using ed25519. A Quic stream is opened for each RPC request to a peer. There are two types of request:
 
 - `ls` - for querying the shared file index (with a sub-path, or search term)
 - `read` - for downloading a file, or portion of a file. 
+
+[wire messages](./shared/src/wire_messages.rs) are serialized with [bincode](https://docs.rs/bincode)
 
 ## Web front end
 

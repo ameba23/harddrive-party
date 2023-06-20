@@ -13,6 +13,7 @@ use libp2p::{
 use libp2p::{gossipsub, Transport};
 use log::{error, info};
 use protobuf::Message;
+use std::time::Duration;
 use std::{
     collections::hash_map::DefaultHasher,
     collections::{HashMap, HashSet},
@@ -87,6 +88,7 @@ impl WakuDiscovery {
             .protocol_id(RELAY_PROTOCOL_ID, gossipsub::Version::V1_1)
             .validation_mode(gossipsub::ValidationMode::Anonymous) // StrictNoSign
             .message_id_fn(message_id_fn)
+            .heartbeat_interval(Duration::from_secs(5))
             .build()
             .map_err(|e| anyhow!(e))?;
 
@@ -194,6 +196,9 @@ impl WakuDiscovery {
                                 error!("GossipsubNotSupported");
                                 break;
                             }
+                            SwarmEvent::OutgoingConnectionError{ peer_id, error } => {
+                                error!("Ougoing connection error {:?} {}", peer_id, error);
+                            }
                             _ => {
                                 info!("{:?}", event);
                             }
@@ -205,8 +210,25 @@ impl WakuDiscovery {
                                 let topic_name =
                                         format!("/hdp/1/{}/proto", topic.public_id);
                                 let success = if let Ok(announce) = AnnouncePayload::new(topic, &our_announce_address) {
-                                    topics.insert(topic_name, announce);
-                                    true
+                                    if let Ok(announce_encoded) = announce.encode_with_timestamp() {
+                                        match swarm.behaviour_mut().publish(
+                                            IdentTopic::new(DEFAULT_PUBSUB_TOPIC),
+                                            announce_encoded,
+                                        ) {
+                                            Ok(m) => {
+                                                info!("Published message: {}", m);
+                                                topics.insert(topic_name, announce);
+                                                true
+                                            },
+                                            Err(e) => {
+                                                error!("Error publishing message: {}", e);
+                                                false
+                                            },
+                                        }
+                                    } else {
+                                        error!("Cannot encode announce message");
+                                        false
+                                    }
                                 } else {
                                     false
                                 };
