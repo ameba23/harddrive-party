@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "shared", "web-ui"]
-# exclude = ["web-ui"]
+members = [".", "shared"]
+exclude = ["web-ui"]
 
 [package]
 name = "harddrive-party"
