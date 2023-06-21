@@ -243,7 +243,7 @@ fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
                 cache.retain(|event| {
                     if let UiEvent::PeerConnected {
                         name: existing_name,
-                        is_self: _,
+                        ..
                     } = event
                     {
                         name != existing_name

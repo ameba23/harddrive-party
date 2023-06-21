@@ -3,14 +3,14 @@ use crate::{
     PeerPath,
 };
 use leptos::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[component]
 pub fn Transfers(
     cx: Scope,
     requested: ReadSignal<HashSet<PeerPath>>,
     downloaded: ReadSignal<HashSet<PeerPath>>,
-    files: ReadSignal<HashMap<PeerPath, File>>,
+    files: ReadSignal<BTreeMap<PeerPath, File>>,
 ) -> impl IntoView {
     let downloaded = move || {
         downloaded

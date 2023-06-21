@@ -14,6 +14,7 @@ use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
+use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
 use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Endpoint, RecvStream};
@@ -107,12 +108,19 @@ impl Hdp {
         };
 
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
-        // Notify the UI of our own name
+
+        // TODO for cross platform support we should use the `home` crate
+        let os_home_dir = match std::env::var_os("HOME") {
+            Some(o) => o.to_str().map(|s| s.to_string()),
+            None => None,
+        };
+
+        // Notify the UI of our own details
         send_event(
             response_tx.clone(),
             UiEvent::PeerConnected {
                 name: name.clone(),
-                is_self: true,
+                peer_type: PeerRemoteOrSelf::Me { os_home_dir },
             },
         );
 
@@ -246,7 +254,7 @@ impl Hdp {
                 response_tx.clone(),
                 UiEvent::PeerConnected {
                     name: peer_name.clone(),
-                    is_self: false,
+                    peer_type: PeerRemoteOrSelf::Remote,
                 },
             );
 

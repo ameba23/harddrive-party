@@ -57,7 +57,7 @@ pub enum UiEvent {
     PeerConnected {
         name: String,
         /// Is the peer me? This is used to pass our own details to the UI
-        is_self: bool,
+        peer_type: PeerRemoteOrSelf,
     },
     /// A peer has disconnected
     PeerDisconnected { name: String },
@@ -70,6 +70,12 @@ pub enum UiEvent {
         requested: Vec<UiDownloadRequest>,
         downloaded: Vec<UiDownloadRequest>,
     },
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub enum PeerRemoteOrSelf {
+    Remote,
+    Me { os_home_dir: Option<String> },
 }
 
 /// A request to download a file from a particular peer

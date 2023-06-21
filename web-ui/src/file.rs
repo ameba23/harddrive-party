@@ -63,14 +63,59 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
         }
     };
 
+    let file_name_and_indentation = move || {
+        if file.is_dir {
+            view! { cx,
+                <code>
+                <strong>"🗀 "</strong>
+                    <span class="text-sm font-medium">
+                    { file_name.get() }
+                </span>
+                </code>
+            }
+        } else {
+            let file_name = file_name.get();
+            match file_name.rsplit_once('/') {
+                Some((path, name)) => {
+                    let indent = path.split('/').count() * 2;
+                    view! { cx,
+                    <code class={ format!("ml-{}", indent.to_string())}>
+                        <strong>"🗎 "</strong>
+                        <span class="text-sm font-medium">
+                        { name.to_string() }
+                    </span>
+                        </code>
+                    }
+                    // format!(
+                    //     "{}{}",
+                    //     path.split('/').map(|_| "    ").collect::<Vec<_>>().join(""),
+                    //     name.to_string()
+                    // )
+                }
+                None => view! { cx,
+                    <code>
+                    <strong>"🗎 "</strong>
+                        <span class="text-sm font-medium">
+                        { file_name }
+                    </span>
+                    </code>
+                },
+            }
+        }
+    };
+
     view! { cx,
-        <li>
-          <code>
-            <strong>{ if file.is_dir { "🗀 " } else { "🗎 " } }</strong>
-            <span class="text-sm font-medium">
-            { file_name.get() }
-        </span>
-          </code>
+        <tr>
+            <td>
+            { file_name_and_indentation() }
+        //   <code>
+        //     <strong>{ if file.is_dir { "🗀 " } else { "🗎 " } }</strong>
+        //     <span class="text-sm font-medium">
+        //     { file_name.get() }
+        // </span>
+        //   </code>
+          </td>
+          <td>
           " "{ display_bytes(file.size) } " "
           <button class={ BUTTON_STYLE } style={ download_button_style } on:click=download_request title="Download">"🠫"</button>
           {
@@ -95,13 +140,15 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
             // TODO fix this
             move || {
                 if is_shared {
-                    view! { cx, <span><Preview file_path=&file_name.get() /></span> }
+                    // view! { cx, <span><Preview file_path=&file_name.get() shared=true /></span> }
+                    view! { cx, <span></span> }
                 } else {
                     view! { cx, <span /> }
                 }
             }
         }
-        </li>
+        </td>
+        </tr>
     }
 }
 
@@ -146,7 +193,7 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
                                         view! { cx, <span><DownloadingFile download_response size=file.size /></span> }
                                     }
                                     DownloadStatus::Downloaded => {
-                                        view! { cx, <span><Preview file_path=&request.path /></span> }
+                                        view! { cx, <span><Preview file_path=&request.path shared=false/></span> }
                                     }
                                     _ => {
                                         view! { cx, <span /> }
@@ -167,13 +214,24 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
 
 /// Allow a locally stored file to be opened / downloaded
 #[component]
-fn Preview<'a>(cx: Scope, file_path: &'a str) -> impl IntoView {
-    match document().url() {
-        Ok(url) => {
+fn Preview<'a>(cx: Scope, file_path: &'a str, shared: bool) -> impl IntoView {
+    let sub_path = if shared { "shared" } else { "downloads" };
+
+    match document().location() {
+        Some(location) => {
+            let protocol = location.protocol().unwrap_or("http:".to_string());
+            let host = location.host().unwrap_or("sfdd".to_string());
             let escaped_path = urlencoding::encode(&file_path);
-            view! { cx, <span><a href={ format!("{}downloads/{}", url, escaped_path)} target="_blank">"view"</a></span> }
+            view! { cx,
+                <span>
+                    <button class={ BUTTON_STYLE }>
+                        <a href={ format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)} target="_blank">"view"</a>
+                        {format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)}
+                    </button>
+                </span>
+            }
         }
-        Err(_) => {
+        None => {
             view! { cx, <span>"Cannot get URL"</span> }
         }
     }

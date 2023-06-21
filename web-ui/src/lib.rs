@@ -6,7 +6,7 @@ pub mod transfers;
 pub mod ws;
 
 pub use harddrive_party_shared::ui_messages;
-use harddrive_party_shared::ui_messages::UiServerError;
+use harddrive_party_shared::ui_messages::{PeerRemoteOrSelf, UiServerError};
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
@@ -24,14 +24,15 @@ use leptos::*;
 use leptos_router::*;
 use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use ui_messages::{DownloadResponse, UiResponse, UiServerMessage};
 use wasm_bindgen_futures::spawn_local;
 use wire_messages::{Entry, LsResponse};
 
 const ITEM_STYLE: &str = "inline-block p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300 dark:hover:text-gray-300 focus:text-blue-600 focus:border-blue-600";
 const NUMBER_LABEL: &str = "inline-flex items-center justify-center px-1 ml-2 text-xs font-semibold text-gray-800 bg-gray-200 rounded-full";
-pub const BUTTON_STYLE: &str = "bg-black hover:bg-gray-700 p-1 text-white rounded";
+pub const BUTTON_STYLE: &str =
+    "hover:bg-gray-700 p-1 rounded bg-gray-200 border-1 border-solid border-blue-600";
 
 #[derive(Copy, Clone)]
 struct RequesterSetter(WriteSignal<Requester>);
@@ -43,9 +44,9 @@ struct PeerName(ReadSignal<(String, bool)>);
 struct Requested(ReadSignal<HashSet<PeerPath>>);
 
 #[derive(Clone)]
-struct FilesReadSignal(ReadSignal<HashMap<PeerPath, File>>);
+struct FilesReadSignal(ReadSignal<BTreeMap<PeerPath, File>>);
 
-#[derive(Clone, Hash, PartialEq, Eq)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PeerPath {
     peer_name: String,
     path: String,
@@ -71,7 +72,8 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     let (topics, set_topics) = create_signal(cx, Vec::<String>::new());
     let (requested, set_requested) = create_signal(cx, HashSet::<PeerPath>::new());
     let (downloaded, set_downloaded) = create_signal(cx, HashSet::<PeerPath>::new());
-    let (files, set_files) = create_signal(cx, HashMap::<PeerPath, File>::new());
+    let (files, set_files) = create_signal(cx, BTreeMap::<PeerPath, File>::new());
+    let (home_dir, set_home_dir) = create_signal(cx, Option::<String>::None);
 
     provide_context(cx, RequesterSetter(set_requester));
     provide_context(cx, Requested(requested));
@@ -89,26 +91,91 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
             match msg {
                 UiServerMessage::Response { id, response } => {
                     // Get the associated request
-                    match requester.get_untracked().get_request(&id) {
-                        Some(request) => {
-                            // if this is an endresponse or error, remove the associated request
-                            match response {
-                                Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
-                                    LsResponse::Success(entries) => {
-                                        debug!("processing entrys");
-                                        let entries_clone = entries.clone();
-                                        set_peers.update(|peers| {
-                                            let peer = peers
-                                                .entry(peer_name.clone())
-                                                .or_insert(Peer::new(peer_name.clone(), false));
+                    let r = requester.get_untracked();
+                    let request = { r.get_request(&id) };
+
+                    match response {
+                        Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
+                            LsResponse::Success(entries) => {
+                                debug!("processing entrys");
+                                let entries_clone = entries.clone();
+                                set_peers.update(|peers| {
+                                    let peer = peers
+                                        .entry(peer_name.clone())
+                                        .or_insert(Peer::new(peer_name.clone(), false));
+                                    for entry in entries_clone {
+                                        peer.files.insert(
+                                            entry.name.clone(),
+                                            // File::new(cx, entry),
+                                        );
+                                    }
+                                    debug!("peers {:?}", peers);
+                                });
+                                set_files.update(|files| {
+                                    for entry in entries {
+                                        files.insert(
+                                            PeerPath {
+                                                peer_name: peer_name.clone(),
+                                                path: entry.name.clone(),
+                                            },
+                                            File::from_entry(cx, entry),
+                                        );
+                                    }
+                                });
+                            }
+                            LsResponse::Err(err) => {
+                                warn!("Peer responded to ls request with err {:?}", err);
+                                remove_request(&id);
+                            }
+                        },
+                        Ok(UiResponse::Read(read_response)) => {
+                            debug!("Got read response {:?}", read_response);
+                            // path: String,
+                            // bytes_read: u64,
+                            // total_bytes_read: u64,
+                            // speed: usize,
+                        }
+                        Ok(UiResponse::Download(download_response)) => {
+                            debug!("Got download response {:?}", download_response);
+                            if let Some(Command::Download { peer_name, path }) = request {
+                                let files = files.get();
+                                if let Some(file) = files.get(&PeerPath {
+                                    peer_name: peer_name.clone(),
+                                    path: path.clone(),
+                                }) {
+                                    if download_response.bytes_read == file.size {
+                                        file.download_status.set(DownloadStatus::Downloaded);
+                                    } else {
+                                        file.download_status
+                                            .set(DownloadStatus::Downloading(download_response));
+                                    }
+                                };
+                            }
+                        }
+                        Ok(UiResponse::Connect) => {
+                            debug!("Successfully connected to peer");
+                        }
+                        Ok(UiResponse::EndResponse) => {
+                            remove_request(&id);
+                        }
+                        Ok(UiResponse::Shares(ls_response)) => {
+                            debug!("Got shares response");
+                            match ls_response {
+                                LsResponse::Success(entries) => {
+                                    debug!("processing entrys");
+                                    let entries_clone = entries.clone();
+                                    set_shares.update(|shares_option| {
+                                        if let Some(shares) = shares_option {
                                             for entry in entries_clone {
-                                                peer.files.insert(
+                                                shares.files.insert(
                                                     entry.name.clone(),
                                                     // File::new(cx, entry),
                                                 );
                                             }
-                                            debug!("peers {:?}", peers);
-                                        });
+                                        }
+                                    });
+                                    if let Some(peer) = shares.get_untracked() {
+                                        let peer_name = peer.name.clone();
                                         set_files.update(|files| {
                                             for entry in entries {
                                                 files.insert(
@@ -121,143 +188,68 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                             }
                                         });
                                     }
-                                    LsResponse::Err(err) => {
-                                        warn!("Peer responded to ls request with err {:?}", err);
-                                        remove_request(&id);
-                                    }
-                                },
-                                Ok(UiResponse::Read(read_response)) => {
-                                    debug!("Got read response {:?}", read_response);
-                                    // path: String,
-                                    // bytes_read: u64,
-                                    // total_bytes_read: u64,
-                                    // speed: usize,
                                 }
-                                Ok(UiResponse::Download(download_response)) => {
-                                    debug!("Got download response {:?}", download_response);
-                                    if let Command::Download { peer_name, path } = request {
-                                        let files = files.get();
-                                        if let Some(file) = files.get(&PeerPath {
-                                            peer_name: peer_name.clone(),
-                                            path: path.clone(),
-                                        }) {
-                                            if download_response.bytes_read == file.size {
-                                                file.download_status
-                                                    .set(DownloadStatus::Downloaded);
-                                            } else {
-                                                file.download_status.set(
-                                                    DownloadStatus::Downloading(download_response),
-                                                );
-                                            }
-                                        };
-                                    }
-                                }
-                                Ok(UiResponse::Connect) => {
-                                    debug!("Successfully connected to peer");
-                                }
-                                Ok(UiResponse::EndResponse) => {
+                                LsResponse::Err(err) => {
+                                    warn!("Responded to shares request with err {:?}", err);
                                     remove_request(&id);
-                                }
-                                Ok(UiResponse::Shares(ls_response)) => {
-                                    debug!("Got shares response");
-                                    match ls_response {
-                                        LsResponse::Success(entries) => {
-                                            debug!("processing entrys");
-                                            let entries_clone = entries.clone();
-                                            set_shares.update(|shares_option| {
-                                                if let Some(shares) = shares_option {
-                                                    for entry in entries_clone {
-                                                        shares.files.insert(
-                                                            entry.name.clone(),
-                                                            // File::new(cx, entry),
-                                                        );
-                                                    }
-                                                }
-                                            });
-                                            if let Some(peer) = shares.get_untracked() {
-                                                let peer_name = peer.name.clone();
-                                                set_files.update(|files| {
-                                                    for entry in entries {
-                                                        files.insert(
-                                                            PeerPath {
-                                                                peer_name: peer_name.clone(),
-                                                                path: entry.name.clone(),
-                                                            },
-                                                            File::from_entry(cx, entry),
-                                                        );
-                                                    }
-                                                });
-                                            }
-                                        }
-                                        LsResponse::Err(err) => {
-                                            warn!("Responded to shares request with err {:?}", err);
-                                            remove_request(&id);
-                                        }
-                                    }
-                                }
-                                Ok(UiResponse::AddShare(number_of_shares)) => {
-                                    debug!("Got add share response");
-                                    set_add_or_remove_share_message.update(|message| {
-                                        *message =
-                                            Some(Ok(format!("Added {} shares", number_of_shares)))
-                                    });
-
-                                    // Re-query shares to reflect changes
-                                    let share_query_request = Command::Shares(IndexQuery {
-                                        path: Default::default(),
-                                        searchterm: None,
-                                        recursive: true,
-                                    });
-                                    set_requester.update(|requester| {
-                                        requester.make_request(share_query_request)
-                                    });
-                                }
-                                Ok(UiResponse::RemoveShare) => {
-                                    debug!("Got remove share response");
-                                    set_add_or_remove_share_message.update(|message| {
-                                        *message = Some(Ok("No longer sharing".to_string()))
-                                    });
-
-                                    // Re-query shares to reflect changes
-                                    let share_query_request = Command::Shares(IndexQuery {
-                                        path: Default::default(),
-                                        searchterm: None,
-                                        recursive: true,
-                                    });
-                                    set_requester.update(|requester| {
-                                        requester.make_request(share_query_request)
-                                    });
-                                }
-                                Err(server_error) => {
-                                    warn!("Got error from server {:?}", server_error);
-                                    remove_request(&id);
-                                    match server_error {
-                                        UiServerError::ShareError(error_message) => {
-                                            set_add_or_remove_share_message.update(|message| {
-                                                *message = Some(Err(error_message))
-                                            });
-                                        }
-                                        _ => {
-                                            warn!("Not handling error");
-                                        }
-                                    }
                                 }
                             }
                         }
-                        None => {
-                            warn!("Found response with unknown ID - probably from another client");
+                        Ok(UiResponse::AddShare(number_of_shares)) => {
+                            debug!("Got add share response");
+                            set_add_or_remove_share_message.update(|message| {
+                                *message = Some(Ok(format!("Added {} shares", number_of_shares)))
+                            });
+
+                            // Re-query shares to reflect changes
+                            let share_query_request = Command::Shares(IndexQuery {
+                                path: Default::default(),
+                                searchterm: None,
+                                recursive: true,
+                            });
+                            set_requester
+                                .update(|requester| requester.make_request(share_query_request));
+                        }
+                        Ok(UiResponse::RemoveShare) => {
+                            debug!("Got remove share response");
+                            set_add_or_remove_share_message.update(|message| {
+                                *message = Some(Ok("No longer sharing".to_string()))
+                            });
+
+                            // Re-query shares to reflect changes
+                            let share_query_request = Command::Shares(IndexQuery {
+                                path: Default::default(),
+                                searchterm: None,
+                                recursive: true,
+                            });
+                            set_requester
+                                .update(|requester| requester.make_request(share_query_request));
+                        }
+                        Err(server_error) => {
+                            warn!("Got error from server {:?}", server_error);
+                            remove_request(&id);
+                            match server_error {
+                                UiServerError::ShareError(error_message) => {
+                                    set_add_or_remove_share_message
+                                        .update(|message| *message = Some(Err(error_message)));
+                                }
+                                _ => {
+                                    warn!("Not handling error");
+                                }
+                            }
                         }
                     }
                 }
-                UiServerMessage::Event(UiEvent::PeerConnected { name, is_self }) => {
+                UiServerMessage::Event(UiEvent::PeerConnected { name, peer_type }) => {
                     // If a new peer connects check their files
                     // or check our own files
-                    debug!("Connected to {} {}", name, is_self);
-                    let request = if is_self {
+                    debug!("Connected to {}", name);
+                    let request = if let PeerRemoteOrSelf::Me { os_home_dir } = peer_type {
                         set_shares.update(|shares| match shares {
                             Some(_) => {}
                             None => *shares = Some(Peer::new(name, true)),
                         });
+                        set_home_dir.update(|home_dir| *home_dir = os_home_dir);
                         Command::Shares(IndexQuery {
                             path: Default::default(),
                             searchterm: None,
@@ -435,7 +427,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                         />
                         <Route
                             path="shares"
-                            view=move |cx| view! { cx,  <Shares shares add_or_remove_share_message /> }
+                            view=move |cx| view! { cx,  <Shares shares add_or_remove_share_message home_dir /> }
                         />
                         <Route
                             path="peers"
