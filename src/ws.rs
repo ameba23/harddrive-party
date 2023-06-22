@@ -73,8 +73,6 @@ pub async fn server(
         let command_tx = command_tx.clone();
         let event_cache_clone = event_cache.clone();
         tokio::spawn(async move {
-            debug!("Incoming WS connection from: {}", client_addr);
-
             let ws_stream = tokio_tungstenite::accept_async(stream)
                 .await
                 .expect("Error during the websocket handshake occurred");
@@ -121,7 +119,6 @@ pub async fn server(
                                 }
                             }
                             None => {
-                                debug!("Ws Connection closed, ending loop");
                                 break;
                             }
                         }

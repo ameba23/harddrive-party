@@ -200,6 +200,26 @@ impl WakuDiscovery {
                             SwarmEvent::OutgoingConnectionError{ peer_id, error } => {
                                 error!("Ougoing connection error {:?} {}", peer_id, error);
                             }
+                            SwarmEvent::ConnectionClosed {
+                                cause,
+                                ..
+                            } => {
+                                error!("Connection closed {:?}", cause);
+                                // TODO if there are no open connections, re-dail
+                                let network_info = swarm.network_info();
+                                let connection_counters = network_info.connection_counters();
+                                if connection_counters.num_connections() == 0 {
+                                    error!("No connected nodes, reconnecting");
+                                    for node in NODES {
+                                        if let Ok(address) = node.parse::<Multiaddr>() {
+                                            match swarm.dial(address.clone()) {
+                                                Ok(_) => info!("Dialed {:?}", address),
+                                                Err(e) => error!("failed to dial address: {:?} {:?}", address, e),
+                                            }
+                                        };
+                                    }
+                                }
+                            }
                             _ => {
                                 info!("{:?}", event);
                             }
