@@ -34,10 +34,16 @@ const RELAY_PROTOCOL_ID: &str = "/vac/waku/relay/2.0.0";
 const DEFAULT_PUBSUB_TOPIC: &str = "/waku/2/default-waku/proto";
 
 // Waku bootstrap nodes
+// const NODES: &[&str] = &[
+//     "/dns4/node-01.ac-cn-hongkong-c.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAkvWiyFsgRhuJEb9JfjYxEkoHLgnUQmr1N5mKWnYjxYRVm",
+//     "/dns4/node-01.do-ams3.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
+//     "/dns4/node-01.gc-us-central1-a.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAmJb2e28qLXxT5kZxVUUoJt72EMzNGXB47Rxx5hw3q4YjS"
+// ];
+
 const NODES: &[&str] = &[
-    "/dns4/node-01.ac-cn-hongkong-c.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAkvWiyFsgRhuJEb9JfjYxEkoHLgnUQmr1N5mKWnYjxYRVm",
-    "/dns4/node-01.do-ams3.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAmPLe7Mzm8TsYUubgCAW1aJoeFScxrLj8ppHFivPo97bUZ",
-    "/dns4/node-01.gc-us-central1-a.wakuv2.test.statusim.net/tcp/30303/p2p/16Uiu2HAmJb2e28qLXxT5kZxVUUoJt72EMzNGXB47Rxx5hw3q4YjS"
+    "/dns4/node-01.ac-cn-hongkong-c.wakuv2.test.statusim.net/tcp/30303",
+    "/dns4/node-01.do-ams3.wakuv2.test.statusim.net/tcp/30303",
+    "/dns4/node-01.gc-us-central1-a.wakuv2.test.statusim.net/tcp/30303",
 ];
 
 pub struct WakuDiscovery {

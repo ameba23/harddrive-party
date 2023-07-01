@@ -86,6 +86,7 @@ impl Hdp {
 
         let config_db = db.open_tree(CONFIG)?;
 
+        // TODO if in production mode this should be homedir/Downloads
         let mut download_dir = storage.as_ref().to_owned();
         download_dir.push("downloads");
         create_dir_all(&download_dir).await?;

@@ -55,6 +55,7 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
         set_requester.update(|requester| requester.make_request(download));
     };
 
+    // Only display download button if we dont have it requested, and it is not our share
     let download_button_style = move || {
         if file.download_status.get() == DownloadStatus::Nothing && !peer_details.get().1 {
             ""
@@ -64,56 +65,31 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
     };
 
     let file_name_and_indentation = move || {
-        if file.is_dir {
-            view! { cx,
-                <code>
-                <strong>"🗀 "</strong>
+        let file_name = file_name.get();
+        let icon = if file.is_dir { "🗀 " } else { "🗎 " };
+        let (name, indentation) = match file_name.rsplit_once('/') {
+            Some((path, name)) => {
+                let indent = path.split('/').count();
+                let indent_str = "  ".repeat(indent);
+                (name.to_string(), indent_str)
+            }
+            None => (file_name, Default::default()),
+        };
+        view! { cx,
+                <pre>
+                { indentation }
+                <strong>{ icon }</strong>
                     <span class="text-sm font-medium">
-                    { file_name.get() }
+                    { name }
                 </span>
-                </code>
-            }
-        } else {
-            let file_name = file_name.get();
-            match file_name.rsplit_once('/') {
-                Some((path, name)) => {
-                    let indent = path.split('/').count() * 2;
-                    view! { cx,
-                    <code class={ format!("ml-{}", indent.to_string())}>
-                        <strong>"🗎 "</strong>
-                        <span class="text-sm font-medium">
-                        { name.to_string() }
-                    </span>
-                        </code>
-                    }
-                    // format!(
-                    //     "{}{}",
-                    //     path.split('/').map(|_| "    ").collect::<Vec<_>>().join(""),
-                    //     name.to_string()
-                    // )
-                }
-                None => view! { cx,
-                    <code>
-                    <strong>"🗎 "</strong>
-                        <span class="text-sm font-medium">
-                        { file_name }
-                    </span>
-                    </code>
-                },
-            }
+                    </pre>
         }
     };
 
     view! { cx,
-        <tr>
-            <td>
+        <tr class="hover:bg-gray-200">
+          <td>
             { file_name_and_indentation() }
-        //   <code>
-        //     <strong>{ if file.is_dir { "🗀 " } else { "🗎 " } }</strong>
-        //     <span class="text-sm font-medium">
-        //     { file_name.get() }
-        // </span>
-        //   </code>
           </td>
           <td>
           " "{ display_bytes(file.size) } " "

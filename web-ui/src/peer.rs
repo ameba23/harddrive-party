@@ -42,8 +42,8 @@ pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
                     path: "".to_string(),
                 }),
                 Included(PeerPath {
-                    peer_name: peer_signal.get().0,
-                    path: "ZZZZZ".to_string(), // TODO
+                    peer_name: format!("{}~", peer_signal.get().0),
+                    path: "".to_string(), // TODO
                 }),
             ))
             .map(|(_, file)| file.clone()) // TODO ideally dont clone

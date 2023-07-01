@@ -6,7 +6,7 @@ use crate::discovery::{
 };
 use anyhow::anyhow;
 use log::{debug, error, warn};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use std::{
     collections::HashSet,
     net::{IpAddr, SocketAddr},
@@ -19,7 +19,9 @@ use tokio::sync::{
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 const TOPIC: &str = "topic";
 
+/// Announces ourself on mDNS
 pub struct MdnsServer {
+    /// Notifies us when joining or leaving a topic
     topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
 }
 
@@ -57,6 +59,8 @@ impl MdnsServer {
             loop {
                 tokio::select! {
                     Some(topic_event) = topic_events_rx.recv() => {
+                        // Get the oneshot which we use to confirm that joining or leaving was
+                        // succesful.
                         let res_tx = match topic_event {
                             JoinOrLeaveEvent::Join(topic, res_tx) => {
                                 topics.insert(topic);
@@ -72,6 +76,18 @@ impl MdnsServer {
                             if let Some(existing_service_name) = existing_service {
                                 if let Ok(receiver) = mdns.unregister(&existing_service_name) {
                                     debug!("Unregistering service");
+                                    let unregister_status = receiver.recv_async().await;
+                                    match unregister_status {
+                                        Ok(UnregisterStatus::OK) => {
+                                            debug!("Unregister succesful");
+                                        }
+                                        Ok(UnregisterStatus::NotFound) => {
+                                            warn!("Tried to unregister mDNS service, but it was not found");
+                                        }
+                                        Err(e) => {
+                                            error!("{:?}", e);
+                                        }
+                                    }
                                 } else {
                                     warn!("Cannot unregister service");
                                 };

@@ -133,9 +133,11 @@ impl Uploader {
         }
     }
 
-    // Possibly here we could adjust the block size based on conjestion
-    // by using output.write and checking the number of bytes written in one go
+    /// Upload a file portion
     async fn do_read(&self, read_request: ReadRequest) -> Result<(), RpcError> {
+        // Possibly here we could adjust the block size based on conjestion
+        // by using output.write and checking the number of bytes written in one go
+
         let ReadRequest {
             path,
             start,
@@ -174,7 +176,17 @@ impl Uploader {
             Err(rpc_error) => send_error(rpc_error, output).await,
         }
     }
+    // This is what write_all does internally:
+    // loop {
+    //     if this.buf.is_empty() {
+    //         return Poll::Ready(Ok(()));
+    //     }
+    //     let buf = this.buf;
+    //     let n = ready!(this.stream.execute_poll(cx, |s| s.write(buf)))?;
+    //     this.buf = &this.buf[n..];
+    // }
 
+    /// Get the potion of the file we want to upload
     async fn get_file_portion(
         &self,
         path: String,
@@ -199,9 +211,12 @@ impl Uploader {
                         error!("File size does not match that from db!");
                     }
 
+                    // Seek to start point
                     file.seek(std::io::SeekFrom::Start(start))
                         .await
                         .map_err(|_| RpcError::BadOffset)?;
+
+                    // If an endpoint is specified, only read until endpoint
                     match end {
                         Some(e) => {
                             // TODO should this be just e?
