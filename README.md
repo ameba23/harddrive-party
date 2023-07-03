@@ -5,7 +5,7 @@
 
 Allows two or more peers to share files. Peers can choose directories to share, and a 'topic' name to meet at.
 
-Currently **work-in-progress**.
+Currently **work-in-progress** - expect bugs and breaking changes.
 
 `cargo run -- --verbose start <path to store local db> <path of some files to share>`
 
@@ -44,7 +44,7 @@ Peers connect to each other using Quic, with client authentication using ed25519
 
 ## Web front end
 
-There is a work-in-progress web front end build with [Leptos](https://docs.rs/leptos) in [`./web-ui`](./web-ui)
+There is a work-in-progress web front end build with [Leptos](https://docs.rs/leptos), served by default to `http://localhost:3030`. Source code in [`./web-ui`](./web-ui)
 
 ## Roadmap
 

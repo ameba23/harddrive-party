@@ -168,7 +168,8 @@ pub struct AnnounceAddress {
     token: SessionToken,
 }
 
-/// Decide whether to connect to a peer
+/// Decide whether to initiate a connection to a peer or wait for them
+/// to connect to us, and whether to attempt to hole punch to them.
 pub fn should_connect_to_peer(
     remote_peer_announce: &AnnounceAddress,
     announce_address: &AnnounceAddress,
