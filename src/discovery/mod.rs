@@ -32,6 +32,10 @@ pub const TOKEN_LENGTH: usize = 32;
 /// A session token used in capability verification (proof of knowledge of topic name)
 pub type SessionToken = [u8; 32];
 
+/// Database values for recording whether we are connected to a topic
+const JOINED: [u8; 1] = [1];
+const LEFT: [u8; 1] = [0];
+
 /// Details of a peer found through one of the discovery methods
 pub struct DiscoveredPeer {
     pub addr: SocketAddr,
@@ -46,7 +50,7 @@ pub struct PeerDiscovery {
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     waku_discovery: Option<WakuDiscovery>,
-    pub connected_topics: HashSet<Topic>,
+    pub topics_db: sled::Tree,
 }
 
 impl PeerDiscovery {
@@ -57,6 +61,7 @@ impl PeerDiscovery {
         // Wheter to use waku discovery
         use_waku: bool,
         public_key: [u8; 32],
+        topics_db: sled::Tree,
     ) -> anyhow::Result<(PunchingUdpSocket, Self)> {
         let (peers_tx, peers_rx) = unbounded_channel();
 
@@ -104,10 +109,25 @@ impl PeerDiscovery {
             session_token,
             mdns_server,
             waku_discovery,
-            connected_topics: Default::default(),
+            topics_db,
         };
 
+        let mut topics_to_join: HashSet<Topic> = peer_discovery
+            .get_topic_names()
+            .iter()
+            .filter_map(|(name, join)| {
+                if *join {
+                    Some(Topic::new(name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         for topic in initial_topics {
+            topics_to_join.insert(topic);
+        }
+        for topic in topics_to_join {
             peer_discovery.join_topic(topic).await?;
         }
 
@@ -123,7 +143,7 @@ impl PeerDiscovery {
             waku_discovery.add_topic(topic.clone()).await?;
         }
 
-        self.connected_topics.insert(topic);
+        self.topics_db.insert(&topic.name, &JOINED)?;
         Ok(())
     }
 
@@ -136,8 +156,30 @@ impl PeerDiscovery {
             waku_discovery.remove_topic(topic.clone()).await?;
         }
 
-        self.connected_topics.remove(&topic);
+        self.topics_db.insert(&topic.name, &LEFT)?;
         Ok(())
+    }
+
+    pub fn get_topic_names(&self) -> Vec<(String, bool)> {
+        self.topics_db
+            .iter()
+            .filter_map(|kv_result| {
+                if let Ok((topic_name_buf, joined_buf)) = kv_result {
+                    // join or leave
+                    if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf.to_vec()) {
+                        match joined_buf.to_vec().get(0) {
+                            Some(1) => Some((topic_name.to_string(), true)),
+                            Some(0) => Some((topic_name.to_string(), false)),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

@@ -38,8 +38,11 @@ use tokio::{
 
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
-const CONFIG: &[u8; 1] = b"c";
 const CACHE_SIZE: usize = 256;
+
+/// Key-value store sub-tree names
+const CONFIG: &[u8; 1] = b"c";
+const TOPIC: &[u8; 1] = b"t";
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
@@ -130,8 +133,11 @@ impl Hdp {
             .map(|name| Topic::new(name.to_string()))
             .collect();
 
+        let topics_db = db.open_tree(TOPIC)?;
+
         // Setup peer discovery
-        let (socket, peer_discovery) = PeerDiscovery::new(topics, true, true, pk_hash).await?;
+        let (socket, peer_discovery) =
+            PeerDiscovery::new(topics, true, true, pk_hash, topics_db).await?;
 
         // Create QUIC endpoint
         let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
@@ -398,7 +404,7 @@ impl Hdp {
         let id = ui_client_message.id;
         match ui_client_message.command {
             Command::Join(topic_name) => {
-                let topic = Topic::new(topic_name);
+                let topic = Topic::new(topic_name.clone());
                 match self.peer_discovery.join_topic(topic).await {
                     Ok(()) => {
                         if self
@@ -430,7 +436,7 @@ impl Hdp {
                 }
             }
             Command::Leave(topic_name) => {
-                let topic = Topic::new(topic_name);
+                let topic = Topic::new(topic_name.clone());
                 match self.peer_discovery.leave_topic(topic).await {
                     Ok(()) => {
                         if self
@@ -903,17 +909,10 @@ impl Hdp {
 
     /// Called whenever the list of topics changes (user joins or leaves a topic) to inform the UI
     fn topics_updated(&self) {
-        let connected_topics: Vec<String> = self
-            .peer_discovery
-            .connected_topics
-            .iter()
-            .map(|topic| topic.name.clone())
-            .collect();
-
         if self
             .response_tx
-            .send(UiServerMessage::Event(UiEvent::ConnectedTopics(
-                connected_topics,
+            .send(UiServerMessage::Event(UiEvent::Topics(
+                self.peer_discovery.get_topic_names(),
             )))
             .is_err()
         {
@@ -991,6 +990,8 @@ pub enum HandleUiCommandError {
     ConnectionClosed,
     #[error("Channel closed - could not send response")]
     ChannelClosed,
+    #[error("Db error")]
+    DbError,
 }
 
 // #[cfg(test)]
