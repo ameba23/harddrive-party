@@ -27,6 +27,7 @@ enum CliCommand {
     Start {
         storage: Option<String>,
         share_dir: Option<String>,
+        #[arg(short, long)]
         ws_addr: Option<SocketAddr>,
         #[arg(short, long)]
         topic: Option<String>,
