@@ -73,7 +73,7 @@ impl WakuDiscovery {
         Ok(waku_discovery)
     }
 
-    pub async fn run(
+    async fn run(
         &self,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         mut hole_puncher: HolePuncher,
@@ -124,6 +124,7 @@ impl WakuDiscovery {
         let our_announce_address = self.announce_address.clone();
         tokio::spawn(async move {
             let mut topics = HashMap::<String, AnnouncePayload>::new();
+            let mut subscribed = false;
             loop {
                 tokio::select! {
                     event = swarm.select_next_some() => {
@@ -131,6 +132,7 @@ impl WakuDiscovery {
                             SwarmEvent::Behaviour(Event::Subscribed { peer_id: _, topic }) => {
                                 info!(" Suscribed to {:?}", topic);
                                 if topic.as_str() == DEFAULT_PUBSUB_TOPIC {
+                                    subscribed = true;
                                     // When we have subscibed, we send our topic messages
                                     for announce in topics.values() {
                                         if let Ok(announce_encoded) = announce.encode_with_timestamp() {
@@ -237,24 +239,30 @@ impl WakuDiscovery {
                                 let topic_name =
                                         format!("/hdp/1/{}/proto", topic.public_id);
                                 let success = if let Ok(announce) = AnnouncePayload::new(topic, &our_announce_address) {
-                                    if let Ok(announce_encoded) = announce.encode_with_timestamp() {
-                                        match swarm.behaviour_mut().publish(
-                                            IdentTopic::new(DEFAULT_PUBSUB_TOPIC),
-                                            announce_encoded,
-                                        ) {
-                                            Ok(m) => {
-                                                info!("Published message: {}", m);
-                                                topics.insert(topic_name, announce);
-                                                true
-                                            },
-                                            Err(e) => {
-                                                error!("Error publishing message: {}", e);
-                                                false
-                                            },
+                                    if subscribed {
+                                        if let Ok(announce_encoded) = announce.encode_with_timestamp() {
+                                            match swarm.behaviour_mut().publish(
+                                                IdentTopic::new(DEFAULT_PUBSUB_TOPIC),
+                                                announce_encoded,
+                                            ) {
+                                                Ok(m) => {
+                                                    info!("Published message: {}", m);
+                                                    topics.insert(topic_name, announce);
+                                                    true
+                                                },
+                                                Err(e) => {
+                                                    error!("Error publishing message: {}", e);
+                                                    false
+                                                },
+                                            }
+                                        } else {
+                                            error!("Cannot encode announce message");
+                                            false
                                         }
                                     } else {
-                                        error!("Cannot encode announce message");
-                                        false
+                                        info!("Not yet subscribed");
+                                        topics.insert(topic_name, announce);
+                                        true
                                     }
                                 } else {
                                     false

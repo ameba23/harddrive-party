@@ -27,7 +27,7 @@ pub struct Shares {
 
 impl Shares {
     /// Setup share index giving a path to use for persistant storage
-    pub async fn new(db: sled::Db, share_dirs: Vec<&str>) -> Result<Self, CreateSharesError> {
+    pub async fn new(db: sled::Db, share_dirs: Vec<String>) -> Result<Self, CreateSharesError> {
         let files = db.open_tree(FILES)?;
         let dirs = db.open_tree(DIRS)?;
         dirs.set_merge_operator(addition_merge);
@@ -40,7 +40,7 @@ impl Shares {
         };
 
         for share_dir in share_dirs {
-            shares.scan(share_dir).await?;
+            shares.scan(&share_dir).await?;
         }
 
         Ok(shares)

@@ -69,7 +69,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     let (shares, set_shares) = create_signal(cx, Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         create_signal(cx, Option::<Result<String, String>>::None);
-    let (topics, set_topics) = create_signal(cx, Vec::<String>::new());
+    let (topics, set_topics) = create_signal(cx, Vec::<(String, bool)>::new());
     let (requested, set_requested) = create_signal(cx, HashSet::<PeerPath>::new());
     let (downloaded, set_downloaded) = create_signal(cx, HashSet::<PeerPath>::new());
     let (files, set_files) = create_signal(cx, BTreeMap::<PeerPath, File>::new());
@@ -273,7 +273,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                 UiServerMessage::Event(UiEvent::Uploaded(upload_info)) => {
                     debug!("Uploading {:?}", upload_info);
                 }
-                UiServerMessage::Event(UiEvent::ConnectedTopics(topics)) => {
+                UiServerMessage::Event(UiEvent::Topics(topics)) => {
                     debug!("Connected topics {:?}", topics);
                     set_topics.update(|existing_topics| {
                         existing_topics.clear();

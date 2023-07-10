@@ -25,11 +25,13 @@ struct Cli {
 enum CliCommand {
     /// Start the process - all other commands will communicate with this instance
     Start {
-        storage: String,
-        share_dir: String,
+        storage: Option<String>,
+        share_dir: Option<String>,
         ws_addr: Option<SocketAddr>,
         #[arg(short, long)]
         topic: Option<String>,
+        #[arg(short, long)]
+        dev: bool,
     },
     /// Join a given topic name
     Join { topic: String },
@@ -80,6 +82,7 @@ async fn main() -> anyhow::Result<()> {
             share_dir,
             ws_addr,
             topic,
+            dev,
         } => {
             let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:4001".parse().unwrap());
 
@@ -88,7 +91,27 @@ async fn main() -> anyhow::Result<()> {
                 initial_topics.push(t);
             }
 
-            match Hdp::new(storage, vec![&share_dir], initial_topics).await {
+            let storage = storage.map(PathBuf::from).unwrap_or_else(|| {
+                if dev {
+                    PathBuf::from("harddrive-party")
+                } else {
+                    let os_home_dir = match std::env::var_os("HOME") {
+                        Some(o) => o.to_str().unwrap_or(".").to_string(),
+                        None => ".".to_string(),
+                    };
+                    let mut path_buf = PathBuf::from(os_home_dir);
+                    path_buf.push(".harddrive-party");
+                    path_buf
+                }
+            });
+
+            let initial_share_dirs = if let Some(dir) = share_dir {
+                vec![dir]
+            } else {
+                Vec::new()
+            };
+
+            match Hdp::new(storage, initial_share_dirs, initial_topics).await {
                 Ok((mut hdp, recv)) => {
                     println!(
                         "{} listening for peers on {}",
@@ -107,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
                     let download_dir = hdp.download_dir.clone();
                     // HTTP server
                     tokio::spawn(async move {
-                        http_server(download_dir).await;
+                        http_server(ws_addr, download_dir).await;
                     });
 
                     hdp.run().await;

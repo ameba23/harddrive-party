@@ -81,6 +81,7 @@ impl PeerDiscovery {
         let mut rng = rand::thread_rng();
         let session_token: [u8; 32] = rng.gen();
 
+        // Only use mdns if we are on a local network
         let mdns_server = if use_mdns && is_private(my_local_ip) {
             Some(MdnsServer::new(&id, addr, peers_tx.clone(), session_token).await?)
         } else {
@@ -112,6 +113,7 @@ impl PeerDiscovery {
             topics_db,
         };
 
+        // Join topics given as arguments, as well as from db
         let mut topics_to_join: HashSet<Topic> = peer_discovery
             .get_topic_names()
             .iter()
@@ -134,6 +136,7 @@ impl PeerDiscovery {
         Ok((socket, peer_discovery))
     }
 
+    /// Join the given topic
     pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.add_topic(topic.clone()).await?;
@@ -147,6 +150,7 @@ impl PeerDiscovery {
         Ok(())
     }
 
+    /// Leave the given topic
     pub async fn leave_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.remove_topic(topic.clone()).await?;
@@ -160,6 +164,7 @@ impl PeerDiscovery {
         Ok(())
     }
 
+    /// Get topic names, and whether or not we are currently connected
     pub fn get_topic_names(&self) -> Vec<(String, bool)> {
         self.topics_db
             .iter()

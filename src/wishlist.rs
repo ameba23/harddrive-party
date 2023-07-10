@@ -1,5 +1,8 @@
 //! Track requested and downloaded files
-use crate::ui_messages::{UiDownloadRequest, UiEvent, UiServerMessage};
+use crate::{
+    hdp::{DOWNLOADED, WISHLIST_BY_PEER, WISHLIST_BY_TIMESTAMP},
+    ui_messages::{UiDownloadRequest, UiEvent, UiServerMessage},
+};
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use key_to_animal::key_to_name;
@@ -185,9 +188,9 @@ impl WishList {
         response_tx: UnboundedSender<UiServerMessage>,
     ) -> anyhow::Result<Self> {
         Ok(WishList {
-            db_by_peer: db.open_tree(b"p")?,
-            db_by_timestamp: db.open_tree(b"t")?,
-            db_downloaded: db.open_tree(b"D")?,
+            db_by_peer: db.open_tree(WISHLIST_BY_PEER)?,
+            db_by_timestamp: db.open_tree(WISHLIST_BY_TIMESTAMP)?,
+            db_downloaded: db.open_tree(DOWNLOADED)?,
             response_tx,
         })
     }
@@ -202,6 +205,7 @@ impl WishList {
             .filter_map(|kv_result| match kv_result {
                 Ok((key, value)) => {
                     let mut by_peer_key = value.to_vec();
+                    // TODO this panics if key is less than 8 bytes
                     by_peer_key.append(&mut key[0..8].to_vec());
                     let iterator =
                         self.db_by_peer

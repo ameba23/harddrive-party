@@ -43,6 +43,9 @@ const CACHE_SIZE: usize = 256;
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
 const TOPIC: &[u8; 1] = b"t";
+pub const WISHLIST_BY_PEER: &[u8; 1] = b"p";
+pub const WISHLIST_BY_TIMESTAMP: &[u8; 1] = b"T";
+pub const DOWNLOADED: &[u8; 1] = b"D";
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
@@ -74,7 +77,7 @@ pub struct Hdp {
 impl Hdp {
     pub async fn new(
         storage: impl AsRef<Path>,
-        sharedirs: Vec<&str>,
+        sharedirs: Vec<String>,
         initial_topic_names: Vec<String>,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
         // Channels for communication with UI

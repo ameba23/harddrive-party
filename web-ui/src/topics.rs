@@ -3,7 +3,7 @@ use crate::{Command, RequesterSetter, BUTTON_STYLE};
 use leptos::{html::Input, *};
 
 #[component]
-pub fn Topics(cx: Scope, topics: leptos::ReadSignal<Vec<String>>) -> impl IntoView {
+pub fn Topics(cx: Scope, topics: leptos::ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>(cx).unwrap().0;
     let input_ref = create_node_ref::<Input>(cx);
     let join_topic = move |_| {
@@ -24,11 +24,22 @@ pub fn Topics(cx: Scope, topics: leptos::ReadSignal<Vec<String>>) -> impl IntoVi
             <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name" />
             <input type="submit" value="Join" class={ BUTTON_STYLE } on:click=join_topic />
         </form>
+        <h2>"Connected"</h2>
         <ul>
             <For
-                each={move || topics.get()}
-                key=|topic| topic.clone()
-                view=move |cx, topic| view! { cx,  <Topic topic /> }
+                each={move || {
+                    topics.get().into_iter().filter(|(_, connected)| *connected).collect::<Vec<_>>()
+                } }
+                key=|(topic, _): &(String, bool)| topic.clone()
+                view=move |cx, (topic, connected) | view! { cx,  <Topic topic=topic.to_string() /> }
+            />
+        </ul>
+        <h2>"Not connected"</h2>
+        <ul>
+            <For
+                each={move || topics.get().into_iter().filter(|(_, connected)| !*connected).collect::<Vec<_>>() }
+                key=|(topic, _): &(String, bool)| topic.clone()
+                view=move |cx, (topic, connected) | view! { cx,  <Topic topic=topic.to_string() /> }
             />
         </ul>
     }
