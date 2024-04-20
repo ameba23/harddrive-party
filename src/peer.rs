@@ -21,7 +21,7 @@ use tokio::{
     sync::mpsc::UnboundedSender,
 };
 
-// Maybe this is too big - not sure if it matters and this is only allocated
+// Maybe this is too big - not sure if it matters as this is only allocated
 // once per download
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 

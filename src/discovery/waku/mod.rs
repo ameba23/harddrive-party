@@ -181,7 +181,7 @@ impl WakuDiscovery {
                                                     break;
                                                 }
 
-                                                // Say 'hello' be announcing ourselves back on this topic
+                                                // Say 'hello' by announcing ourselves back on this topic
                                                 if let Ok(announce_encoded) = announce.encode_with_timestamp() {
                                                     match swarm.behaviour_mut().publish(
                                                         IdentTopic::new(DEFAULT_PUBSUB_TOPIC),
@@ -213,7 +213,7 @@ impl WakuDiscovery {
                                 ..
                             } => {
                                 error!("Connection closed {:?}", cause);
-                                // TODO if there are no open connections, re-dail
+                                // TODO if there are no open connections, re-dial
                                 let network_info = swarm.network_info();
                                 let connection_counters = network_info.connection_counters();
                                 if connection_counters.num_connections() == 0 {
