@@ -2,9 +2,9 @@
 use self::{
     hole_punch::PunchingUdpSocket,
     mdns::MdnsServer,
+    mqtt::MqttClient,
     stun::{stun_test, NatType},
     topic::Topic,
-    waku::WakuDiscovery,
 };
 use local_ip_address::local_ip;
 use log::debug;
@@ -23,9 +23,9 @@ use tokio::sync::{
 pub mod capability;
 pub mod hole_punch;
 pub mod mdns;
+pub mod mqtt;
 pub mod stun;
 pub mod topic;
-pub mod waku;
 
 /// Length of a SessionToken
 pub const TOKEN_LENGTH: usize = 32;
@@ -49,7 +49,8 @@ pub struct PeerDiscovery {
     pub peers_rx: UnboundedReceiver<DiscoveredPeer>,
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
-    waku_discovery: Option<WakuDiscovery>,
+    mqtt_client: Option<MqttClient>,
+    // waku_discovery: Option<WakuDiscovery>,
     pub topics_db: sled::Tree,
 }
 
@@ -58,8 +59,8 @@ impl PeerDiscovery {
         initial_topics: Vec<Topic>,
         // Whether to use mdns
         use_mdns: bool,
-        // Wheter to use waku discovery
-        use_waku: bool,
+        // Wheter to use mqtt discovery
+        use_mqtt: bool,
         public_key: [u8; 32],
         topics_db: sled::Tree,
     ) -> anyhow::Result<(PunchingUdpSocket, Self)> {
@@ -88,14 +89,13 @@ impl PeerDiscovery {
             None
         };
 
-        let waku_discovery = if use_waku {
+        let mqtt_client = if use_mqtt {
             Some(
-                WakuDiscovery::new(
-                    AnnounceAddress {
-                        public_addr,
-                        nat_type,
-                        token: session_token,
-                    },
+                MqttClient::new(
+                    id,
+                    public_addr,
+                    nat_type,
+                    session_token,
                     peers_tx,
                     hole_puncher,
                 )
@@ -104,12 +104,29 @@ impl PeerDiscovery {
         } else {
             None
         };
+        // let waku_discovery = if use_waku {
+        //     Some(
+        //         WakuDiscovery::new(
+        //             AnnounceAddress {
+        //                 public_addr,
+        //                 nat_type,
+        //                 token: session_token,
+        //             },
+        //             peers_tx,
+        //             hole_puncher,
+        //         )
+        //         .await?,
+        //     )
+        // } else {
+        //     None
+        // };
 
         let mut peer_discovery = Self {
             peers_rx,
             session_token,
             mdns_server,
-            waku_discovery,
+            mqtt_client,
+            // waku_discovery,
             topics_db,
         };
 
@@ -142,9 +159,13 @@ impl PeerDiscovery {
             mdns_server.add_topic(topic.clone()).await?;
         }
 
-        if let Some(waku_discovery) = &self.waku_discovery {
-            waku_discovery.add_topic(topic.clone()).await?;
+        if let Some(mqtt_client) = &self.mqtt_client {
+            mqtt_client.add_topic(topic.clone()).await?;
         }
+
+        // if let Some(waku_discovery) = &self.waku_discovery {
+        //     waku_discovery.add_topic(topic.clone()).await?;
+        // }
 
         self.topics_db.insert(&topic.name, &JOINED)?;
         Ok(())
@@ -156,8 +177,12 @@ impl PeerDiscovery {
             mdns_server.remove_topic(topic.clone()).await?;
         }
 
-        if let Some(waku_discovery) = &self.waku_discovery {
-            waku_discovery.remove_topic(topic.clone()).await?;
+        // if let Some(waku_discovery) = &self.waku_discovery {
+        //     waku_discovery.remove_topic(topic.clone()).await?;
+        // }
+
+        if let Some(mqtt_client) = &self.mqtt_client {
+            mqtt_client.remove_topic(topic.clone()).await?;
         }
 
         self.topics_db.insert(&topic.name, &LEFT)?;

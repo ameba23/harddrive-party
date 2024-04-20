@@ -48,6 +48,7 @@ warp-embed = "0.4.0"
 rust-embed = "6"
 libp2p = { version = "0.51.3", features = ["tcp", "gossipsub", "request-response", "tokio", "noise", "yamux","mplex", "dns", "secp256k1" ] }
 protobuf = "3.2.0"
+mqtt-protocol = { version = "0.11.2", features = ["tokio"]}
 
 [build-dependencies]
 protobuf-codegen = "3.2.0"
