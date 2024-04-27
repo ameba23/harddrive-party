@@ -64,6 +64,23 @@ impl PeerDiscovery {
         public_key: [u8; 32],
         topics_db: sled::Tree,
     ) -> anyhow::Result<(PunchingUdpSocket, Self)> {
+        // Join topics given as arguments, as well as from db
+        let mut topics_to_join: HashSet<Topic> = get_topic_names(&topics_db)
+            .iter()
+            .filter_map(|(name, join)| {
+                if *join {
+                    Some(Topic::new(name.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for topic in initial_topics {
+            topics_to_join.insert(topic);
+        }
+
+        // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = unbounded_channel();
 
         let my_local_ip = local_ip()?;
@@ -84,7 +101,16 @@ impl PeerDiscovery {
 
         // Only use mdns if we are on a local network
         let mdns_server = if use_mdns && is_private(my_local_ip) {
-            Some(MdnsServer::new(&id, addr, peers_tx.clone(), session_token).await?)
+            Some(
+                MdnsServer::new(
+                    &id,
+                    addr,
+                    peers_tx.clone(),
+                    session_token,
+                    topics_to_join.clone(),
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -130,22 +156,6 @@ impl PeerDiscovery {
             topics_db,
         };
 
-        // Join topics given as arguments, as well as from db
-        let mut topics_to_join: HashSet<Topic> = peer_discovery
-            .get_topic_names()
-            .iter()
-            .filter_map(|(name, join)| {
-                if *join {
-                    Some(Topic::new(name.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for topic in initial_topics {
-            topics_to_join.insert(topic);
-        }
         for topic in topics_to_join {
             peer_discovery.join_topic(topic).await?;
         }
@@ -277,4 +287,26 @@ pub fn should_connect_to_peer(
     };
 
     (should_initiate_connection, should_hole_punch)
+}
+
+fn get_topic_names(topics_db: &sled::Tree) -> Vec<(String, bool)> {
+    topics_db
+        .iter()
+        .filter_map(|kv_result| {
+            if let Ok((topic_name_buf, joined_buf)) = kv_result {
+                // join or leave
+                if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf.to_vec()) {
+                    match joined_buf.to_vec().get(0) {
+                        Some(1) => Some((topic_name.to_string(), true)),
+                        Some(0) => Some((topic_name.to_string(), false)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect()
 }
