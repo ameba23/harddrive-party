@@ -201,25 +201,7 @@ impl PeerDiscovery {
 
     /// Get topic names, and whether or not we are currently connected
     pub fn get_topic_names(&self) -> Vec<(String, bool)> {
-        self.topics_db
-            .iter()
-            .filter_map(|kv_result| {
-                if let Ok((topic_name_buf, joined_buf)) = kv_result {
-                    // join or leave
-                    if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf.to_vec()) {
-                        match joined_buf.to_vec().get(0) {
-                            Some(1) => Some((topic_name.to_string(), true)),
-                            Some(0) => Some((topic_name.to_string(), false)),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
-            .collect()
+        get_topic_names(&self.topics_db)
     }
 }
 
