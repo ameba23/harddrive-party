@@ -8,6 +8,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
+use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
 use log::{debug, trace, warn};
 use rand::{rngs::ThreadRng, Rng};
 use std::{
@@ -195,9 +196,30 @@ pub async fn read_responses(
                                 warn!("Unexpected msg id - got message for another client");
                             }
                         }
-                        UiServerMessage::Event(event) => {
-                            println!("Got event {:?}", event);
-                        }
+                        UiServerMessage::Event(event) => match event {
+                            UiEvent::PeerConnected {
+                                name,
+                                peer_type: PeerRemoteOrSelf::Me { .. },
+                            } => {
+                                println!("{}", name);
+                            }
+                            UiEvent::PeerConnected {
+                                name,
+                                peer_type: PeerRemoteOrSelf::Remote,
+                            } => {
+                                println!("Connected to remote peer: {}", name);
+                            }
+                            UiEvent::Topics(topics) => {
+                                for (topic, connected) in topics {
+                                    if connected {
+                                        println!("Connected to {}", topic);
+                                    }
+                                }
+                            }
+                            _ => {
+                                println!("Got event {:?}", event);
+                            }
+                        },
                     }
                 }
                 Err(e) => {
