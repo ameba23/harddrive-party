@@ -3,7 +3,7 @@ use crate::{
     PeerPath,
 };
 use leptos::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 #[component]
 pub fn Transfers(

@@ -7,7 +7,11 @@ use std::net::SocketAddr;
 
 use super::SessionToken;
 
-pub type HandshakeRequest = [u8; 32 + 16 + 8];
+const BLAKE2B_LENGTH: usize = 32;
+const NONCE_LENGTH: usize = 8;
+const TAG_LENGTH: usize = 16;
+
+pub type HandshakeRequest = [u8; BLAKE2B_LENGTH + TAG_LENGTH + NONCE_LENGTH];
 
 const AAD: [u8; 0] = [];
 
@@ -20,16 +24,17 @@ pub fn handshake_request(
     let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
     let mut rng = rand::thread_rng();
 
-    let nonce: [u8; 8] = rng.gen();
-    let mut out: [u8; 32 + 16 + 8] = [0u8; 32 + 16 + 8];
-    let mut tag: [u8; 16] = [0u8; 16];
+    let nonce: [u8; NONCE_LENGTH] = rng.gen();
+    let mut out: [u8; BLAKE2B_LENGTH + TAG_LENGTH + NONCE_LENGTH] =
+        [0u8; BLAKE2B_LENGTH + TAG_LENGTH + NONCE_LENGTH];
+    let mut tag: [u8; TAG_LENGTH] = [0u8; TAG_LENGTH];
 
     let mut cipher = ChaCha20Poly1305::new(&key, &nonce, &AAD);
 
     // Encrypt the msg and append the tag at the end
-    cipher.encrypt(token, &mut out[0..32], &mut tag);
-    out[32..32 + 16].copy_from_slice(&tag);
-    out[32 + 16..].copy_from_slice(&nonce);
+    cipher.encrypt(token, &mut out[0..BLAKE2B_LENGTH], &mut tag);
+    out[BLAKE2B_LENGTH..BLAKE2B_LENGTH + TAG_LENGTH].copy_from_slice(&tag);
+    out[BLAKE2B_LENGTH + TAG_LENGTH..].copy_from_slice(&nonce);
     out
 }
 
@@ -40,15 +45,15 @@ pub fn handshake_response(
     addr: SocketAddr,
 ) -> anyhow::Result<SessionToken> {
     let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
-    let mut decrypt_msg: [u8; 32] = [0u8; 32];
+    let mut decrypt_msg: [u8; BLAKE2B_LENGTH] = [0u8; BLAKE2B_LENGTH];
 
-    let nonce = &handshake_request[32 + 16..];
+    let nonce = &handshake_request[BLAKE2B_LENGTH + TAG_LENGTH..];
     let mut cipher = ChaCha20Poly1305::new(&key, nonce, &AAD);
 
     if cipher.decrypt(
-        &handshake_request[0..32],
+        &handshake_request[0..BLAKE2B_LENGTH],
         &mut decrypt_msg,
-        &handshake_request[32..32 + 16],
+        &handshake_request[BLAKE2B_LENGTH..BLAKE2B_LENGTH + TAG_LENGTH],
     ) {
         Ok(decrypt_msg)
     } else {
@@ -56,9 +61,10 @@ pub fn handshake_response(
     }
 }
 
-fn keyed_hash(input: &[u8], key: &[u8; 32]) -> [u8; 32] {
-    let mut hash = [0u8; 32];
-    let mut topic_hash = Blake2b::new_keyed(32, key);
+/// Keyed blake2b hash
+fn keyed_hash(input: &[u8], key: &[u8; BLAKE2B_LENGTH]) -> [u8; BLAKE2B_LENGTH] {
+    let mut hash = [0u8; BLAKE2B_LENGTH];
+    let mut topic_hash = Blake2b::new_keyed(BLAKE2B_LENGTH, key);
     topic_hash.input(input);
     topic_hash.result(&mut hash);
     hash

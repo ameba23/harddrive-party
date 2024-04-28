@@ -35,7 +35,6 @@ pub struct Rpc {
 
 impl Rpc {
     pub fn new(shares: Shares, event_tx: UnboundedSender<UiServerMessage>) -> Rpc {
-        // TODO this should also take a tx for sending upload events to the UI
         let (upload_tx, upload_rx) = unbounded_channel();
         let shares_clone = shares.clone();
 
@@ -60,10 +59,10 @@ impl Rpc {
         mut output: quinn::SendStream,
     ) -> Result<(), RpcError> {
         match self.shares.query(path, searchterm, recursive) {
-            Ok(it) => {
-                for res in it {
+            Ok(response_iterator) => {
+                for res in response_iterator {
                     let buf = serialize(&res).map_err(|e| {
-                        warn!("Cannot serialize query response {:?}", e);
+                        error!("Cannot serialize query response {:?}", e);
                         RpcError::SerializeError
                     })?;
 
@@ -75,8 +74,6 @@ impl Rpc {
                         .map_err(|_| RpcError::U64ConvertError)?;
                     debug!("Writing prefix {length}");
                     output.write_all(&length.to_le_bytes()).await?;
-                    // TODO display a warning if length would be more than u32::MAX - so that
-                    // the conversion back to usize will work on 32 bit machines
 
                     output.write_all(&buf).await?;
                     debug!("Written ls response");
@@ -98,6 +95,8 @@ impl Rpc {
         }
     }
 
+    /// Read a portion of a file
+    /// This puts the read request, which contains a stream for the response, in a queue
     pub async fn read(
         &self,
         path: String,
@@ -119,12 +118,16 @@ impl Rpc {
 
 /// Uploads are processed sequentially in a separate task
 struct Uploader {
+    /// Our share db
     shares: Shares,
+    /// Incoming read requests
     upload_rx: UnboundedReceiver<ReadRequest>,
+    /// Channel for sending messages to the UI
     event_tx: UnboundedSender<UiServerMessage>,
 }
 
 impl Uploader {
+    /// Iterate over incoming read requests
     async fn run(&mut self) {
         while let Some(read_request) = self.upload_rx.recv().await {
             if let Err(e) = self.do_read(read_request).await {
@@ -218,9 +221,9 @@ impl Uploader {
 
                     // If an endpoint is specified, only read until endpoint
                     match end {
-                        Some(e) => {
-                            // TODO should this be just e?
-                            Ok((Box::new(file.take(start + e)), size))
+                        Some(endpoint) => {
+                            // TODO should this be just endpoint?
+                            Ok((Box::new(file.take(start + endpoint)), size))
                         }
                         None => Ok((Box::new(file), size)),
                     }
@@ -232,6 +235,7 @@ impl Uploader {
     }
 }
 
+/// Respond with an error
 async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
     // TODO send serialised version of the error
     output.write_all(&[0]).await?;

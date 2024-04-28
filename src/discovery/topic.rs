@@ -17,6 +17,7 @@ pub struct Topic {
     pub name: String,
     pub hash: [u8; 32],
     /// A publically sharable ID made by hashing a second time
+    /// and encoding as hex
     pub public_id: String,
 }
 

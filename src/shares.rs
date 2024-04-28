@@ -439,9 +439,12 @@ mod tests {
 
         // Try resolving a path name
         let (resolved, _size) = shares
-            .resolve_path("test-data/df/aslkjdsal.asds".to_string())
+            .resolve_path("test-data/subdir/anotherfile".to_string())
             .unwrap();
-        assert_eq!(resolved, PathBuf::from("tests/test-data/df/aslkjdsal.asds"));
+        assert_eq!(
+            resolved,
+            PathBuf::from("tests/test-data/subdir/anotherfile")
+        );
 
         // Repeat the process with a new shares instance using the same db, to simulate restarting
         // the program

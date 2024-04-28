@@ -46,7 +46,7 @@ impl DownloadRequest {
         }
     }
 
-    /// Given a wishlist db entry, make a DownloadRequest
+    /// Given a serialized wishlist db entry, make a DownloadRequest
     /// key: <peer_public_key><timestamp><path> value: <request_id><size>
     pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
         let peer_public_key: [u8; 32] = key[0..32].try_into()?;

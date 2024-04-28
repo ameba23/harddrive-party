@@ -204,7 +204,7 @@ impl Hdp {
         remote_cert: Certificate,
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
-        debug!("Connected to peer {}", peer_name);
+        debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
         let peers_clone = self.peers.clone();
@@ -997,138 +997,154 @@ pub enum HandleUiCommandError {
     DbError,
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::wire_messages::Entry;
-//
-//     use super::*;
-//     use tempfile::TempDir;
-//
-//     async fn setup_peer(share_dirs: Vec<&str>) -> (Hdp, UnboundedReceiver<UiServerMessage>) {
-//         let storage = TempDir::new().unwrap();
-//         Hdp::new(storage, share_dirs).await.unwrap()
-//     }
-//
-//     #[tokio::test]
-//     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
-//         env_logger::init();
-//         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data"]).await;
-//         let alice_addr = alice.endpoint.local_addr().unwrap();
-//
-//         let alice_command_tx = alice.command_tx.clone();
-//         tokio::spawn(async move {
-//             alice.run().await;
-//         });
-//
-//         let (mut bob, mut bob_rx) = setup_peer(vec![]).await;
-//         let bob_command_tx = bob.command_tx.clone();
-//         tokio::spawn(async move {
-//             bob.run().await;
-//         });
-//
-//         // Connect to alice
-//         bob_command_tx
-//             .send(UiClientMessage {
-//                 id: 0,
-//                 command: Command::Connect(alice_addr),
-//             })
-//             .unwrap();
-//
-//         let _res = bob_rx.recv().await.unwrap();
-//
-//         // Do a read request
-//         let req = Request::Read {
-//             path: "test-data/somefile".to_string(),
-//             start: None,
-//             end: None,
-//         };
-//         bob_command_tx
-//             .send(UiClientMessage {
-//                 id: 1,
-//                 command: Command::Request(req, alice_addr.to_string()),
-//             })
-//             .unwrap();
-//
-//         let res = bob_rx.recv().await.unwrap();
-//         if let UiServerMessage::Response { id: _, response } = res {
-//             assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
-//         } else {
-//             panic!("Bad response");
-//         }
-//
-//         // Do an Ls query
-//         let req = Request::Ls {
-//             path: None,
-//             searchterm: None,
-//             recursive: true,
-//         };
-//         bob_command_tx
-//             .send(UiClientMessage {
-//                 id: 1,
-//                 command: Command::Request(req, alice_addr.to_string()),
-//             })
-//             .unwrap();
-//
-//         let mut entries = Vec::new();
-//         while let UiServerMessage::Response {
-//             id: _,
-//             response: Ok(UiResponse::Ls(LsResponse::Success(some_entries), _name)),
-//         } = bob_rx.recv().await.unwrap()
-//         {
-//             for entry in some_entries {
-//                 entries.push(entry);
-//             }
-//         }
-//         let test_entries = create_test_entries();
-//         assert_eq!(test_entries, entries);
-//
-//         // Close the connection
-//         alice_command_tx
-//             .send(UiClientMessage {
-//                 id: 3,
-//                 command: Command::Close,
-//             })
-//             .unwrap();
-//         Ok(())
-//     }
-//
-//     fn create_test_entries() -> Vec<Entry> {
-//         vec![
-//             Entry {
-//                 name: "".to_string(),
-//                 size: 17,
-//                 is_dir: true,
-//             },
-//             Entry {
-//                 name: "test-data".to_string(),
-//                 size: 17,
-//                 is_dir: true,
-//             },
-//             Entry {
-//                 name: "test-data/subdir".to_string(),
-//                 size: 12,
-//                 is_dir: true,
-//             },
-//             Entry {
-//                 name: "test-data/subdir/subsubdir".to_string(),
-//                 size: 6,
-//                 is_dir: true,
-//             },
-//             Entry {
-//                 name: "test-data/somefile".to_string(),
-//                 size: 5,
-//                 is_dir: false,
-//             },
-//             Entry {
-//                 name: "test-data/subdir/anotherfile".to_string(),
-//                 size: 6,
-//                 is_dir: false,
-//             },
-//             Entry {
-//                 name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
-//                 size: 6,
-//                 is_dir: false,
-//             },
-//         ]
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use crate::wire_messages::Entry;
+
+    use super::*;
+    use tempfile::TempDir;
+
+    async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, UnboundedReceiver<UiServerMessage>) {
+        let storage = TempDir::new().unwrap();
+        Hdp::new(storage, share_dirs, vec!["foo".to_string()])
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::init();
+        let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
+        let alice_name = alice.name.clone();
+
+        let alice_command_tx = alice.command_tx.clone();
+        tokio::spawn(async move {
+            alice.run().await;
+        });
+
+        let (mut bob, mut bob_rx) = setup_peer(vec![]).await;
+        let bob_command_tx = bob.command_tx.clone();
+        tokio::spawn(async move {
+            bob.run().await;
+        });
+
+        while let Some(res) = bob_rx.recv().await {
+            println!("Res {:?}", res);
+
+            match res {
+                UiServerMessage::Event(UiEvent::PeerConnected { name, peer_type: _ }) => {
+                    if name == alice_name {
+                        println!("connected to {}", name);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Do a read request
+        let req = ReadQuery {
+            path: "test-data/somefile".to_string(),
+            start: None,
+            end: None,
+        };
+        bob_command_tx
+            .send(UiClientMessage {
+                id: 1,
+                command: Command::Read(req, alice_name.clone()),
+            })
+            .unwrap();
+
+        while let Some(res) = bob_rx.recv().await {
+            println!("Res {:?}", res);
+            if let UiServerMessage::Response { id: _, response } = res {
+                assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
+                break;
+            }
+        }
+
+        // // Do an Ls query
+        let req = IndexQuery {
+            path: None,
+            searchterm: None,
+            recursive: true,
+        };
+        bob_command_tx
+            .send(UiClientMessage {
+                id: 2,
+                command: Command::Ls(req, Some(alice_name)),
+            })
+            .unwrap();
+
+        let mut entries = Vec::new();
+        while let Some(res) = bob_rx.recv().await {
+            match res {
+                UiServerMessage::Response { id, response } => match response.unwrap() {
+                    UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
+                        for entry in some_entries {
+                            entries.push(entry);
+                        }
+                    }
+                    UiResponse::EndResponse => {
+                        if id == 2 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+        let test_entries = create_test_entries();
+        assert_eq!(test_entries, entries);
+
+        // Close the connection
+        alice_command_tx
+            .send(UiClientMessage {
+                id: 3,
+                command: Command::Close,
+            })
+            .unwrap();
+        Ok(())
+    }
+
+    fn create_test_entries() -> Vec<Entry> {
+        vec![
+            Entry {
+                name: "".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir".to_string(),
+                size: 12,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir".to_string(),
+                size: 6,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/somefile".to_string(),
+                size: 5,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/anotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+        ]
+    }
+}

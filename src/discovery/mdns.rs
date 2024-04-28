@@ -31,12 +31,12 @@ impl MdnsServer {
         addr: SocketAddr,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         token: SessionToken,
+        initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<Self> {
         let (topic_events_tx, topic_events_rx) = unbounded_channel();
         let mdns_server = Self { topic_events_tx };
 
-        mdns_server.run(id, addr, token, peers_tx, topic_events_rx)?;
-
+        mdns_server.run(id, addr, token, peers_tx, topic_events_rx, initial_topics)?;
         Ok(mdns_server)
     }
 
@@ -47,13 +47,14 @@ impl MdnsServer {
         token: SessionToken,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
+        initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
         let mdns_receiver = mdns.browse(SERVICE_TYPE)?;
 
         let id_clone = id.to_string();
         tokio::spawn(async move {
-            let mut topics: HashSet<Topic> = Default::default();
+            let mut topics = initial_topics; //HashSet<Topic> = Default::default();
             let mut existing_service: Option<String> = None;
 
             loop {
@@ -329,6 +330,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<Handsha
             if let Ok(buf) = hex::decode(capability_string) {
                 buf.try_into().ok()
             } else {
+                warn!("Cannot decode hex in mdns property");
                 None
             }
         })
@@ -354,7 +356,9 @@ fn try_topics(
     their_addr: SocketAddr,
 ) -> Option<SessionToken> {
     for capability in capabilities {
+        println!("Tring a capability");
         for topic in topics {
+            println!("checking a topic");
             if let Ok(their_token) = handshake_response(capability, topic, their_addr) {
                 return Some(their_token);
             }

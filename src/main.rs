@@ -8,6 +8,9 @@ use harddrive_party::{
     ws::single_client_command,
 };
 use std::{net::SocketAddr, path::PathBuf};
+use tokio::net::TcpListener;
+
+const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
@@ -66,8 +69,9 @@ enum CliCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let default_ui_addr = "ws://localhost:5001".to_string();
-    let ui_addr = cli.ui_addr.unwrap_or(default_ui_addr);
+    let ui_addr = cli
+        .ui_addr
+        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS.to_string()));
 
     if cli.verbose {
         std::env::set_var(
@@ -85,7 +89,7 @@ async fn main() -> anyhow::Result<()> {
             topic,
             dev,
         } => {
-            let ws_addr = ws_addr.unwrap_or_else(|| "127.0.0.1:4001".parse().unwrap());
+            let ws_addr = ws_addr.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
 
             let mut initial_topics = Vec::new();
             if let Some(t) = topic {
@@ -122,8 +126,10 @@ async fn main() -> anyhow::Result<()> {
 
                     let command_tx = hdp.command_tx.clone();
 
+                    let ws_listener = TcpListener::bind(&ws_addr).await?;
+                    println!("WS Listening on: {}", ws_addr);
                     tokio::spawn(async move {
-                        harddrive_party::ws::server(ws_addr, command_tx, recv)
+                        harddrive_party::ws::server(ws_listener, command_tx, recv)
                             .await
                             .unwrap();
                     });

@@ -8,6 +8,7 @@ use futures::{
     stream::{SplitSink, SplitStream},
     SinkExt, StreamExt,
 };
+use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
 use log::{debug, trace, warn};
 use rand::{rngs::ThreadRng, Rng};
 use std::{
@@ -27,17 +28,12 @@ type ClientMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
 
 /// WS server
 pub async fn server(
-    addr: SocketAddr,
+    listener: TcpListener,
     command_tx: UnboundedSender<UiClientMessage>,
     mut response_rx: UnboundedReceiver<UiServerMessage>,
 ) -> anyhow::Result<()> {
     let state = ClientMap::new(Mutex::new(HashMap::new()));
     let event_cache = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
-
-    // Create the event loop and TCP listener we'll accept connections on.
-    let try_socket = TcpListener::bind(&addr).await;
-    let listener = try_socket?;
-    println!("WS Listening on: {}", addr);
 
     // Loop over response channel and send to each connected client
     let state_clone = state.clone();
@@ -53,11 +49,8 @@ pub async fn server(
             }
 
             for client in clients.values() {
-                match client.send(msg.clone()) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        warn!("Cannot send msg to connected client {:?}", err);
-                    }
+                if let Err(err) = client.send(msg.clone()) {
+                    warn!("Cannot send msg to connected client {:?}", err);
                 };
             }
         }
@@ -170,6 +163,8 @@ impl WsClient {
     }
 }
 
+/// Make a connection and send a single command to the harddrive-party instance
+/// Used by the CLI
 pub async fn single_client_command(
     server_addr: String,
     command: Command,
@@ -177,10 +172,6 @@ pub async fn single_client_command(
     let mut ws_client = WsClient::new(server_addr).await?;
     let message_id = ws_client.send_message(command).await?;
     Ok(read_responses(ws_client.read, message_id).await)
-    // read.for_each(|message| async {
-    //     let data = message.unwrap().into_data();
-    //     println!("data {:?}", data);
-    // });
 }
 
 // TODO this should return a result with a stream of messages
@@ -205,9 +196,30 @@ pub async fn read_responses(
                                 warn!("Unexpected msg id - got message for another client");
                             }
                         }
-                        UiServerMessage::Event(event) => {
-                            println!("Got event {:?}", event);
-                        }
+                        UiServerMessage::Event(event) => match event {
+                            UiEvent::PeerConnected {
+                                name,
+                                peer_type: PeerRemoteOrSelf::Me { .. },
+                            } => {
+                                println!("{}", name);
+                            }
+                            UiEvent::PeerConnected {
+                                name,
+                                peer_type: PeerRemoteOrSelf::Remote,
+                            } => {
+                                println!("Connected to remote peer: {}", name);
+                            }
+                            UiEvent::Topics(topics) => {
+                                for (topic, connected) in topics {
+                                    if connected {
+                                        println!("Connected to {}", topic);
+                                    }
+                                }
+                            }
+                            _ => {
+                                println!("Got event {:?}", event);
+                            }
+                        },
                     }
                 }
                 Err(e) => {
