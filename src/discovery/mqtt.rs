@@ -96,6 +96,7 @@ impl MqttClient {
         tokio::spawn(async move {
             let mut topics = HashMap::<Topic, MqttTopic>::new();
 
+            // Loop of reconnections following connection lost
             loop {
                 let mut subscribe_results = HashMap::<u16, (oneshot::Sender<bool>, Topic)>::new();
                 let mut unsubscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
