@@ -4,7 +4,8 @@ use crate::{
     shares::{EntryParseError, Shares},
     ui_messages::{UiEvent, UiServerMessage, UploadInfo},
 };
-use bincode::serialize;
+use bincode::{deserialize, serialize};
+use harddrive_party_shared::wire_messages::{IndexQuery, ReadQuery, Request};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
@@ -50,8 +51,35 @@ impl Rpc {
         Rpc { shares, upload_tx }
     }
 
+    /// Handle a request
+    pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream) {
+        let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
+        match request {
+            Ok(req) => {
+                debug!("Got request from peer {:?}", req);
+                match req {
+                    Request::Ls(IndexQuery {
+                        path,
+                        searchterm,
+                        recursive,
+                    }) => {
+                        if let Ok(()) = self.ls(path, searchterm, recursive, output).await {};
+                        // TODO else
+                    }
+                    Request::Read(ReadQuery { path, start, end }) => {
+                        if let Ok(()) = self.read(path, start, end, output).await {};
+                        // TODO else
+                    }
+                }
+            }
+            Err(_) => {
+                warn!("Cannot decode wire message");
+            }
+        }
+    }
+
     /// Query the filepath index
-    pub async fn ls(
+    async fn ls(
         &self,
         path: Option<String>,
         searchterm: Option<String>,
@@ -97,7 +125,7 @@ impl Rpc {
 
     /// Read a portion of a file
     /// This puts the read request, which contains a stream for the response, in a queue
-    pub async fn read(
+    async fn read(
         &self,
         path: String,
         start: Option<u64>,
