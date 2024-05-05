@@ -19,15 +19,20 @@ pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
 
 const MAX_HOLEPUNCH_ATTEMPTS: usize = 10;
+const PACKET_CHANNEL_CAPACITY: usize = 1024;
 
+/// UDP socket which sends holepunch packets using the [HolePuncher]
 #[derive(Debug)]
 pub struct PunchingUdpSocket {
+    /// The underlying UDP socket
     socket: Arc<tokio::net::UdpSocket>,
     quinn_socket_state: quinn_udp::UdpSocketState,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
 }
 
 impl PunchingUdpSocket {
+    /// Given a raw UDP socket, return a [PunchingUdpSocket] and a [HolePuncher] which allows us to
+    /// send holepunch packets on the socket
     pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
         let socket = socket.into_std()?;
 
@@ -35,9 +40,12 @@ impl PunchingUdpSocket {
 
         let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
-        let (udp_recv_tx, _udp_recv) = broadcast::channel::<IncomingHolepunchPacket>(1024);
-        let (udp_send, mut udp_send_rx) = mpsc::channel::<OutgoingHolepunchPacket>(1024);
+        let (udp_recv_tx, _udp_recv) =
+            broadcast::channel::<IncomingHolepunchPacket>(PACKET_CHANNEL_CAPACITY);
+        let (udp_send, mut udp_send_rx) =
+            mpsc::channel::<OutgoingHolepunchPacket>(PACKET_CHANNEL_CAPACITY);
 
+        // Loop over outgoing packets from the HolePuncher
         let socket_clone = socket.clone();
         tokio::spawn(async move {
             while let Some(packet) = udp_send_rx.recv().await {
@@ -130,18 +138,22 @@ fn forward_holepunch(
     }
 }
 
+/// A holepunch packet we have received
 #[derive(Clone, Debug)]
 pub struct IncomingHolepunchPacket {
+    /// This is one u8, where 0 is the initiator packet, and 1 is an acknowledgement packet
     data: [u8; 1],
     from: SocketAddr,
 }
 
+/// A holepunch packet we want to send
 #[derive(Clone, Debug)]
 pub struct OutgoingHolepunchPacket {
     data: [u8; 1],
     dest: SocketAddr,
 }
 
+/// Handles requests to connect to a peer by holepuching using a channel to a [PunchingUdpSocket]
 #[derive(Clone, Debug)]
 pub struct HolePuncher {
     udp_send: UdpSend,
@@ -150,7 +162,6 @@ pub struct HolePuncher {
 
 impl HolePuncher {
     /// Make a connection by holepunching
-    /// TODO dont wait forever - give up after n tries
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
         let mut packet = OutgoingHolepunchPacket {

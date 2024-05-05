@@ -87,11 +87,13 @@ impl PeerDiscovery {
         let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
 
         // Get our public address and NAT type from a STUN server
+        // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
+        // error
         let (public_addr, nat_type) = stun_test(&raw_socket).await?;
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
-        let addr = socket.local_addr()?;
 
+        let addr = socket.local_addr()?;
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
@@ -119,9 +121,11 @@ impl PeerDiscovery {
             Some(
                 MqttClient::new(
                     id,
-                    public_addr,
-                    nat_type,
-                    session_token,
+                    AnnounceAddress {
+                        public_addr,
+                        nat_type,
+                        token: session_token,
+                    },
                     peers_tx,
                     hole_puncher,
                 )
