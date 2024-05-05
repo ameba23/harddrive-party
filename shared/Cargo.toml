@@ -1,9 +1,12 @@
 [package]
 name = "harddrive-party-shared"
 description = "Shared types for harddrive-party and harddrive-party-web-ui"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
 license = "GPL-3.0-or-later"
+authors = ["peg <peg@magmacollective.org>"]
+homepage = "https://gitlab.com/pegpeg/harddrive-party"
+repository = "https://gitlab.com/pegpeg/harddrive-party"
 
 [dependencies]
 thiserror = "1.0.37"
