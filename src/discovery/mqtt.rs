@@ -1,7 +1,7 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 use super::{
-    hole_punch::HolePuncher, stun::NatType, topic::Topic, DiscoveredPeer, JoinOrLeaveEvent,
-    SessionToken,
+    hole_punch::HolePuncher, stun::NatType, topic::Topic, AnnounceAddress, DiscoveredPeer,
+    JoinOrLeaveEvent,
 };
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
@@ -14,11 +14,9 @@ use mqtt::{
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, ToSocketAddrs},
-    str,
     time::Duration,
 };
 use tokio::{
@@ -44,18 +42,10 @@ pub struct MqttClient {
 impl MqttClient {
     pub async fn new(
         client_id: String,
-        public_addr: SocketAddr,
-        nat_type: NatType,
-        our_token: SessionToken,
+        announce_address: AnnounceAddress,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         hole_puncher: HolePuncher,
     ) -> anyhow::Result<Self> {
-        let announce_address = AnnounceAddress {
-            public_addr,
-            nat_type,
-            token: our_token,
-        };
-
         let announce_address_clone = announce_address.clone();
 
         let (topic_events_tx, topic_events_rx) = unbounded_channel();
@@ -351,13 +341,6 @@ impl MqttClient {
             Err(anyhow!("Failed to add topic"))
         }
     }
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct AnnounceAddress {
-    public_addr: SocketAddr,
-    nat_type: NatType,
-    token: SessionToken,
 }
 
 // Attempt to decrypt an announce message from another peer

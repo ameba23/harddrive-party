@@ -7,9 +7,10 @@ use crate::{
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
-    wire_messages::{Entry, IndexQuery, LsResponse, ReadQuery, Request},
+    wire_messages::{Entry, IndexQuery, LsResponse, Request},
     wishlist::{DownloadRequest, WishList},
 };
+use anyhow::ensure;
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
@@ -158,7 +159,6 @@ impl Hdp {
                 response_tx,
                 peer_discovery,
                 download_dir,
-                // public_key,
                 name,
                 ls_cache: Default::default(),
                 wishlist,
@@ -213,32 +213,7 @@ impl Hdp {
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
-            // Check the session token
-            if let Some(thier_token) = token {
-                let (mut send, _recv) = conn.open_bi().await.unwrap();
-                send.write_all(&thier_token).await.unwrap();
-                // send.write_all(&our_token).await.unwrap();
-                send.finish().await.unwrap();
-            } else if let Ok((_send, recv)) = conn.accept_bi().await {
-                match recv.read_to_end(TOKEN_LENGTH).await {
-                    Ok(buf) => {
-                        // make some check
-                        if buf == our_token {
-                            debug!("accepted remote peer's token");
-                        } else {
-                            warn!("Rejected remote peer's token");
-                            return;
-                        }
-                    }
-                    Err(err) => {
-                        error!("Error reading token {:?}", err);
-                        return;
-                    }
-                }
-            } else {
-                error!("Err accepting connection from peer");
-                return;
-            }
+            handle_session_token(&conn, token, our_token).await.unwrap();
 
             {
                 // Add peer to our hashmap
@@ -267,79 +242,29 @@ impl Hdp {
                     peer_type: PeerRemoteOrSelf::Remote,
                 },
             );
-
-            // Loop over incoming requests from this peer
             loop {
-                match conn.accept_bi().await {
-                    Ok((send, recv)) => {
-                        // Read a request
-                        match recv.read_to_end(MAX_REQUEST_SIZE).await {
-                            Ok(buf) => {
-                                let request: Result<Request, Box<bincode::ErrorKind>> =
-                                    deserialize(&buf);
-                                match request {
-                                    Ok(req) => {
-                                        debug!("Got request from peer {:?}", req);
-                                        match req {
-                                            Request::Ls(IndexQuery {
-                                                path,
-                                                searchterm,
-                                                recursive,
-                                            }) => {
-                                                if let Ok(()) =
-                                                    rpc.ls(path, searchterm, recursive, send).await
-                                                {
-                                                };
-                                                // TODO else
-                                            }
-                                            Request::Read(ReadQuery { path, start, end }) => {
-                                                if let Ok(()) =
-                                                    rpc.read(path, start, end, send).await
-                                                {
-                                                };
-                                                // TODO else
-                                            }
-                                        }
-                                    }
-                                    Err(_) => {
-                                        warn!("Cannot decode wire message");
-                                    }
-                                }
-                            }
-                            Err(err) => {
-                                warn!("Cannot read from incoming QUIC stream {:?}", err);
-                                break;
-                            }
-                        };
+                match accept_incoming_request(&conn).await {
+                    Ok((send, buf)) => {
+                        rpc.request(buf, send).await;
                     }
-                    Err(error) => {
-                        match error {
-                            quinn::ConnectionError::TimedOut => {
-                                warn!("Timeout when accepting stream from peer - likely they have disconnected");
-                            }
-                            _ => {
-                                warn!("Error when accepting QUIC stream {:?}", error);
-                            }
-                        }
+                    Err(err) => {
+                        warn!("Failed to handle request: {:?}", err);
                         break;
                     }
                 }
             }
+
             let mut peers = peers_clone.lock().await;
-            match peers.remove(&peer_name) {
-                Some(_) => {
-                    debug!("Connection closed - removed peer");
-                    send_event(
-                        response_tx,
-                        UiEvent::PeerDisconnected {
-                            name: peer_name.clone(),
-                        },
-                    );
-                }
-                None => {
-                    warn!("Connection closed but peer not present in map");
-                }
+            if peers.remove(&peer_name).is_none() {
+                warn!("Connection closed but peer not present in map");
             }
+            debug!("Connection closed - removed peer");
+            send_event(
+                response_tx,
+                UiEvent::PeerDisconnected {
+                    name: peer_name.clone(),
+                },
+            );
         });
     }
 
@@ -973,6 +898,31 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
     Ok(stream.boxed())
 }
 
+async fn handle_session_token(
+    conn: &quinn::Connection,
+    token: Option<SessionToken>,
+    our_token: SessionToken,
+) -> anyhow::Result<()> {
+    if let Some(thier_token) = token {
+        let (mut send, _recv) = conn.open_bi().await?;
+        send.write_all(&thier_token).await?;
+        send.finish().await?;
+    } else {
+        let (_send, recv) = conn.accept_bi().await?;
+        let buf = recv.read_to_end(TOKEN_LENGTH).await?;
+        ensure!(buf == our_token, "Rejected remote peer's token");
+    }
+    Ok(())
+}
+
+async fn accept_incoming_request(
+    conn: &quinn::Connection,
+) -> anyhow::Result<(quinn::SendStream, Vec<u8>)> {
+    let (send, recv) = conn.accept_bi().await?;
+    let buf = recv.read_to_end(MAX_REQUEST_SIZE).await?;
+    Ok((send, buf))
+}
+
 /// Error on making a request to a given remote peer
 #[derive(Error, Debug, PartialEq)]
 pub enum RequestError {
@@ -999,7 +949,7 @@ pub enum HandleUiCommandError {
 
 #[cfg(test)]
 mod tests {
-    use crate::wire_messages::Entry;
+    use crate::wire_messages::{Entry, ReadQuery};
 
     use super::*;
     use tempfile::TempDir;
