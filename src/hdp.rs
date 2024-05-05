@@ -169,6 +169,7 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
+        // Inform the UI of initial state of topics and wishlist
         self.topics_updated();
         if let Err(err) = self.wishlist.updated() {
             error!("Error when sending wishlist to UI {err}");
