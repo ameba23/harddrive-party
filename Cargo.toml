@@ -44,7 +44,7 @@ hex = "0.4.3"
 key-to-animal = { git = "https://gitlab.com/pegpeg/key-to-animal" }
 ring = "0.16.20"
 speedometer = "0.2.2"
-stunclient = "0.4.0"
+stunclient = "0.4.1"
 lru = "0.10.0"
 async-stream = "0.3.4"
 warp = "0.3.5"
