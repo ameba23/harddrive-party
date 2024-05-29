@@ -183,7 +183,7 @@ impl MqttClient {
                                                 debug!("Found remote peer with the same public ip as ours - ignoring");
                                                 continue;
                                             }
-
+                                            debug!("Remote peer {:?}", remote_peer_announce);
                                             // TODO there are more cases when we should not bother hole punching
                                             if remote_peer_announce.nat_type != NatType::Symmetric {
                                                 let mut hole_puncher_clone = hole_puncher.clone();
@@ -295,7 +295,14 @@ impl MqttClient {
                     }
                 };
                 if reconnect {
-                    stream = connect(&server_addr, client_id.clone()).await.unwrap();
+                    let mut stream = loop {
+                        if let Ok(stream) = connect(&server_addr, client_id.clone()).await {
+                            break stream;
+                        } else {
+                            error!("Cannot connect to mqtt server - reconnecting in 10s");
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
+                    };
                     // Resubscribe to existing topics
                     let channel_filters: Vec<(TopicFilter, QualityOfService)> = topics
                         .values()
