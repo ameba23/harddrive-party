@@ -135,10 +135,7 @@ fn forward_holepunch(
             };
             let _ = channel.send(packet);
         } else {
-            warn!(
-                "Got unexpected UDP data: {}",
-                String::from_utf8_lossy(&buf[..meta.len])
-            )
+            warn!("Got unexpected UDP data: {}", hex::encode(&buf[..meta.len]))
         }
     }
 }
