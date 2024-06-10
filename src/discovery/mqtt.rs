@@ -213,20 +213,20 @@ impl MqttClient {
                                                 our_nat_badness > their_nat_badness
                                             };
 
-                                            if should_initiate_connection {
-                                                info!("PUBLISH ({})", publ.topic_name());
-                                                if peers_tx
-                                                    .send(DiscoveredPeer {
-                                                        addr: remote_peer_announce.public_addr,
-                                                        token: remote_peer_announce.token,
-                                                        topic: Some(associated_topic.clone()),
-                                                    })
-                                                    .is_err()
-                                                {
-                                                    error!("Cannot write to channel");
-                                                    break false;
-                                                }
-                                            }
+                                            // if should_initiate_connection {
+                                            //     info!("PUBLISH ({})", publ.topic_name());
+                                            //     if peers_tx
+                                            //         .send(DiscoveredPeer {
+                                            //             addr: remote_peer_announce.public_addr,
+                                            //             token: remote_peer_announce.token,
+                                            //             topic: Some(associated_topic.clone()),
+                                            //         })
+                                            //         .is_err()
+                                            //     {
+                                            //         error!("Cannot write to channel");
+                                            //         break false;
+                                            //     }
+                                            // }
 
                                             // Say 'hello' by re-publishing our own announce message to
                                             // this topic
