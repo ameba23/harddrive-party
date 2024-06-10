@@ -66,7 +66,7 @@ impl MqttClient {
     pub async fn run(
         &self,
         peers_tx: UnboundedSender<DiscoveredPeer>,
-        mut hole_puncher: HolePuncher,
+        hole_puncher: HolePuncher,
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         // let server_addr = "public.mqtthq.com:1883"
@@ -186,12 +186,15 @@ impl MqttClient {
                                             debug!("Remote peer {:?}", remote_peer_announce);
                                             // TODO there are more cases when we should not bother hole punching
                                             if remote_peer_announce.nat_type != NatType::Symmetric {
+                                                let mut hole_puncher_clone = hole_puncher.clone();
+                                                tokio::spawn(async move {
                                                     info!("Attempting hole punch...");
-                                                    if hole_puncher.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
+                                                    if hole_puncher_clone.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
                                                         warn!("Hole punching failed");
                                                     } else {
                                                         info!("Hole punching succeeded");
                                                     };
+                                                });
                                             };
 
                                             // Decide whether to initiate the connection deterministically
