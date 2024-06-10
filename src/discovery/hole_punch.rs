@@ -18,7 +18,7 @@ use tokio::{
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
 
-const MAX_HOLEPUNCH_ATTEMPTS: usize = 10;
+const MAX_HOLEPUNCH_ATTEMPTS: usize = 50;
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
 
 /// UDP socket which sends holepunch packets using the [HolePuncher]
@@ -180,7 +180,7 @@ impl HolePuncher {
         let mut attempts = 0;
         loop {
             if wait {
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
             }
             tokio::select! {
               send = self.udp_send.send(packet.clone()) => {
