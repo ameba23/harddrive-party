@@ -174,14 +174,11 @@ impl HolePuncher {
             dest: addr,
             data: [0u8],
         };
-        let mut wait = false;
+        // let mut wait = false;
         let mut sent_ack = false;
         let mut received_ack = false;
         let mut attempts = 0;
         loop {
-            if wait {
-                tokio::time::sleep(Duration::from_millis(2000)).await;
-            }
             tokio::select! {
               send = self.udp_send.send(packet.clone()) => {
                   if let Err(err) = send {
@@ -199,7 +196,7 @@ impl HolePuncher {
                           break
                       };
                   }
-                  wait = true;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
               }
               recv = udp_recv.recv() => {
                   if let Ok(recv) = recv {
@@ -221,7 +218,7 @@ impl HolePuncher {
                           }
                       }
                   }
-                  wait = false
+                  // wait = false
               }
             }
         }
