@@ -84,14 +84,14 @@ impl PeerDiscovery {
         let (peers_tx, peers_rx) = unbounded_channel();
 
         let my_local_ip = local_ip()?;
-        let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 22334)).await?;
+        let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
 
         // Get our public address and NAT type from a STUN server
         // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
         // error
         let (public_ip, nat_type) = stun_test(&raw_socket).await?;
 
-        let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 22334)).await?;
+        let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
         let addr = socket.local_addr()?;

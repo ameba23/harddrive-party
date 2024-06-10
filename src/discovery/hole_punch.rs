@@ -134,6 +134,11 @@ fn forward_holepunch(
                 from: meta.addr,
             };
             let _ = channel.send(packet);
+        } else {
+            warn!(
+                "Got unexpected UDP data: {}",
+                String::from_utf8_lossy(&buf[..meta.len])
+            )
         }
     }
 }
