@@ -129,6 +129,7 @@ fn forward_holepunch(
 ) {
     for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
         if meta.len == 1 {
+            println!("GOT INCOMING");
             let packet = IncomingHolepunchPacket {
                 data: [buf[0]], // *&buf[0]
                 from: meta.addr,

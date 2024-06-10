@@ -91,9 +91,7 @@ impl PeerDiscovery {
         // error
         let (public_ip, nat_type) = stun_test(&raw_socket).await?;
 
-        let raw_socket_2 = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
-        let (socket_2, hole_puncher_2) = PunchingUdpSocket::bind(raw_socket_2).await?;
 
         let addr = socket.local_addr()?;
 
@@ -169,7 +167,7 @@ impl PeerDiscovery {
             peer_discovery.join_topic(topic).await?;
         }
 
-        Ok((socket_2, peer_discovery))
+        Ok((socket, peer_discovery))
     }
 
     /// Join the given topic
