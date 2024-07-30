@@ -295,6 +295,9 @@ impl MqttClient {
                     }
                 };
                 if reconnect {
+                    if stream.shutdown().await.is_err() {
+                        error!("Error while shutting down stream");
+                    }
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     stream = loop {
                         if let Ok(stream) = connect(&server_addr, client_id.clone()).await {
