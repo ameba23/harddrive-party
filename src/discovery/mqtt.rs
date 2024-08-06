@@ -31,6 +31,7 @@ use tokio::{
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
+const MQTT_SERVER: &str = "broker.hivemq.com:1883";
 
 pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
@@ -70,7 +71,7 @@ impl MqttClient {
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         // let server_addr = "public.mqtthq.com:1883"
-        let server_addr = "broker.hivemq.com:1883"
+        let mut server_addr = MQTT_SERVER
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
             .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
@@ -305,6 +306,14 @@ impl MqttClient {
                         } else {
                             error!("Cannot connect to mqtt server - reconnecting in 10s");
                             tokio::time::sleep(Duration::from_secs(10)).await;
+
+                            // Do DNS lookup again
+                            server_addr = MQTT_SERVER
+                                .to_socket_addrs()
+                                .unwrap()
+                                .find(|x| x.is_ipv4())
+                                .unwrap();
+                            // .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
                         }
                     };
                     // Resubscribe to existing topics
