@@ -300,22 +300,29 @@ impl MqttClient {
                         error!("Error while shutting down stream");
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    stream = loop {
-                        if let Ok(stream) = connect(&server_addr, client_id.clone()).await {
-                            break stream;
+                    let reconnect_success = loop {
+                        if let Ok(new_stream) = connect(&server_addr, client_id.clone()).await {
+                            stream = new_stream;
+                            break true;
                         } else {
                             error!("Cannot connect to mqtt server - reconnecting in 10s");
                             tokio::time::sleep(Duration::from_secs(10)).await;
 
                             // Do DNS lookup again
-                            server_addr = MQTT_SERVER
-                                .to_socket_addrs()
-                                .unwrap()
-                                .find(|x| x.is_ipv4())
-                                .unwrap();
-                            // .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
+                            match mqtt_dns_resolve() {
+                                Ok(addr) => {
+                                    server_addr = addr;
+                                }
+                                Err(err) => {
+                                    warn!("{:?}", err);
+                                    break false;
+                                }
+                            }
                         }
                     };
+                    if !reconnect_success {
+                        break;
+                    }
                     // Resubscribe to existing topics
                     let channel_filters: Vec<(TopicFilter, QualityOfService)> = topics
                         .values()
@@ -441,4 +448,12 @@ async fn connect(server_addr: &SocketAddr, client_id: String) -> anyhow::Result<
         return Err(anyhow!("Got unexpected packet - expecting Connack"));
     }
     Ok(stream)
+}
+
+fn mqtt_dns_resolve() -> anyhow::Result<SocketAddr> {
+    let server_addr = MQTT_SERVER
+        .to_socket_addrs()?
+        .find(|x| x.is_ipv4())
+        .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
+    Ok(server_addr)
 }
