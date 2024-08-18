@@ -220,6 +220,8 @@ impl HolePuncher {
                               },
                               _ => warn!("Received invalid holepunch packet from {addr}")
                           }
+                      } else {
+                          debug!("Received unrelated packet from {}", recv.from);
                       }
                   }
                   wait = false;

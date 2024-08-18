@@ -3,11 +3,11 @@
 use anyhow::anyhow;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use stunclient::StunClient;
 
 /// Get our public address and NAT type using STUN
-pub async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(IpAddr, NatType)> {
+pub async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(SocketAddr, NatType)> {
     // TODO have a list of public stun servers and choose two randomly
     let stun_client1 = StunClient::with_google_stun_server();
     let public_addr1 = stun_client1.query_external_address_async(socket).await?;
@@ -37,7 +37,7 @@ pub async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(IpAddr
         addr, public_addr1, public_addr2, nat_type
     );
 
-    Ok((public_addr2.ip(), nat_type))
+    Ok((public_addr2, nat_type))
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]

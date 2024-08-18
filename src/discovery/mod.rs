@@ -89,13 +89,13 @@ impl PeerDiscovery {
         // Get our public address and NAT type from a STUN server
         // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
         // error
-        let (public_ip, nat_type) = stun_test(&raw_socket).await?;
+        let (public_addr, nat_type) = stun_test(&raw_socket).await?;
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
         let addr = socket.local_addr()?;
 
-        let public_addr = SocketAddr::new(public_ip, addr.port());
+        // let public_addr = SocketAddr::new(public_ip, addr.port());
 
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
