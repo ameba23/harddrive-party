@@ -15,9 +15,12 @@ use std::{
     collections::HashSet,
     net::{IpAddr, SocketAddr},
 };
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver},
-    oneshot,
+use tokio::{
+    net::UdpSocket,
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver},
+        oneshot,
+    },
 };
 
 pub mod capability;
@@ -50,7 +53,6 @@ pub struct PeerDiscovery {
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
-    // waku_discovery: Option<WakuDiscovery>,
     pub topics_db: sled::Tree,
 }
 
@@ -84,7 +86,7 @@ impl PeerDiscovery {
         let (peers_tx, peers_rx) = unbounded_channel();
 
         let my_local_ip = local_ip()?;
-        let raw_socket = tokio::net::UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
+        let raw_socket = UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
 
         // Get our public address and NAT type from a STUN server
         // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
@@ -94,8 +96,6 @@ impl PeerDiscovery {
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
         let addr = socket.local_addr()?;
-
-        // let public_addr = SocketAddr::new(public_ip, addr.port());
 
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
@@ -137,29 +137,12 @@ impl PeerDiscovery {
         } else {
             None
         };
-        // let waku_discovery = if use_waku {
-        //     Some(
-        //         WakuDiscovery::new(
-        //             AnnounceAddress {
-        //                 public_addr,
-        //                 nat_type,
-        //                 token: session_token,
-        //             },
-        //             peers_tx,
-        //             hole_puncher,
-        //         )
-        //         .await?,
-        //     )
-        // } else {
-        //     None
-        // };
 
         let mut peer_discovery = Self {
             peers_rx,
             session_token,
             mdns_server,
             mqtt_client,
-            // waku_discovery,
             topics_db,
         };
 
@@ -180,10 +163,6 @@ impl PeerDiscovery {
             mqtt_client.add_topic(topic.clone()).await?;
         }
 
-        // if let Some(waku_discovery) = &self.waku_discovery {
-        //     waku_discovery.add_topic(topic.clone()).await?;
-        // }
-
         self.topics_db.insert(&topic.name, &JOINED)?;
         Ok(())
     }
@@ -193,10 +172,6 @@ impl PeerDiscovery {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.remove_topic(topic.clone()).await?;
         }
-
-        // if let Some(waku_discovery) = &self.waku_discovery {
-        //     waku_discovery.remove_topic(topic.clone()).await?;
-        // }
 
         if let Some(mqtt_client) = &self.mqtt_client {
             mqtt_client.remove_topic(topic.clone()).await?;

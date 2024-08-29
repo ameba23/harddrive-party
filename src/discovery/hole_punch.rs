@@ -3,22 +3,24 @@
 use anyhow::anyhow;
 use futures::ready;
 use log::{debug, info, warn};
+use rand::{Rng, SeedableRng};
 use std::{
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
     io::Interest,
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, RwLock},
 };
 
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
 
 const MAX_HOLEPUNCH_ATTEMPTS: usize = 50;
+const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
 
 /// UDP socket which sends holepunch packets using the [HolePuncher]
@@ -160,7 +162,17 @@ pub struct OutgoingHolepunchPacket {
     dest: SocketAddr,
 }
 
-/// Handles requests to connect to a peer by holepuching using a channel to a [PunchingUdpSocket]
+impl OutgoingHolepunchPacket {
+    fn new_init(dest: SocketAddr) -> Self {
+        Self { data: [0u8], dest }
+    }
+
+    fn new_ack(dest: SocketAddr) -> Self {
+        Self { data: [1u8], dest }
+    }
+}
+
+/// Handles requests to connect to a peer by holepunching using a channel to a [PunchingUdpSocket]
 #[derive(Clone, Debug)]
 pub struct HolePuncher {
     udp_send: UdpSend,
@@ -229,6 +241,60 @@ impl HolePuncher {
             }
         }
         Ok(())
+    }
+
+    pub async fn hole_punch_peer_without_port(
+        &mut self,
+        addr: IpAddr,
+    ) -> anyhow::Result<SocketAddr> {
+        let mut udp_recv = self.udp_recv_tx.subscribe();
+
+        let stop_signal = Arc::new(RwLock::new(false));
+        let stop_clone = stop_signal.clone();
+        // TODO use better seed
+        let mut rng = rand::thread_rng();
+        let rng_seed: u64 = rng.gen();
+
+        let udp_send = self.udp_send.clone();
+        let join_handle = tokio::spawn(async move {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(rng_seed);
+            for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
+                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, rng.gen()));
+                if let Err(err) = udp_send.send(packet).await {
+                    warn!("Failed to forward holepunch packet to {addr}: {err}");
+                }
+
+                if *stop_clone.read().await {
+                    break;
+                }
+            }
+            println!("Stopped sending");
+        });
+
+        // Wait for a response
+        // TODO we should have a timeout here
+        let sender = loop {
+            let recv = udp_recv.recv().await?;
+            // TODO should check the message is a hole punch packet
+            if recv.from.ip() == addr {
+                break recv.from;
+            }
+            debug!("Got message from unexpected sender - ignoring");
+        };
+
+        // Signal to stop trying connections
+        {
+            let mut stop = stop_signal.write().await;
+            *stop = true;
+        }
+        join_handle.await?;
+
+        // Send a packet back
+        self.udp_send
+            .send(OutgoingHolepunchPacket::new_ack(sender))
+            .await
+            .unwrap();
+        Ok(sender)
     }
 
     pub fn spawn_hole_punch_peer(&mut self, addr: SocketAddr) {
