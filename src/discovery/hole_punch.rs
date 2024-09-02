@@ -7,12 +7,14 @@ use rand::{Rng, SeedableRng};
 use std::{
     io,
     net::{IpAddr, SocketAddr},
-    sync::Arc,
+    sync::{mpsc as std_mpsc, Arc},
     task::{Context, Poll},
     time::Duration,
 };
 use tokio::{
     io::Interest,
+    net::UdpSocket,
+    select, spawn,
     sync::{broadcast, mpsc, RwLock},
 };
 
@@ -49,6 +51,8 @@ impl PunchingUdpSocket {
 
         // Loop over outgoing packets from the HolePuncher
         let socket_clone = socket.clone();
+        let mut rng = rand::thread_rng();
+        let rng_seed: u64 = rng.gen();
         tokio::spawn(async move {
             while let Some(packet) = udp_send_rx.recv().await {
                 match socket_clone.send_to(&packet.data, packet.dest).await {
@@ -70,6 +74,7 @@ impl PunchingUdpSocket {
             HolePuncher {
                 udp_send,
                 udp_recv_tx,
+                rng_seed,
             },
         ))
     }
@@ -177,6 +182,7 @@ impl OutgoingHolepunchPacket {
 pub struct HolePuncher {
     udp_send: UdpSend,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
+    rng_seed: u64,
 }
 
 impl HolePuncher {
@@ -252,12 +258,13 @@ impl HolePuncher {
         let stop_signal = Arc::new(RwLock::new(false));
         let stop_clone = stop_signal.clone();
         // TODO use better seed
-        let mut rng = rand::thread_rng();
-        let rng_seed: u64 = rng.gen();
+        // let mut rng = rand::thread_rng();
+        // let rng_seed: u64 = rng.gen();
 
         let udp_send = self.udp_send.clone();
+        let seed = self.rng_seed.clone();
         let join_handle = tokio::spawn(async move {
-            let mut rng = rand::rngs::StdRng::seed_from_u64(rng_seed);
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
                 let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, rng.gen()));
                 if let Err(err) = udp_send.send(packet).await {
@@ -308,4 +315,62 @@ impl HolePuncher {
             };
         });
     }
+}
+
+/// The number of sockets to listen on
+const INCOMING_SOCKETS: usize = 256;
+/// The inital holepunch packet sent
+const INIT_PUNCH: [u8; 1] = [0];
+/// The acknowledgement holepunch packet
+const ACK_PUNCH: [u8; 1] = [1];
+
+pub async fn birthday_hard_side(
+    target_addr: SocketAddr,
+) -> anyhow::Result<(UdpSocket, SocketAddr)> {
+    let (socket_tx, socket_rx) = std_mpsc::channel(); // TODO limit
+    let (stop_signal_tx, _stop_signal_rx) = broadcast::channel(1);
+
+    for _ in 0..INCOMING_SOCKETS {
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+        let socket_tx = socket_tx.clone();
+        let mut stop_signal_rx = stop_signal_tx.subscribe();
+        spawn(async move {
+            if let Err(error) = socket.send_to(&INIT_PUNCH, target_addr).await {
+                println!("Send error: {:?}", error);
+            }
+
+            let mut buf = [0u8; 32];
+            select! {
+                recv_result = socket.recv_from(&mut buf) => {
+                    match recv_result {
+                        Ok((_len, sender)) => {
+                            println!("Got a message");
+                            if sender == target_addr {
+                                if let Err(error) = socket.send_to(&ACK_PUNCH, sender).await {
+                                    println!("Send error: {:?}", error);
+                                }
+                                if socket_tx.send(socket).is_err() {
+                                    // This may happen if we get more than one successful punch
+                                    println!("Cannot send success socket - channel closed");
+                                }
+                            } else {
+                                print!("Got message from unexpected sender {}", sender);
+                            }
+                        }
+                        Err(error) => {
+                            println!("Cannot recieve on socket {:?} - {:?}", socket, error);
+                        }
+                    }
+                }
+                stop_signal_result = stop_signal_rx.recv() => {
+                    println!("Stop signal result {:?}", stop_signal_result);
+                }
+            }
+        });
+    }
+    // TODO we should have a timeout here
+    let socket = socket_rx.recv()?;
+    // This stops all the listener tasks
+    stop_signal_tx.send(true)?;
+    Ok((socket, target_addr))
 }
