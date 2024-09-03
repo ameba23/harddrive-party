@@ -48,6 +48,17 @@ pub enum PeerConnectionDetails {
     Symmetric(IpAddr) = 3,
 }
 
+impl PeerConnectionDetails {
+    /// Gets the IP address
+    pub fn ip(&self) -> IpAddr {
+        match self {
+            PeerConnectionDetails::NoNat(addr) => addr.ip(),
+            PeerConnectionDetails::Asymmetric(addr) => addr.ip(),
+            PeerConnectionDetails::Symmetric(ip) => ip.clone(),
+        }
+    }
+}
+
 /// Details of a peer found through one of the discovery methods
 #[derive(Debug)]
 pub struct DiscoveredPeer {

@@ -7,7 +7,7 @@ use harddrive_party::{
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
     ws::single_client_command,
 };
-use std::{net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 
 const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
@@ -74,9 +74,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS.to_string()));
 
     if cli.verbose {
-        std::env::set_var(
+        env::set_var(
             "RUST_LOG",
-            std::env::var_os("RUST_LOG").unwrap_or_else(|| "harddrive_party=debug".into()),
+            env::var_os("RUST_LOG").unwrap_or_else(|| "harddrive_party=debug".into()),
         );
     }
     env_logger::init();
