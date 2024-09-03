@@ -131,7 +131,8 @@ impl MdnsServer {
                                             if us > them
                                             && peers_tx
                                                 .send(DiscoveredPeer {
-                                                    addr: their_addr,
+                                                    socket_address: their_addr,
+                                                    socket_option: None,
                                                     token: their_token,
                                                     topic: None,
                                                 })

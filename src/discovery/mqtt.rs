@@ -1,7 +1,7 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 use super::{
     handle_peer, hole_punch::HolePuncher, topic::Topic, AnnounceAddress, DiscoveredPeer,
-    JoinOrLeaveEvent, PeerConnectionDetails,
+    JoinOrLeaveEvent,
 };
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
@@ -178,10 +178,7 @@ impl MqttClient {
                                                 debug!("Found our own announce message");
                                                 continue;
                                             }
-                                            // TODO call a handler fn here
-
-
-                                            // Dont connect if we are both on the same IP - use mdns
+                                            // TODO Dont connect if we are both on the same IP - use mdns
                                             // if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
                                             //     debug!("Found remote peer with the same public ip as ours - ignoring");
                                             //     continue;
@@ -190,6 +187,17 @@ impl MqttClient {
                                             match handle_peer(hole_puncher.clone(), announce_address.connection_details.clone(), remote_peer_announce).await {
                                                 Ok(Some(discovered_peer)) => {
                                                     debug!("Connect to {:?}", discovered_peer);
+                                                    //     if peers_tx
+                                                    //         .send(DiscoveredPeer {
+                                                    //             addr: remote_peer_announce.public_addr,
+                                                    //             token: remote_peer_announce.token,
+                                                    //             topic: Some(associated_topic.clone()),
+                                                    //         })
+                                                    //         .is_err()
+                                                    //     {
+                                                    //         error!("Cannot write to channel");
+                                                    //         break false;
+                                                    //     }
                                                 }
                                                 Ok(None) => {
                                                     debug!("Successfully handled peer - awaiting connection from their side");
@@ -229,17 +237,6 @@ impl MqttClient {
 
                                             // if should_initiate_connection {
                                             //     info!("PUBLISH ({})", publ.topic_name());
-                                            //     if peers_tx
-                                            //         .send(DiscoveredPeer {
-                                            //             addr: remote_peer_announce.public_addr,
-                                            //             token: remote_peer_announce.token,
-                                            //             topic: Some(associated_topic.clone()),
-                                            //         })
-                                            //         .is_err()
-                                            //     {
-                                            //         error!("Cannot write to channel");
-                                            //         break false;
-                                            //     }
                                             // }
 
                                             // Say 'hello' by re-publishing our own announce message to

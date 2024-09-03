@@ -3,7 +3,10 @@
 use crate::{
     discovery::{topic::Topic, DiscoveredPeer, PeerDiscovery, SessionToken, TOKEN_LENGTH},
     peer::Peer,
-    quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
+    quic::{
+        generate_certificate, get_certificate_from_connection, make_server_endpoint,
+        make_server_endpoint_basic_socket,
+    },
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
@@ -22,7 +25,6 @@ use quinn::{Endpoint, RecvStream};
 use rustls::Certificate;
 use std::{
     collections::{hash_map, HashMap},
-    net::SocketAddr,
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
@@ -185,12 +187,14 @@ impl Hdp {
             error!("Error when sending wishlist to UI {err}");
         };
 
+        let (incoming_connection_tx, mut incoming_connection_rx) = unbounded_channel();
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
                 loop {
                     if let Some(incoming_conn) = endpoint.accept().await {
-                        // TODO you need a channel here
-                        //     self.handle_incoming_connection(incoming_conn).await;
+                        if incoming_connection_tx.send(incoming_conn).is_err() {
+                            warn!("Cannot handle incoming connections - channel closed");
+                        }
                     }
                 }
             });
@@ -198,8 +202,9 @@ impl Hdp {
 
         loop {
             select! {
-                // Some(incoming_conn) = self.endpoint.accept() => {
-                // }
+                Some(incoming_conn) = incoming_connection_rx.recv() => {
+                    self.handle_incoming_connection(incoming_conn).await;
+                }
                 Some(command) = self.command_rx.recv() => {
                     if let Err(err) = self.handle_command(command).await {
                         error!("Closing connection {err}");
@@ -325,11 +330,15 @@ impl Hdp {
 
     /// Initiate a Quic connection to a remote peer
     async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<UiResponse, UiServerError> {
-        let endpoint = match self.server_connection {
+        let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
                 match peer.socket_option {
-                    Some(socket) => make_server_endpoint(socket, cert_der, priv_key_der).await?,
+                    Some(socket) => {
+                        make_server_endpoint_basic_socket(socket, cert_der, priv_key_der)
+                            .await
+                            .map_err(|_| UiServerError::ConnectionError)?
+                    }
                     None => {
                         panic!("no socket")
                     } // TODO
@@ -1136,4 +1145,19 @@ pub enum ServerConnection {
     WithEndpoint(Endpoint),
     /// Certificate details used to create an endpoint for each peer connection
     Symmetric(Vec<u8>, Vec<u8>),
+}
+
+impl std::fmt::Display for ServerConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerConnection::WithEndpoint(endpoint) => {
+                // TODO unwrap
+                f.write_str(&endpoint.local_addr().unwrap().to_string())?;
+            }
+            ServerConnection::Symmetric(_, _) => {
+                f.write_str("Behind symmetric NAT")?;
+            }
+        }
+        Ok(())
+    }
 }

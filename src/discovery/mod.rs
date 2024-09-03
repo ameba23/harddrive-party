@@ -9,7 +9,6 @@ use self::{
 use anyhow::anyhow;
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
-use log::debug;
 use quinn::AsyncUdpSocket;
 use rand::Rng;
 use serde::{Deserialize, Serialize};

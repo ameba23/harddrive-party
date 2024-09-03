@@ -121,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "{} listening for peers on {}",
                         hdp.name.green(),
-                        hdp.endpoint.local_addr().unwrap().to_string().yellow(),
+                        hdp.server_connection.to_string().yellow(),
                     );
 
                     let command_tx = hdp.command_tx.clone();
