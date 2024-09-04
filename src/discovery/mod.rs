@@ -317,14 +317,9 @@ pub async fn handle_peer(
             }
             PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
                 Some(mut puncher) => {
-                    let socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
-                    // TODO Now decide whether to connect
-                    Ok(Some(DiscoveredPeer {
-                        socket_address,
-                        socket_option: None,
-                        token: remote.token,
-                        topic: None,
-                    }))
+                    let _socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
+                    // Wait for them to connect to us
+                    Ok(None)
                 }
                 None => Err(anyhow!("We have asymmetric nat but no local socket")),
             },
@@ -336,22 +331,26 @@ pub async fn handle_peer(
         },
         PeerConnectionDetails::Asymmetric(socket_address) => {
             match local {
-                PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
+                PeerConnectionDetails::Asymmetric(our_socket_address) => match hole_puncher {
                     Some(mut puncher) => {
                         puncher.hole_punch_peer(socket_address).await?;
-                        // TODO Now decide whether to connect
-                        Ok(Some(DiscoveredPeer {
-                            socket_address,
-                            socket_option: None,
-                            token: remote.token,
-                            topic: None,
-                        }))
+                        // Decide whether to connect or let them connect, by lexicographically
+                        // comparing socket addresses
+                        Ok(if our_socket_address > socket_address {
+                            Some(DiscoveredPeer {
+                                socket_address,
+                                socket_option: None,
+                                token: remote.token,
+                                topic: None,
+                            })
+                        } else {
+                            None
+                        })
                     }
                     None => Err(anyhow!("We have asymmetric nat but no local socket")),
                 },
                 PeerConnectionDetails::Symmetric(_) => {
                     let (socket, socket_address) = birthday_hard_side(socket_address).await?;
-                    // TODO Now decide whether to connect
                     Ok(Some(DiscoveredPeer {
                         socket_address,
                         socket_option: Some(socket),
@@ -368,11 +367,19 @@ pub async fn handle_peer(
         }
         PeerConnectionDetails::NoNat(socket_address) => {
             // They have no nat - should be able to connect to them normally
-            // TODO decide whether to connect base
             match local {
-                PeerConnectionDetails::NoNat(_) => {
+                PeerConnectionDetails::NoNat(our_socket_address) => {
                     // Need to decide whether to connect
-                    todo!()
+                    Ok(if our_socket_address > socket_address {
+                        Some(DiscoveredPeer {
+                            socket_address,
+                            socket_option: None,
+                            token: remote.token,
+                            topic: None,
+                        })
+                    } else {
+                        None
+                    })
                 }
                 _ => Ok(Some(DiscoveredPeer {
                     socket_address,
