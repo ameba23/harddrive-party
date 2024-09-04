@@ -173,7 +173,7 @@ impl MqttClient {
                                         let tn = &publ.topic_name();
                                         tn.contains(&topic.public_id)
                                     }) {
-                                        if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
+                                        if let Some(remote_peer_announce) = decrypt_using_topic(publ.payload(), associated_topic) {
                                             if remote_peer_announce == announce_address {
                                                 debug!("Found our own announce message");
                                                 continue;
@@ -381,7 +381,7 @@ impl MqttClient {
 }
 
 // Attempt to decrypt an announce message from another peer
-fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddress> {
+fn decrypt_using_topic(payload: &[u8], topic: &Topic) -> Option<AnnounceAddress> {
     if let Some(announce_message_bytes) = topic.decrypt(payload) {
         let announce_address_result: Result<AnnounceAddress, Box<bincode::ErrorKind>> =
             deserialize(&announce_message_bytes);

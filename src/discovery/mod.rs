@@ -54,7 +54,7 @@ impl PeerConnectionDetails {
         match self {
             PeerConnectionDetails::NoNat(addr) => addr.ip(),
             PeerConnectionDetails::Asymmetric(addr) => addr.ip(),
-            PeerConnectionDetails::Symmetric(ip) => ip.clone(),
+            PeerConnectionDetails::Symmetric(ip) => *ip,
         }
     }
 }
@@ -289,8 +289,8 @@ fn get_topic_names(topics_db: &sled::Tree) -> Vec<(String, bool)> {
         .filter_map(|kv_result| {
             if let Ok((topic_name_buf, joined_buf)) = kv_result {
                 // join or leave
-                if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf.to_vec()) {
-                    match joined_buf.to_vec().get(0) {
+                if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf) {
+                    match joined_buf.to_vec().first() {
                         Some(1) => Some((topic_name.to_string(), true)),
                         Some(0) => Some((topic_name.to_string(), false)),
                         _ => None,

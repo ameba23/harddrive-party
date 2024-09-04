@@ -21,7 +21,7 @@ pub fn handshake_request(
     addr: &SocketAddr,
     token: &SessionToken,
 ) -> HandshakeRequest {
-    let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
+    let key = keyed_hash(addr.to_string().as_bytes(), &topic.hash);
     let mut rng = rand::thread_rng();
 
     let nonce: [u8; NONCE_LENGTH] = rng.gen();
@@ -44,7 +44,7 @@ pub fn handshake_response(
     topic: &Topic,
     addr: SocketAddr,
 ) -> anyhow::Result<SessionToken> {
-    let key = keyed_hash(addr.to_string().as_str().as_bytes(), &topic.hash);
+    let key = keyed_hash(addr.to_string().as_bytes(), &topic.hash);
     let mut decrypt_msg: [u8; BLAKE2B_LENGTH] = [0u8; BLAKE2B_LENGTH];
 
     let nonce = &handshake_request[BLAKE2B_LENGTH + TAG_LENGTH..];

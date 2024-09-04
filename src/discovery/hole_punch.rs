@@ -262,7 +262,7 @@ impl HolePuncher {
         // let rng_seed: u64 = rng.gen();
 
         let udp_send = self.udp_send.clone();
-        let seed = self.rng_seed.clone();
+        let seed = self.rng_seed;
         let join_handle = tokio::spawn(async move {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {

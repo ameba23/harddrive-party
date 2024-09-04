@@ -71,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ui_addr = cli
         .ui_addr
-        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS.to_string()));
+        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS));
 
     if cli.verbose {
         env::set_var(
