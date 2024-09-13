@@ -183,8 +183,18 @@ impl MqttClient {
                                             //     debug!("Found remote peer with the same public ip as ours - ignoring");
                                             //     continue;
                                             // }
+                                            //
+                                            // Say 'hello' by re-publishing our own announce message to
+                                            // this topic
+                                            if let Err(e) = stream.write_all(&associated_mqtt_topic.publish_packet[..]).await {
+                                                error!("Error when writing to mqtt broker {:?}", e);
+                                                break true;
+                                            };
                                             debug!("Remote peer {:?}", remote_peer_announce);
-                                            match handle_peer(hole_puncher.clone(), announce_address.connection_details.clone(), remote_peer_announce).await {
+                                                let hole_puncher_clone = hole_puncher.clone();
+                                                let connection_details = announce_address.connection_details.clone();
+                                                tokio::spawn(async move {
+                                            match handle_peer(hole_puncher_clone, connection_details, remote_peer_announce).await {
                                                 Ok(Some(discovered_peer)) => {
                                                     debug!("Connect to {:?}", discovered_peer);
                                                     //     if peers_tx
@@ -206,6 +216,7 @@ impl MqttClient {
                                                     warn!("Error when handling discovered peer {:?}", error);
                                                 }
                                             }
+                                                });
                                             // TODO there are more cases when we should not bother hole punching
                                             // if remote_peer_announce.nat_type != NatType::Symmetric {
                                             //     let mut hole_puncher_clone = hole_puncher.clone();
@@ -239,12 +250,6 @@ impl MqttClient {
                                             //     info!("PUBLISH ({})", publ.topic_name());
                                             // }
 
-                                            // Say 'hello' by re-publishing our own announce message to
-                                            // this topic
-                                            if let Err(e) = stream.write_all(&associated_mqtt_topic.publish_packet[..]).await {
-                                                error!("Error when writing to mqtt broker {:?}", e);
-                                                break true;
-                                            };
                                         }
                                     }
                                 }

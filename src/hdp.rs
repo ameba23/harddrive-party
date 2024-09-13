@@ -80,7 +80,7 @@ pub struct Hdp {
 impl Hdp {
     pub async fn new(
         storage: impl AsRef<Path>,
-        sharedirs: Vec<String>,
+        share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
         // Channels for communication with UI
@@ -91,7 +91,7 @@ impl Hdp {
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir)?;
-        let shares = Shares::new(db.clone(), sharedirs).await?;
+        let shares = Shares::new(db.clone(), share_dirs).await?;
 
         let config_db = db.open_tree(CONFIG)?;
 
@@ -117,6 +117,7 @@ impl Hdp {
             }
         };
 
+        // Derive a human-readable name from the public key
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
 
         // TODO for cross platform support we should use the `home` crate
@@ -153,7 +154,8 @@ impl Hdp {
                 )
             }
             None => {
-                // just give cert_der and priv_key_der
+                // Give cert_der and priv_key_der which we use to create an endpoint on a different
+                // port for each connecting peer
                 ServerConnection::Symmetric(cert_der, priv_key_der)
             }
         };
@@ -239,7 +241,10 @@ impl Hdp {
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
-            handle_session_token(&conn, token, our_token).await.unwrap();
+            if let Err(error) = handle_session_token(&conn, token, our_token).await {
+                warn!("Failed to handle connecting peer's token {}", error);
+                return;
+            }
 
             {
                 // Add peer to our hashmap
@@ -310,10 +315,10 @@ impl Hdp {
                 );
 
                 if let Some(i) = conn.handshake_data() {
-                    let d = i
-                        .downcast::<quinn::crypto::rustls::HandshakeData>()
-                        .unwrap();
-                    debug!("Server name {:?}", d.server_name);
+                    if let Ok(handshake_data) = i.downcast::<quinn::crypto::rustls::HandshakeData>()
+                    {
+                        debug!("Server name {:?}", handshake_data.server_name);
+                    }
                 }
 
                 if let Ok(remote_cert) = get_certificate_from_connection(&conn) {
@@ -340,8 +345,9 @@ impl Hdp {
                             .map_err(|_| UiServerError::ConnectionError)?
                     }
                     None => {
-                        panic!("no socket")
-                    } // TODO
+                        // This should be an impossible state to get into
+                        panic!("We are beind symmetric NAT but didn't get a socket for a connecting peer");
+                    }
                 }
             }
         };
@@ -440,16 +446,37 @@ impl Hdp {
                 // TODO why an error?
                 return Err(HandleUiCommandError::ConnectionClosed);
             }
-            Command::Connect(_addr) => {
-                todo!();
-                //     let response = self.connect_to_peer(addr, None).await;
-                //     if self
-                //         .response_tx
-                //         .send(UiServerMessage::Response { id, response })
-                //         .is_err()
-                //     {
-                //         return Err(HandleUiCommandError::ChannelClosed);
-                //     }
+            Command::Connect(socket_address) => {
+                let response = {
+                    if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone()
+                    {
+                        // TODO handle errors
+                        let connection = endpoint
+                            .connect(socket_address, "ssss") // TODO
+                            .map_err(|_| UiServerError::ConnectionError)
+                            .unwrap()
+                            .await
+                            .map_err(|_| UiServerError::ConnectionError)
+                            .unwrap();
+
+                        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
+                            self.handle_connection(connection, false, None, remote_cert)
+                                .await;
+                            Ok(UiResponse::Connect)
+                        } else {
+                            Err(UiServerError::ConnectionError)
+                        }
+                    } else {
+                        Err(UiServerError::ConnectionError)
+                    }
+                };
+                if self
+                    .response_tx
+                    .send(UiServerMessage::Response { id, response })
+                    .is_err()
+                {
+                    return Err(HandleUiCommandError::ChannelClosed);
+                }
             }
             Command::Ls(query, peer_name_option) => {
                 // If no name given send the query to all connected peers
@@ -540,8 +567,17 @@ impl Hdp {
                             let response_tx = self.response_tx.clone();
                             let remaining_responses_clone = remaining_responses.clone();
                             let ls_cache = self.ls_cache.clone();
+                            let ls_response_stream = {
+                                match process_length_prefix(recv).await {
+                                    Ok(ls_response_stream) => ls_response_stream,
+                                    Err(error) => {
+                                        warn!("Could not process length prefix {}", error);
+                                        return Err(HandleUiCommandError::ConnectionClosed);
+                                    }
+                                }
+                            };
                             tokio::spawn(async move {
-                                let ls_response_stream = process_length_prefix(recv).await.unwrap();
+                                // TODO handle error
                                 pin_mut!(ls_response_stream);
 
                                 let mut cached_entries = Vec::new();
@@ -571,6 +607,7 @@ impl Hdp {
                                     let mut cache = ls_cache.lock().await;
                                     let peer_cache =
                                         cache.entry(peer_name_clone.clone()).or_insert(
+                                            // Unwrap ok here becasue CACHE_SIZE is non-zero
                                             LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
                                         );
                                     peer_cache.put(req_clone, cached_entries);
@@ -938,6 +975,8 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
     Ok(stream.boxed())
 }
 
+/// If we have a token for the other party, send it to them.
+/// Otherwise, wait for them to send us their token
 async fn handle_session_token(
     conn: &quinn::Connection,
     token: Option<SessionToken>,
