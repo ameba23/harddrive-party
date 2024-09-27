@@ -178,12 +178,13 @@ impl MqttClient {
                                                 debug!("Found our own announce message");
                                                 continue;
                                             }
-                                            // TODO Dont connect if we are both on the same IP - use mdns
-                                            // if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
-                                            //     debug!("Found remote peer with the same public ip as ours - ignoring");
-                                            //     continue;
-                                            // }
-                                            //
+
+                                            // Dont connect if we are both on the same IP - use mdns
+                                            if remote_peer_announce.connection_details.ip() == announce_address.connection_details.ip() {
+                                                debug!("Found remote peer with the same public ip as ours - ignoring");
+                                                continue;
+                                            }
+
                                             // Say 'hello' by re-publishing our own announce message to
                                             // this topic
                                             if let Err(e) = stream.write_all(&associated_mqtt_topic.publish_packet[..]).await {
@@ -191,65 +192,28 @@ impl MqttClient {
                                                 break true;
                                             };
                                             debug!("Remote peer {:?}", remote_peer_announce);
-                                                let hole_puncher_clone = hole_puncher.clone();
-                                                let connection_details = announce_address.connection_details.clone();
-                                                tokio::spawn(async move {
-                                            match handle_peer(hole_puncher_clone, connection_details, remote_peer_announce).await {
-                                                Ok(Some(discovered_peer)) => {
-                                                    debug!("Connect to {:?}", discovered_peer);
-                                                    //     if peers_tx
-                                                    //         .send(DiscoveredPeer {
-                                                    //             addr: remote_peer_announce.public_addr,
-                                                    //             token: remote_peer_announce.token,
-                                                    //             topic: Some(associated_topic.clone()),
-                                                    //         })
-                                                    //         .is_err()
-                                                    //     {
-                                                    //         error!("Cannot write to channel");
-                                                    //         break false;
-                                                    //     }
+                                            let hole_puncher_clone = hole_puncher.clone();
+                                            let connection_details = announce_address.connection_details.clone();
+                                            let peers_tx = peers_tx.clone();
+                                            tokio::spawn(async move {
+                                                match handle_peer(hole_puncher_clone, connection_details, remote_peer_announce).await {
+                                                    Ok(Some(discovered_peer)) => {
+                                                        debug!("Connect to {:?}", discovered_peer);
+                                                        if peers_tx
+                                                            .send(discovered_peer)
+                                                                .is_err()
+                                                        {
+                                                            error!("Cannot write to channel");
+                                                        }
+                                                    }
+                                                    Ok(None) => {
+                                                        debug!("Successfully handled peer - awaiting connection from their side");
+                                                    }
+                                                    Err(error) => {
+                                                        warn!("Error when handling discovered peer {:?}", error);
+                                                    }
                                                 }
-                                                Ok(None) => {
-                                                    debug!("Successfully handled peer - awaiting connection from their side");
-                                                }
-                                                Err(error) => {
-                                                    warn!("Error when handling discovered peer {:?}", error);
-                                                }
-                                            }
-                                                });
-                                            // TODO there are more cases when we should not bother hole punching
-                                            // if remote_peer_announce.nat_type != NatType::Symmetric {
-                                            //     let mut hole_puncher_clone = hole_puncher.clone();
-                                            //     tokio::spawn(async move {
-                                            //         info!("Attempting hole punch...");
-                                            //         if hole_puncher_clone.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
-                                            //             warn!("Hole punching failed");
-                                            //         } else {
-                                            //             info!("Hole punching succeeded");
-                                            //         };
-                                            //     });
-                                            // };
-                                            //
-                                            // // Decide whether to initiate the connection deterministically
-                                            // // so that only one party initiates
-                                            // let our_nat_badness = announce_address.nat_type as u8;
-                                            // let their_nat_badness = remote_peer_announce.nat_type as u8;
-                                            // let should_initiate_connection = if our_nat_badness == their_nat_badness {
-                                            //         // If we both have the same NAT type, use the socket address
-                                            //         // as a tie breaker
-                                            //         let us = announce_address.public_addr.to_string();
-                                            //         let them = remote_peer_announce.public_addr.to_string();
-                                            //         us > them
-                                            // } else {
-                                            //     // Otherwise the peer with the worst NAT type initiates the
-                                            //     // connection
-                                            //     our_nat_badness > their_nat_badness
-                                            // };
-
-                                            // if should_initiate_connection {
-                                            //     info!("PUBLISH ({})", publ.topic_name());
-                                            // }
-
+                                            });
                                         }
                                     }
                                 }
