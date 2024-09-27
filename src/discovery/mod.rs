@@ -244,45 +244,6 @@ pub struct AnnounceAddress {
     token: SessionToken,
 }
 
-// /// Decide whether to initiate a connection to a peer or wait for them
-// /// to connect to us, and whether to attempt to hole punch to them.
-// pub fn should_connect_to_peer(
-//     remote_peer_announce: &AnnounceAddress,
-//     announce_address: &AnnounceAddress,
-// ) -> (bool, bool) {
-//     if remote_peer_announce == announce_address {
-//         debug!("Found our own announce message");
-//         return (false, false);
-//     }
-//
-//     // Dont connect if we are both on the same IP - use mdns
-//     if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
-//         debug!("Found remote peer with the same public ip as ours - ignoring");
-//         return (false, false);
-//     }
-//
-//     // TODO there are more cases when we should not bother hole punching
-//     let should_hole_punch = remote_peer_announce.nat_type != NatType::Symmetric;
-//
-//     // Decide whether to initiate the connection deterministically
-//     // so that only one party initiates
-//     let our_nat_badness = announce_address.nat_type as u8;
-//     let their_nat_badness = remote_peer_announce.nat_type as u8;
-//     let should_initiate_connection = if our_nat_badness == their_nat_badness {
-//         // If we both have the same NAT type, use the socket address
-//         // as a tie breaker
-//         let us = announce_address.public_addr.to_string();
-//         let them = remote_peer_announce.public_addr.to_string();
-//         us > them
-//     } else {
-//         // Otherwise the peer with the worst NAT type initiates the
-//         // connection
-//         our_nat_badness > their_nat_badness
-//     };
-//
-//     (should_initiate_connection, should_hole_punch)
-// }
-
 fn get_topic_names(topics_db: &sled::Tree) -> Vec<(String, bool)> {
     topics_db
         .iter()

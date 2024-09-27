@@ -24,6 +24,7 @@ pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
 const MAX_HOLEPUNCH_ATTEMPTS: usize = 50;
 const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
+const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
 
 /// UDP socket which sends holepunch packets using the [HolePuncher]
 #[derive(Debug)]
@@ -52,6 +53,7 @@ impl PunchingUdpSocket {
         // Loop over outgoing packets from the HolePuncher
         let socket_clone = socket.clone();
         let mut rng = rand::thread_rng();
+        // TODO this could be a bigger seed (eg: [u8; 32])
         let rng_seed: u64 = rng.gen();
         tokio::spawn(async move {
             while let Some(packet) = udp_send_rx.recv().await {
@@ -136,7 +138,6 @@ fn forward_holepunch(
 ) {
     for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
         if meta.len == 1 {
-            println!("GOT INCOMING");
             let packet = IncomingHolepunchPacket {
                 data: [buf[0]], // *&buf[0]
                 from: meta.addr,
@@ -199,7 +200,7 @@ impl HolePuncher {
         let mut attempts = 0;
         loop {
             if wait {
-                tokio::time::sleep(Duration::from_millis(2000)).await;
+                tokio::time::sleep(Duration::from_millis(HOLEPUNCH_WAIT_MILLIS)).await;
             }
             tokio::select! {
               send = self.udp_send.send(packet.clone()) => {
@@ -257,9 +258,6 @@ impl HolePuncher {
 
         let stop_signal = Arc::new(RwLock::new(false));
         let stop_clone = stop_signal.clone();
-        // TODO use better seed
-        // let mut rng = rand::thread_rng();
-        // let rng_seed: u64 = rng.gen();
 
         let udp_send = self.udp_send.clone();
         let seed = self.rng_seed;
@@ -275,7 +273,7 @@ impl HolePuncher {
                     break;
                 }
             }
-            println!("Stopped sending");
+            debug!("Stopped sending");
         });
 
         // Wait for a response
@@ -336,7 +334,7 @@ pub async fn birthday_hard_side(
         let mut stop_signal_rx = stop_signal_tx.subscribe();
         spawn(async move {
             if let Err(error) = socket.send_to(&INIT_PUNCH, target_addr).await {
-                println!("Send error: {:?}", error);
+                warn!("Send error: {:?}", error);
             }
 
             let mut buf = [0u8; 32];
@@ -344,26 +342,25 @@ pub async fn birthday_hard_side(
                 recv_result = socket.recv_from(&mut buf) => {
                     match recv_result {
                         Ok((_len, sender)) => {
-                            println!("Got a message");
                             if sender == target_addr {
                                 if let Err(error) = socket.send_to(&ACK_PUNCH, sender).await {
-                                    println!("Send error: {:?}", error);
+                                    warn!("Send error: {:?}", error);
                                 }
                                 if socket_tx.send(socket).is_err() {
                                     // This may happen if we get more than one successful punch
-                                    println!("Cannot send success socket - channel closed");
+                                    warn!("Cannot send success socket - channel closed");
                                 }
                             } else {
-                                print!("Got message from unexpected sender {}", sender);
+                                warn!("Got message from unexpected sender {}", sender);
                             }
                         }
                         Err(error) => {
-                            println!("Cannot recieve on socket {:?} - {:?}", socket, error);
+                            warn!("Cannot recieve on socket {:?} - {:?}", socket, error);
                         }
                     }
                 }
                 stop_signal_result = stop_signal_rx.recv() => {
-                    println!("Stop signal result {:?}", stop_signal_result);
+                    debug!("Stop signal result {:?}", stop_signal_result);
                 }
             }
         });

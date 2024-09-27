@@ -1190,8 +1190,14 @@ impl std::fmt::Display for ServerConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerConnection::WithEndpoint(endpoint) => {
-                // TODO unwrap
-                f.write_str(&endpoint.local_addr().unwrap().to_string())?;
+                write!(
+                    f,
+                    "{}",
+                    match endpoint.local_addr() {
+                        Ok(local_addr) => local_addr.to_string(),
+                        _ => "No local adddress".to_string(),
+                    }
+                )?;
             }
             ServerConnection::Symmetric(_, _) => {
                 f.write_str("Behind symmetric NAT")?;
