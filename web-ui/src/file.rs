@@ -6,6 +6,7 @@ use crate::{
 };
 use leptos::*;
 
+/// Ui representation of a file
 #[derive(Clone, Debug)]
 pub struct File {
     pub name: String,

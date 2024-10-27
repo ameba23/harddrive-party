@@ -46,14 +46,18 @@ struct Requested(ReadSignal<HashSet<PeerPath>>);
 #[derive(Clone)]
 struct FilesReadSignal(ReadSignal<BTreeMap<PeerPath, File>>);
 
+/// Represents a remote file
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PeerPath {
+    /// The name of the peer who holds the file
     peer_name: String,
+    /// The path to the remote file
     path: String,
 }
 
 #[component]
 pub fn HdpUi(cx: Scope) -> impl IntoView {
+    // Use document.location as hostname for ws server to connect to
     let location = match document().location() {
         Some(loc) => loc.hostname().unwrap(),
         None => "No location".to_string(),
@@ -64,6 +68,8 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
 
     let ws_url = format!("ws://{}:4001", location);
     let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url, set_error_message).unwrap();
+
+    // Setup signals
     let (requester, set_requester) = create_signal(cx, Requester::new(ws_service));
     let (peers, set_peers) = create_signal(cx, HashMap::<String, Peer>::new());
     let (shares, set_shares) = create_signal(cx, Option::<Peer>::None);
@@ -153,6 +159,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                             }
                         }
                         Ok(UiResponse::Connect) => {
+                            // This is only for [Command::Connect] which is not normally used
                             debug!("Successfully connected to peer");
                         }
                         Ok(UiResponse::EndResponse) => {
