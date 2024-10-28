@@ -28,7 +28,6 @@ Decide on a 'topic' to meet on. This can be any string. You will be able to conn
 ### Peer discovery
 
 Peers discovery each other by connecting to a public MQTT server and announcing their IP address encrypted with the hash of the topic name. On seeing another peer's announce message, we attempt to decrypt it with the topics we are connected to.
-<!-- Peers discover each other using by announcing themselves using [Waku](https://waku.org) [relay protocol](https://rfc.vac.dev/spec/11), which is based on Libp2p's [gossipsub protocol](https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/README.md). -->
 
 mDNS is also used to find peers connected to the same local network.
 
@@ -56,7 +55,7 @@ There is a work-in-progress web front end build with [Leptos](https://docs.rs/le
 - [x] Query own files
 - [ ] Attempt to reconnect to peers after loosing connection
 - [x] Holepunching / peer discovery over internet
-- [ ] Holepunching for symmetric nat using birthday paradox. [See Tailscale nat traversal article](https://tailscale.com/blog/how-nat-traversal-works)
+- [x] Holepunching for symmetric nat using birthday paradox. [See Tailscale nat traversal article](https://tailscale.com/blog/how-nat-traversal-works)
 - [x] Download files rather than just read them
 - [x] Handle recursive directory download request
 - [x] Queueing / resume downloads
