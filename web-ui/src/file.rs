@@ -17,18 +17,17 @@ pub struct File {
 }
 
 impl File {
-    pub fn from_entry(cx: Scope, entry: Entry) -> Self {
+    pub fn from_entry(entry: Entry) -> Self {
         Self {
             name: entry.name,
             size: entry.size,
             is_dir: entry.is_dir,
-            download_status: create_rw_signal(cx, DownloadStatus::Nothing),
-            request: create_rw_signal(cx, None),
+            download_status: create_rw_signal(DownloadStatus::Nothing),
+            request: create_rw_signal(None),
         }
     }
 
     pub fn from_download_request(
-        cx: Scope,
         download_request: UiDownloadRequest,
         download_status: DownloadStatus,
     ) -> Self {
@@ -36,17 +35,17 @@ impl File {
             name: download_request.path.clone(),
             size: download_request.size,
             is_dir: false,
-            download_status: create_rw_signal(cx, download_status),
-            request: create_rw_signal(cx, Some(download_request)),
+            download_status: create_rw_signal(download_status),
+            request: create_rw_signal(Some(download_request)),
         }
     }
 }
 
 #[component]
-pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
-    let set_requester = use_context::<RequesterSetter>(cx).unwrap().0;
-    let peer_details = use_context::<PeerName>(cx).unwrap().0;
-    let (file_name, _set_file_name) = create_signal(cx, file.name);
+pub fn File(file: File, is_shared: bool) -> impl IntoView {
+    let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    let peer_details = use_context::<PeerName>().unwrap().0;
+    let (file_name, _set_file_name) = create_signal(file.name);
 
     let download_request = move |_| {
         let download = Command::Download {
@@ -76,7 +75,7 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
             }
             None => (file_name, Default::default()),
         };
-        view! { cx,
+        view! {
                 <pre>
                 { indentation }
                 <strong>{ icon }</strong>
@@ -87,7 +86,7 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
         }
     };
 
-    view! { cx,
+    view! {
         <tr class="hover:bg-gray-200">
           <td>
             { file_name_and_indentation() }
@@ -99,16 +98,16 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
                 move || {
                 match file.download_status.get() {
                         DownloadStatus::Nothing => {
-                            view! { cx, <span /> }
+                            view! { <span /> }
                         }
                         DownloadStatus::Downloaded => {
-                            view! { cx, <span> "Downloaded" </span> }
+                            view! { <span> "Downloaded" </span> }
                         }
                         DownloadStatus::Requested => {
-                            view! { cx, <span> "Requested" </span> }
+                            view! { <span> "Requested" </span> }
                         }
                         DownloadStatus::Downloading(download_response) => {
-                            view! { cx, <span><DownloadingFile download_response size=file.size /></span> }
+                            view! { <span><DownloadingFile download_response size=file.size /></span> }
                         }
                 }
                 }
@@ -117,10 +116,10 @@ pub fn File(cx: Scope, file: File, is_shared: bool) -> impl IntoView {
             // TODO fix this
             move || {
                 if is_shared {
-                    // view! { cx, <span><Preview file_path=&file_name.get() shared=true /></span> }
-                    view! { cx, <span></span> }
+                    // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+                    view! { <span></span> }
                 } else {
-                    view! { cx, <span /> }
+                    view! { <span /> }
                 }
             }
         }
@@ -144,8 +143,8 @@ pub enum DownloadStatus {
 
 /// Show progress when currently downloading
 #[component]
-pub fn DownloadingFile(cx: Scope, download_response: DownloadResponse, size: u64) -> impl IntoView {
-    view! { cx,
+pub fn DownloadingFile(download_response: DownloadResponse, size: u64) -> impl IntoView {
+    view! {
         <span>
             { format!("Downloading {} of {} bytes...", download_response.bytes_read, size) }
         </span>
@@ -154,11 +153,11 @@ pub fn DownloadingFile(cx: Scope, download_response: DownloadResponse, size: u64
 
 /// A file which has been requested / downloaded
 #[component]
-pub fn Request(cx: Scope, file: File) -> impl IntoView {
+pub fn Request(file: File) -> impl IntoView {
     let request_option = file.request.get();
     match request_option {
         Some(request) => {
-            view! { cx,
+            view! {
                     <li>
                         { request.peer_name } " "
                         <code>{ &request.path }</code>
@@ -167,13 +166,13 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
                             move || {
                                 match file.download_status.get() {
                                     DownloadStatus::Downloading(download_response) => {
-                                        view! { cx, <span><DownloadingFile download_response size=file.size /></span> }
+                                        view! { <span><DownloadingFile download_response size=file.size /></span> }
                                     }
                                     DownloadStatus::Downloaded => {
-                                        view! { cx, <span><Preview file_path=&request.path shared=false/></span> }
+                                        view! { <span><Preview file_path=&request.path shared=false/></span> }
                                     }
                                     _ => {
-                                        view! { cx, <span /> }
+                                        view! { <span /> }
                                     }
                                 }
                             }
@@ -182,7 +181,7 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
             }
         }
         None => {
-            view! { cx,
+            view! {
               <li>"Never happens"</li>
             }
         }
@@ -191,7 +190,7 @@ pub fn Request(cx: Scope, file: File) -> impl IntoView {
 
 /// Allow a locally stored file to be opened / downloaded
 #[component]
-fn Preview<'a>(cx: Scope, file_path: &'a str, shared: bool) -> impl IntoView {
+fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
     let sub_path = if shared { "shared" } else { "downloads" };
 
     match document().location() {
@@ -199,7 +198,7 @@ fn Preview<'a>(cx: Scope, file_path: &'a str, shared: bool) -> impl IntoView {
             let protocol = location.protocol().unwrap_or("http:".to_string());
             let host = location.host().unwrap_or("sfdd".to_string());
             let escaped_path = urlencoding::encode(&file_path);
-            view! { cx,
+            view! {
                 <span>
                     <button class={ BUTTON_STYLE }>
                         <a href={ format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)} target="_blank">"view"</a>
@@ -209,7 +208,7 @@ fn Preview<'a>(cx: Scope, file_path: &'a str, shared: bool) -> impl IntoView {
             }
         }
         None => {
-            view! { cx, <span>"Cannot get URL"</span> }
+            view! { <span>"Cannot get URL"</span> }
         }
     }
 }

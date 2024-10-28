@@ -56,7 +56,7 @@ pub struct PeerPath {
 }
 
 #[component]
-pub fn HdpUi(cx: Scope) -> impl IntoView {
+pub fn HdpUi() -> impl IntoView {
     // Use document.location as hostname for ws server to connect to
     let location = match document().location() {
         Some(loc) => loc.hostname().unwrap(),
@@ -64,26 +64,26 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     };
     info!("location {}", location);
 
-    let (error_message, set_error_message) = create_signal(cx, HashSet::<AppError>::new());
+    let (error_message, set_error_message) = create_signal(HashSet::<AppError>::new());
 
     let ws_url = format!("ws://{}:4001", location);
     let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url, set_error_message).unwrap();
 
     // Setup signals
-    let (requester, set_requester) = create_signal(cx, Requester::new(ws_service));
-    let (peers, set_peers) = create_signal(cx, HashMap::<String, Peer>::new());
-    let (shares, set_shares) = create_signal(cx, Option::<Peer>::None);
+    let (requester, set_requester) = create_signal(Requester::new(ws_service));
+    let (peers, set_peers) = create_signal(HashMap::<String, Peer>::new());
+    let (shares, set_shares) = create_signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
-        create_signal(cx, Option::<Result<String, String>>::None);
-    let (topics, set_topics) = create_signal(cx, Vec::<(String, bool)>::new());
-    let (requested, set_requested) = create_signal(cx, HashSet::<PeerPath>::new());
-    let (downloaded, set_downloaded) = create_signal(cx, HashSet::<PeerPath>::new());
-    let (files, set_files) = create_signal(cx, BTreeMap::<PeerPath, File>::new());
-    let (home_dir, set_home_dir) = create_signal(cx, Option::<String>::None);
+        create_signal(Option::<Result<String, String>>::None);
+    let (topics, set_topics) = create_signal(Vec::<(String, bool)>::new());
+    let (requested, set_requested) = create_signal(HashSet::<PeerPath>::new());
+    let (downloaded, set_downloaded) = create_signal(HashSet::<PeerPath>::new());
+    let (files, set_files) = create_signal(BTreeMap::<PeerPath, File>::new());
+    let (home_dir, set_home_dir) = create_signal(Option::<String>::None);
 
-    provide_context(cx, RequesterSetter(set_requester));
-    provide_context(cx, Requested(requested));
-    provide_context(cx, FilesReadSignal(files));
+    provide_context(RequesterSetter(set_requester));
+    provide_context(Requested(requested));
+    provide_context(FilesReadSignal(files));
 
     spawn_local(async move {
         let remove_request = |id: &u32| {
@@ -112,7 +112,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                     for entry in entries_clone {
                                         peer.files.insert(
                                             entry.name.clone(),
-                                            // File::new(cx, entry),
+                                            // File::new(entry),
                                         );
                                     }
                                     debug!("peers {:?}", peers);
@@ -124,7 +124,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                                 peer_name: peer_name.clone(),
                                                 path: entry.name.clone(),
                                             },
-                                            File::from_entry(cx, entry),
+                                            File::from_entry(entry),
                                         );
                                     }
                                 });
@@ -176,7 +176,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                             for entry in entries_clone {
                                                 shares.files.insert(
                                                     entry.name.clone(),
-                                                    // File::new(cx, entry),
+                                                    // File::new(entry),
                                                 );
                                             }
                                         }
@@ -190,7 +190,7 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                                         peer_name: peer_name.clone(),
                                                         path: entry.name.clone(),
                                                     },
-                                                    File::from_entry(cx, entry),
+                                                    File::from_entry(entry),
                                                 );
                                             }
                                         });
@@ -308,7 +308,6 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                     file.request.set(Some(request.clone()));
                                 })
                                 .or_insert(File::from_download_request(
-                                    cx,
                                     request,
                                     DownloadStatus::Requested,
                                 ));
@@ -325,7 +324,6 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                                     file.request.set(Some(request.clone()));
                                 })
                                 .or_insert(File::from_download_request(
-                                    cx,
                                     request,
                                     DownloadStatus::Downloaded,
                                 ));
@@ -369,18 +367,18 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
     };
 
     let error_message_display = move || {
-        view!(cx,
+        view!(
             <For
                 each={move || error_message.get()}
                 key=|error_message| format!("{:?}", error_message)
-                view=move |cx, error_message| view! { cx,
+                children=move |error_message| view! {
                     <ErrorMessage message={format!("{}", error_message)} />
                 }
             />
         )
     };
 
-    view! { cx,
+    view! {
         <div id="root" class="container mx-auto font-serif">
             <Router>
                 <nav>
@@ -426,23 +424,23 @@ pub fn HdpUi(cx: Scope) -> impl IntoView {
                     <Routes>
                         <Route
                             path=""
-                            view=move |cx| view! { cx,  <Peers peers /> }
+                            view=move || view! { <Peers peers /> }
                         />
                         <Route
                             path="topics"
-                            view=move |cx| view! { cx,  <Topics topics /> }
+                            view=move || view! { <Topics topics /> }
                         />
                         <Route
                             path="shares"
-                            view=move |cx| view! { cx,  <Shares shares add_or_remove_share_message home_dir /> }
+                            view=move || view! { <Shares shares add_or_remove_share_message home_dir /> }
                         />
                         <Route
                             path="peers"
-                            view=move |cx| view! { cx,  <Peers peers /> }
+                            view=move || view! { <Peers peers /> }
                         />
                         <Route
                             path="transfers"
-                            view=move |cx| view! { cx,  <Transfers requested downloaded files /> }
+                            view=move || view! { <Transfers requested downloaded files /> }
                         />
                     </Routes>
                 </main>
@@ -466,8 +464,8 @@ fn display_bytes(bytes: u64) -> String {
 }
 
 #[component]
-pub fn ErrorMessage(cx: Scope, message: String) -> impl IntoView {
-    view! { cx,
+pub fn ErrorMessage(message: String) -> impl IntoView {
+    view! {
     <div class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800" role="alert">
       <div>
         <span class="font-medium">" ⚠ "{ message }</span>
@@ -477,8 +475,8 @@ pub fn ErrorMessage(cx: Scope, message: String) -> impl IntoView {
 }
 
 #[component]
-pub fn SuccessMessage(cx: Scope, message: String) -> impl IntoView {
-    view! { cx,
+pub fn SuccessMessage(message: String) -> impl IntoView {
+    view! {
     <div class="flex p-4 my-4 text-sm text-green-800 border border-green-300 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-800" role="alert">
       <div>
         <span class="font-medium">" ✅ "{ message }</span>
