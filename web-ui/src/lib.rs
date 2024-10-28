@@ -135,6 +135,8 @@ pub fn HdpUi() -> impl IntoView {
                             }
                         },
                         Ok(UiResponse::Read(read_response)) => {
+                            // This is not currently used but could be used for previewing a
+                            // portion of a file without downloading it
                             debug!("Got read response {:?}", read_response);
                             // path: String,
                             // bytes_read: u64,
@@ -276,6 +278,9 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiServerMessage::Event(UiEvent::PeerDisconnected { name }) => {
                     debug!("{} disconnected", name);
+                    set_peers.update(|peers| {
+                        peers.remove(&name);
+                    });
                 }
                 UiServerMessage::Event(UiEvent::Uploaded(upload_info)) => {
                     debug!("Uploading {:?}", upload_info);
