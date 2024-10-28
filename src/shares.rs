@@ -47,7 +47,7 @@ impl Shares {
     }
 
     /// Index a given directory and return the number of entries added to the database
-    // TODO handle share name collisions
+    // TODO #16 handle share name collisions
     pub async fn scan(&mut self, root: &str) -> Result<u32, ScanDirError> {
         let mut added_entries = 0;
         let path = PathBuf::from(root);
@@ -235,12 +235,11 @@ fn kv_filter_map(
     path_len: usize,
     searchterm: &Option<String>,
 ) -> Option<Entry> {
-    let (name, size) = kv_result.unwrap();
-    let name = std::str::from_utf8(&name).unwrap();
+    let (name, size) = kv_result.ok()?;
+    let name = std::str::from_utf8(&name).ok()?;
 
     if !recursive {
         // TODO should we use pathbuf for this?
-        //
         let full_suffix = &name[path_len..];
         let suffix = if full_suffix.starts_with(MAIN_SEPARATOR) {
             &full_suffix[1..]
@@ -259,13 +258,7 @@ fn kv_filter_map(
         };
     }
 
-    // TODO warn and return none?
-    let size = u64::from_le_bytes(
-        size.to_vec()
-            .try_into()
-            .map_err(|_| EntryParseError::U64ConversionError())
-            .unwrap(),
-    );
+    let size = u64::from_le_bytes(size.to_vec().try_into().ok()?);
 
     Some(Entry {
         name: name.to_string(),
