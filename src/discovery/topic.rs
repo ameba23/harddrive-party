@@ -25,7 +25,7 @@ impl Topic {
     pub fn new(name: String) -> Self {
         let mut hash = [0u8; 32];
         let mut topic_hash = Blake2b::new_keyed(32, &CONTEXT);
-        topic_hash.input(name.as_str().as_bytes());
+        topic_hash.input(name.as_bytes());
         topic_hash.result(&mut hash);
 
         let mut id_hash = [0u8; 32];
@@ -46,7 +46,7 @@ impl Topic {
     }
 
     /// Encrypt a message using this topic as the key
-    pub fn encrypt(&self, payload: &Vec<u8>) -> Vec<u8> {
+    pub fn encrypt(&self, payload: &[u8]) -> Vec<u8> {
         let nonce: [u8; 8] = thread_rng().gen();
         // let mut out: [u8; payload.len() + 16 + 8] = [0u8; 32 + 16 + 8];
         let mut out: Vec<u8> = Vec::with_capacity(payload.len() + 16 + 8);
@@ -65,7 +65,7 @@ impl Topic {
     }
 
     /// Decrypt a message using this topic as the key
-    pub fn decrypt(&self, encrypted: &Vec<u8>) -> Option<Vec<u8>> {
+    pub fn decrypt(&self, encrypted: &[u8]) -> Option<Vec<u8>> {
         if encrypted.len() < 16 + 8 {
             return None;
         };

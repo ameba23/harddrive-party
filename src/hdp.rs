@@ -1,9 +1,12 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{topic::Topic, PeerDiscovery, SessionToken, TOKEN_LENGTH},
+    discovery::{topic::Topic, DiscoveredPeer, PeerDiscovery, SessionToken, TOKEN_LENGTH},
     peer::Peer,
-    quic::{generate_certificate, get_certificate_from_connection, make_server_endpoint},
+    quic::{
+        generate_certificate, get_certificate_from_connection, make_server_endpoint,
+        make_server_endpoint_basic_socket,
+    },
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
@@ -22,7 +25,6 @@ use quinn::{Endpoint, RecvStream};
 use rustls::Certificate;
 use std::{
     collections::{hash_map, HashMap},
-    net::SocketAddr,
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
@@ -56,7 +58,7 @@ pub struct Hdp {
     /// Remote proceduce call for share queries and downloads
     rpc: Rpc,
     /// The QUIC endpoint
-    pub endpoint: Endpoint,
+    pub server_connection: ServerConnection,
     /// Channel for commands from the UI
     pub command_tx: UnboundedSender<UiClientMessage>,
     /// Channel for commands from the UI
@@ -78,7 +80,7 @@ pub struct Hdp {
 impl Hdp {
     pub async fn new(
         storage: impl AsRef<Path>,
-        sharedirs: Vec<String>,
+        share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
         // Channels for communication with UI
@@ -89,7 +91,7 @@ impl Hdp {
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir)?;
-        let shares = Shares::new(db.clone(), sharedirs).await?;
+        let shares = Shares::new(db.clone(), share_dirs).await?;
 
         let config_db = db.open_tree(CONFIG)?;
 
@@ -115,6 +117,7 @@ impl Hdp {
             }
         };
 
+        // Derive a human-readable name from the public key
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
 
         // TODO for cross platform support we should use the `home` crate
@@ -140,11 +143,22 @@ impl Hdp {
         let topics_db = db.open_tree(TOPIC)?;
 
         // Setup peer discovery
-        let (socket, peer_discovery) =
+        let (socket_option, peer_discovery) =
             PeerDiscovery::new(topics, true, true, pk_hash, topics_db).await?;
 
-        // Create QUIC endpoint
-        let endpoint = make_server_endpoint(socket, cert_der, priv_key_der).await?;
+        let server_connection = match socket_option {
+            Some(socket) => {
+                // Create QUIC endpoint
+                ServerConnection::WithEndpoint(
+                    make_server_endpoint(socket, cert_der, priv_key_der).await?,
+                )
+            }
+            None => {
+                // Give cert_der and priv_key_der which we use to create an endpoint on a different
+                // port for each connecting peer
+                ServerConnection::Symmetric(cert_der, priv_key_der)
+            }
+        };
 
         // Setup db for downloads requests
         let wishlist = WishList::new(&db, response_tx.clone())?;
@@ -153,7 +167,7 @@ impl Hdp {
             Self {
                 peers: Default::default(),
                 rpc: Rpc::new(shares, response_tx.clone()),
-                endpoint,
+                server_connection,
                 command_tx,
                 command_rx,
                 response_tx,
@@ -175,9 +189,22 @@ impl Hdp {
             error!("Error when sending wishlist to UI {err}");
         };
 
+        let (incoming_connection_tx, mut incoming_connection_rx) = unbounded_channel();
+        if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+            tokio::spawn(async move {
+                loop {
+                    if let Some(incoming_conn) = endpoint.accept().await {
+                        if incoming_connection_tx.send(incoming_conn).is_err() {
+                            warn!("Cannot handle incoming connections - channel closed");
+                        }
+                    }
+                }
+            });
+        }
+
         loop {
             select! {
-                Some(incoming_conn) = self.endpoint.accept() => {
+                Some(incoming_conn) = incoming_connection_rx.recv() => {
                     self.handle_incoming_connection(incoming_conn).await;
                 }
                 Some(command) = self.command_rx.recv() => {
@@ -187,8 +214,8 @@ impl Hdp {
                     };
                 }
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
-                    debug!("Discovered peer {}", peer.addr);
-                    if self.connect_to_peer(peer.addr, Some(peer.token)).await.is_err() {
+                    debug!("Discovered peer {:?}", peer);
+                    if self.connect_to_peer(peer).await.is_err() {
                         error!("Cannot connect to discovered peer");
                     };
                 }
@@ -214,7 +241,10 @@ impl Hdp {
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
-            handle_session_token(&conn, token, our_token).await.unwrap();
+            if let Err(error) = handle_session_token(&conn, token, our_token).await {
+                warn!("Failed to handle connecting peer's token {}", error);
+                return;
+            }
 
             {
                 // Add peer to our hashmap
@@ -285,10 +315,10 @@ impl Hdp {
                 );
 
                 if let Some(i) = conn.handshake_data() {
-                    let d = i
-                        .downcast::<quinn::crypto::rustls::HandshakeData>()
-                        .unwrap();
-                    debug!("Server name {:?}", d.server_name);
+                    if let Ok(handshake_data) = i.downcast::<quinn::crypto::rustls::HandshakeData>()
+                    {
+                        debug!("Server name {:?}", handshake_data.server_name);
+                    }
                 }
 
                 if let Ok(remote_cert) = get_certificate_from_connection(&conn) {
@@ -304,20 +334,32 @@ impl Hdp {
     }
 
     /// Initiate a Quic connection to a remote peer
-    async fn connect_to_peer(
-        &mut self,
-        addr: SocketAddr,
-        token: Option<SessionToken>,
-    ) -> Result<UiResponse, UiServerError> {
-        let connection = self
-            .endpoint
-            .connect(addr, "ssss") // TODO
+    async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<UiResponse, UiServerError> {
+        let endpoint = match self.server_connection.clone() {
+            ServerConnection::WithEndpoint(endpoint) => endpoint,
+            ServerConnection::Symmetric(cert_der, priv_key_der) => {
+                match peer.socket_option {
+                    Some(socket) => {
+                        make_server_endpoint_basic_socket(socket, cert_der, priv_key_der)
+                            .await
+                            .map_err(|_| UiServerError::ConnectionError)?
+                    }
+                    None => {
+                        // This should be an impossible state to get into
+                        panic!("We are beind symmetric NAT but didn't get a socket for a connecting peer");
+                    }
+                }
+            }
+        };
+
+        let connection = endpoint
+            .connect(peer.socket_address, "ssss") // TODO
             .map_err(|_| UiServerError::ConnectionError)?
             .await
             .map_err(|_| UiServerError::ConnectionError)?;
 
         if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-            self.handle_connection(connection, false, token, remote_cert)
+            self.handle_connection(connection, false, Some(peer.token), remote_cert)
                 .await;
             Ok(UiResponse::Connect)
         } else {
@@ -398,12 +440,36 @@ impl Hdp {
             }
             Command::Close => {
                 // TODO tidy up peer discovery / active transfers
-                self.endpoint.wait_idle().await;
+                if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                    endpoint.wait_idle().await;
+                }
                 // TODO why an error?
                 return Err(HandleUiCommandError::ConnectionClosed);
             }
-            Command::Connect(addr) => {
-                let response = self.connect_to_peer(addr, None).await;
+            Command::Connect(socket_address) => {
+                let response = {
+                    if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone()
+                    {
+                        // TODO handle errors
+                        let connection = endpoint
+                            .connect(socket_address, "ssss") // TODO
+                            .map_err(|_| UiServerError::ConnectionError)
+                            .unwrap()
+                            .await
+                            .map_err(|_| UiServerError::ConnectionError)
+                            .unwrap();
+
+                        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
+                            self.handle_connection(connection, false, None, remote_cert)
+                                .await;
+                            Ok(UiResponse::Connect)
+                        } else {
+                            Err(UiServerError::ConnectionError)
+                        }
+                    } else {
+                        Err(UiServerError::ConnectionError)
+                    }
+                };
                 if self
                     .response_tx
                     .send(UiServerMessage::Response { id, response })
@@ -501,8 +567,17 @@ impl Hdp {
                             let response_tx = self.response_tx.clone();
                             let remaining_responses_clone = remaining_responses.clone();
                             let ls_cache = self.ls_cache.clone();
+                            let ls_response_stream = {
+                                match process_length_prefix(recv).await {
+                                    Ok(ls_response_stream) => ls_response_stream,
+                                    Err(error) => {
+                                        warn!("Could not process length prefix {}", error);
+                                        return Err(HandleUiCommandError::ConnectionClosed);
+                                    }
+                                }
+                            };
                             tokio::spawn(async move {
-                                let ls_response_stream = process_length_prefix(recv).await.unwrap();
+                                // TODO handle error
                                 pin_mut!(ls_response_stream);
 
                                 let mut cached_entries = Vec::new();
@@ -532,6 +607,7 @@ impl Hdp {
                                     let mut cache = ls_cache.lock().await;
                                     let peer_cache =
                                         cache.entry(peer_name_clone.clone()).or_insert(
+                                            // Unwrap ok here becasue CACHE_SIZE is non-zero
                                             LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
                                         );
                                     peer_cache.put(req_clone, cached_entries);
@@ -899,6 +975,8 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
     Ok(stream.boxed())
 }
 
+/// If we have a token for the other party, send it to them.
+/// Otherwise, wait for them to send us their token
 async fn handle_session_token(
     conn: &quinn::Connection,
     token: Option<SessionToken>,
@@ -1097,5 +1175,34 @@ mod tests {
                 is_dir: false,
             },
         ]
+    }
+}
+
+#[derive(Clone)]
+pub enum ServerConnection {
+    /// A single endpoint
+    WithEndpoint(Endpoint),
+    /// Certificate details used to create an endpoint for each peer connection
+    Symmetric(Vec<u8>, Vec<u8>),
+}
+
+impl std::fmt::Display for ServerConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerConnection::WithEndpoint(endpoint) => {
+                write!(
+                    f,
+                    "{}",
+                    match endpoint.local_addr() {
+                        Ok(local_addr) => local_addr.to_string(),
+                        _ => "No local adddress".to_string(),
+                    }
+                )?;
+            }
+            ServerConnection::Symmetric(_, _) => {
+                f.write_str("Behind symmetric NAT")?;
+            }
+        }
+        Ok(())
     }
 }

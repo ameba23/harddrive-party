@@ -9,14 +9,14 @@ use thiserror::Error;
 pub enum Request {
     /// A request to read the remote peer's shared file index
     Ls(IndexQuery),
-    /// A request to download a remote peers file (or a portion of the file)
+    /// A request to download a remote peer's file (or a portion of the file)
     Read(ReadQuery),
 }
 
 /// A request to read the remote peer's shared file index
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
 pub struct IndexQuery {
-    /// Sub-directory all files if not given
+    /// Base directory to query - defaults to all shared directories
     pub path: Option<String>,
     /// Filter term to search with
     pub searchterm: Option<String>,

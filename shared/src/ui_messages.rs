@@ -21,9 +21,9 @@ pub enum Command {
     Leave(String),
     /// Directly connected to a peer with the given socketaddr (temporary)
     Connect(SocketAddr),
-    /// Query peers' files
+    /// Query peers' files. If no peer name is given, query all connected peers
     Ls(IndexQuery, Option<String>),
-    /// Read a portion a of a file
+    /// Read a portion a of a file, from the given connect peer name
     Read(ReadQuery, String),
     /// Download a file or dir
     Download { path: String, peer_name: String },
@@ -72,9 +72,13 @@ pub enum UiEvent {
     },
 }
 
+/// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
+/// remote peer.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum PeerRemoteOrSelf {
+    /// A remote peer
     Remote,
+    /// Ourself, with the path of our home directory
     Me { os_home_dir: Option<String> },
 }
 
@@ -131,9 +135,13 @@ pub enum UiServerError {
 /// Information about a currently running download
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct DownloadResponse {
+    /// File path
     pub path: String,
+    /// Number of bytes read for this file
     pub bytes_read: u64,
+    /// Total number of bytes read from the associated download request
     pub total_bytes_read: u64,
+    /// Current speed of download in bytes per second
     pub speed: usize,
 }
 

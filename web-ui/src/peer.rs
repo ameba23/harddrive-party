@@ -21,9 +21,9 @@ impl Peer {
 }
 
 #[component]
-pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
-    let files = use_context::<FilesReadSignal>(cx).unwrap().0;
-    let (peer_signal, _set_peer) = create_signal(cx, (peer.name.clone(), peer.is_self));
+pub fn Peer(peer: Peer) -> impl IntoView {
+    let files = use_context::<FilesReadSignal>().unwrap().0;
+    let (peer_signal, _set_peer) = create_signal((peer.name.clone(), peer.is_self));
 
     let root_size = match files.get().get(&PeerPath {
         peer_name: peer.name,
@@ -50,8 +50,8 @@ pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
             .collect::<Vec<File>>()
     };
 
-    provide_context(cx, PeerName(peer_signal));
-    view! { cx,
+    provide_context(PeerName(peer_signal));
+    view! {
         <li>
         {peer_signal.get().0 } " "
         { display_bytes(root_size) } " shared"
@@ -60,7 +60,7 @@ pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
                 <For
                     each=files_iter
                     key=|file| file.name.clone()
-                    view=move |cx, file: File| view! { cx,  <File file is_shared=peer.is_self/> }
+                    children=move | file: File| view! {   <File file is_shared=peer.is_self/> }
                 />
                     </table>
         </li>
@@ -68,18 +68,18 @@ pub fn Peer(cx: Scope, peer: Peer) -> impl IntoView {
 }
 
 #[component]
-pub fn Peers(cx: Scope, peers: leptos::ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
+pub fn Peers(peers: leptos::ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
-            view! { cx, <div><p>"No peers connected"</p></div> }
+            view! { <div><p>"No peers connected"</p></div> }
         } else {
-            view! { cx,
+            view! {
                 <div>
                     <ul>
                         <For
                             each={move || peers.get()}
                             key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                            view=move |cx, (_peer_name, peer)| view! { cx,  <Peer peer /> }
+                            children=move |(_peer_name, peer)| view! {  <Peer peer /> }
                         />
                     </ul>
                 </div>
@@ -87,8 +87,8 @@ pub fn Peers(cx: Scope, peers: leptos::ReadSignal<HashMap<String, Peer>>) -> imp
         }
     };
 
-    view! { cx,
+    view! {
             <h2 class="text-xl">"Connected peers"</h2>
-            { show_peers() }
+            { show_peers }
     }
 }

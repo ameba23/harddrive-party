@@ -1,8 +1,7 @@
 //! Configuration for QUIC connections to remote peers
-use crate::discovery::hole_punch::PunchingUdpSocket;
 use anyhow::anyhow;
 use log::{debug, warn};
-use quinn::{ClientConfig, Connection, Endpoint, ServerConfig};
+use quinn::{AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
 use rustls::{Certificate, SignatureScheme};
 use std::{sync::Arc, time::Duration};
@@ -25,7 +24,7 @@ pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
 
 /// Setup an endpoint for Quic connections with a given socket address and certificate
 pub async fn make_server_endpoint(
-    socket: PunchingUdpSocket,
+    socket: impl AsyncUdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<Endpoint> {
@@ -35,6 +34,23 @@ pub async fn make_server_endpoint(
         Default::default(),
         Some(server_config),
         socket,
+        quinn::TokioRuntime,
+    )?;
+    endpoint.set_default_client_config(client_config);
+    Ok(endpoint)
+}
+
+pub async fn make_server_endpoint_basic_socket(
+    socket: tokio::net::UdpSocket,
+    cert_der: Vec<u8>,
+    priv_key_der: Vec<u8>,
+) -> anyhow::Result<Endpoint> {
+    let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
+
+    let mut endpoint = quinn::Endpoint::new(
+        Default::default(),
+        Some(server_config),
+        socket.into_std()?,
         quinn::TokioRuntime,
     )?;
     endpoint.set_default_client_config(client_config);

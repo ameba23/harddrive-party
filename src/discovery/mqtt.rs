@@ -1,6 +1,6 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 use super::{
-    hole_punch::HolePuncher, stun::NatType, topic::Topic, AnnounceAddress, DiscoveredPeer,
+    handle_peer, hole_punch::HolePuncher, topic::Topic, AnnounceAddress, DiscoveredPeer,
     JoinOrLeaveEvent,
 };
 use anyhow::anyhow;
@@ -31,6 +31,7 @@ use tokio::{
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
+const MQTT_SERVER: &str = "broker.hivemq.com:1883";
 
 pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
@@ -44,7 +45,7 @@ impl MqttClient {
         client_id: String,
         announce_address: AnnounceAddress,
         peers_tx: UnboundedSender<DiscoveredPeer>,
-        hole_puncher: HolePuncher,
+        hole_puncher: Option<HolePuncher>,
     ) -> anyhow::Result<Self> {
         let announce_address_clone = announce_address.clone();
 
@@ -66,11 +67,11 @@ impl MqttClient {
     pub async fn run(
         &self,
         peers_tx: UnboundedSender<DiscoveredPeer>,
-        mut hole_puncher: HolePuncher,
+        hole_puncher: Option<HolePuncher>,
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         // let server_addr = "public.mqtthq.com:1883"
-        let server_addr = "broker.hivemq.com:1883"
+        let mut server_addr = MQTT_SERVER
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
             .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
@@ -172,57 +173,16 @@ impl MqttClient {
                                         let tn = &publ.topic_name();
                                         tn.contains(&topic.public_id)
                                     }) {
-                                        if let Some(remote_peer_announce) = decrypt_using_topic(&publ.payload().to_vec(), associated_topic) {
+                                        if let Some(remote_peer_announce) = decrypt_using_topic(publ.payload(), associated_topic) {
                                             if remote_peer_announce == announce_address {
                                                 debug!("Found our own announce message");
                                                 continue;
                                             }
 
                                             // Dont connect if we are both on the same IP - use mdns
-                                            if remote_peer_announce.public_addr.ip() == announce_address.public_addr.ip() {
+                                            if remote_peer_announce.connection_details.ip() == announce_address.connection_details.ip() {
                                                 debug!("Found remote peer with the same public ip as ours - ignoring");
                                                 continue;
-                                            }
-                                            debug!("Remote peer {:?}", remote_peer_announce);
-                                            // TODO there are more cases when we should not bother hole punching
-                                            if remote_peer_announce.nat_type != NatType::Symmetric {
-                                                    info!("Attempting hole punch...");
-                                                    if hole_puncher.hole_punch_peer(remote_peer_announce.public_addr).await.is_err() {
-                                                        warn!("Hole punching failed");
-                                                    } else {
-                                                        info!("Hole punching succeeded");
-                                                    };
-                                            };
-
-                                            // Decide whether to initiate the connection deterministically
-                                            // so that only one party initiates
-                                            let our_nat_badness = announce_address.nat_type as u8;
-                                            let their_nat_badness = remote_peer_announce.nat_type as u8;
-                                            let should_initiate_connection = if our_nat_badness == their_nat_badness {
-                                                    // If we both have the same NAT type, use the socket address
-                                                    // as a tie breaker
-                                                    let us = announce_address.public_addr.to_string();
-                                                    let them = remote_peer_announce.public_addr.to_string();
-                                                    us > them
-                                            } else {
-                                                // Otherwise the peer with the worst NAT type initiates the
-                                                // connection
-                                                our_nat_badness > their_nat_badness
-                                            };
-
-                                            if should_initiate_connection {
-                                                info!("PUBLISH ({})", publ.topic_name());
-                                                if peers_tx
-                                                    .send(DiscoveredPeer {
-                                                        addr: remote_peer_announce.public_addr,
-                                                        token: remote_peer_announce.token,
-                                                        topic: Some(associated_topic.clone()),
-                                                    })
-                                                    .is_err()
-                                                {
-                                                    error!("Cannot write to channel");
-                                                    break false;
-                                                }
                                             }
 
                                             // Say 'hello' by re-publishing our own announce message to
@@ -231,6 +191,29 @@ impl MqttClient {
                                                 error!("Error when writing to mqtt broker {:?}", e);
                                                 break true;
                                             };
+                                            debug!("Remote peer {:?}", remote_peer_announce);
+                                            let hole_puncher_clone = hole_puncher.clone();
+                                            let connection_details = announce_address.connection_details.clone();
+                                            let peers_tx = peers_tx.clone();
+                                            tokio::spawn(async move {
+                                                match handle_peer(hole_puncher_clone, connection_details, remote_peer_announce).await {
+                                                    Ok(Some(discovered_peer)) => {
+                                                        debug!("Connect to {:?}", discovered_peer);
+                                                        if peers_tx
+                                                            .send(discovered_peer)
+                                                                .is_err()
+                                                        {
+                                                            error!("Cannot write to channel");
+                                                        }
+                                                    }
+                                                    Ok(None) => {
+                                                        debug!("Successfully handled peer - awaiting connection from their side");
+                                                    }
+                                                    Err(error) => {
+                                                        warn!("Error when handling discovered peer {:?}", error);
+                                                    }
+                                                }
+                                            });
                                         }
                                     }
                                 }
@@ -292,14 +275,33 @@ impl MqttClient {
                     }
                 };
                 if reconnect {
-                    let mut stream = loop {
-                        if let Ok(stream) = connect(&server_addr, client_id.clone()).await {
-                            break stream;
+                    if stream.shutdown().await.is_err() {
+                        error!("Error while shutting down stream");
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let reconnect_success = loop {
+                        if let Ok(new_stream) = connect(&server_addr, client_id.clone()).await {
+                            stream = new_stream;
+                            break true;
                         } else {
                             error!("Cannot connect to mqtt server - reconnecting in 10s");
                             tokio::time::sleep(Duration::from_secs(10)).await;
+
+                            // Do DNS lookup again
+                            match mqtt_dns_resolve() {
+                                Ok(addr) => {
+                                    server_addr = addr;
+                                }
+                                Err(err) => {
+                                    warn!("{:?}", err);
+                                    break false;
+                                }
+                            }
                         }
                     };
+                    if !reconnect_success {
+                        break;
+                    }
                     // Resubscribe to existing topics
                     let channel_filters: Vec<(TopicFilter, QualityOfService)> = topics
                         .values()
@@ -348,7 +350,7 @@ impl MqttClient {
 }
 
 // Attempt to decrypt an announce message from another peer
-fn decrypt_using_topic(payload: &Vec<u8>, topic: &Topic) -> Option<AnnounceAddress> {
+fn decrypt_using_topic(payload: &[u8], topic: &Topic) -> Option<AnnounceAddress> {
     if let Some(announce_message_bytes) = topic.decrypt(payload) {
         let announce_address_result: Result<AnnounceAddress, Box<bincode::ErrorKind>> =
             deserialize(&announce_message_bytes);
@@ -425,4 +427,12 @@ async fn connect(server_addr: &SocketAddr, client_id: String) -> anyhow::Result<
         return Err(anyhow!("Got unexpected packet - expecting Connack"));
     }
     Ok(stream)
+}
+
+fn mqtt_dns_resolve() -> anyhow::Result<SocketAddr> {
+    let server_addr = MQTT_SERVER
+        .to_socket_addrs()?
+        .find(|x| x.is_ipv4())
+        .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
+    Ok(server_addr)
 }

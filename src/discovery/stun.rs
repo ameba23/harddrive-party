@@ -1,18 +1,26 @@
 //! Public address / NAT type discovery using STUN
 
+use super::PeerConnectionDetails;
 use anyhow::anyhow;
 use log::debug;
-use serde::{Deserialize, Serialize};
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use stunclient::StunClient;
+use tokio::net::UdpSocket;
 
 /// Get our public address and NAT type using STUN
-pub async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(IpAddr, NatType)> {
+pub async fn stun_test(socket: &UdpSocket) -> anyhow::Result<PeerConnectionDetails> {
     // TODO have a list of public stun servers and choose two randomly
-    let stun_client1 = StunClient::with_google_stun_server();
+    // let stun_client1 = StunClient::with_google_stun_server();
+    // let public_addr1 = stun_client1.query_external_address(socket)?;
+
+    let stun_server = "stun.talkho.com:3478"
+        .to_socket_addrs()?
+        .find(|x| x.is_ipv4())
+        .ok_or_else(|| anyhow!("Failed to get IP of stun server"))?;
+    let stun_client1 = StunClient::new(stun_server);
     let public_addr1 = stun_client1.query_external_address_async(socket).await?;
 
-    let stun_server = "stun2.l.google.com:19302"
+    let stun_server = "stun.dcalling.de:3478"
         .to_socket_addrs()?
         .find(|x| x.is_ipv4())
         .ok_or_else(|| anyhow!("Failed to get IP of stun server"))?;
@@ -24,44 +32,18 @@ pub async fn stun_test(socket: &tokio::net::UdpSocket) -> anyhow::Result<(IpAddr
     let has_nat = addr.ip() != public_addr1.ip();
     let is_symmetric = public_addr1 != public_addr2;
 
-    let nat_type = if !has_nat {
-        NatType::NoNat
+    let details = if !has_nat {
+        PeerConnectionDetails::NoNat(public_addr2)
     } else if is_symmetric {
-        NatType::Symmetric
+        PeerConnectionDetails::Symmetric(public_addr2.ip())
     } else {
-        NatType::Asymmetric
+        PeerConnectionDetails::Asymmetric(public_addr2)
     };
 
     debug!(
         "Local address: {:?}  Public address 1: {:?} Public address 2: {:?} NAT: {:?}",
-        addr, public_addr1, public_addr2, nat_type
+        addr, public_addr1, public_addr2, details
     );
 
-    Ok((public_addr2.ip(), nat_type))
+    Ok(details)
 }
-
-#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
-pub enum NatType {
-    NoNat = 1,
-    Asymmetric = 2,
-    Symmetric = 3,
-}
-
-// fn addresses_identical(ip1: IpAddr, ip2: IpAddr) -> bool {
-//     ip1 == ip2
-// match ip1 {
-//     IpAddr::V4(ip_v4_addr1) => {
-//         if let IpAddr::V4(ip_v4_addr2) = ip2 {
-//             ip_v4_addr1 == ip_v4_addr2
-//         } else {
-//             false
-//         }
-//     }
-//     IpAddr::V6(ip_v6_addr1) => {
-//         if let IpAddr::V6(ip_v6_addr2) = ip2 {
-//             ip_v6_addr1 == ip_v6_addr2
-//         } else {
-//             false
-//         }
-//     }
-// }

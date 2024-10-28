@@ -7,7 +7,7 @@ use harddrive_party::{
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
     ws::single_client_command,
 };
-use std::{net::SocketAddr, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::net::TcpListener;
 
 const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
@@ -71,12 +71,12 @@ async fn main() -> anyhow::Result<()> {
 
     let ui_addr = cli
         .ui_addr
-        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS.to_string()));
+        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS));
 
     if cli.verbose {
-        std::env::set_var(
+        env::set_var(
             "RUST_LOG",
-            std::env::var_os("RUST_LOG").unwrap_or_else(|| "harddrive_party=debug".into()),
+            env::var_os("RUST_LOG").unwrap_or_else(|| "harddrive_party=debug".into()),
         );
     }
     env_logger::init();
@@ -121,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
                     println!(
                         "{} listening for peers on {}",
                         hdp.name.green(),
-                        hdp.endpoint.local_addr().unwrap().to_string().yellow(),
+                        hdp.server_connection.to_string().yellow(),
                     );
 
                     let command_tx = hdp.command_tx.clone();
