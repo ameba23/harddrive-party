@@ -142,13 +142,8 @@ fn forward_holepunch(
                 data: [buf[0]], // *&buf[0]
                 from: meta.addr,
             };
+            debug!("Forwarding hole punch packet");
             let _ = channel.send(packet);
-        } else {
-            warn!(
-                "Got unexpected UDP data from {}: {}",
-                meta.addr,
-                hex::encode(&buf[..meta.len])
-            )
         }
     }
 }
