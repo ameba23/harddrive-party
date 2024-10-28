@@ -40,8 +40,8 @@ struct RequesterSetter(WriteSignal<Requester>);
 #[derive(Clone)]
 struct PeerName(ReadSignal<(String, bool)>);
 
-#[derive(Clone)]
-struct Requested(ReadSignal<HashSet<PeerPath>>);
+// #[derive(Clone)]
+// struct Requested(ReadSignal<HashSet<PeerPath>>);
 
 #[derive(Clone)]
 struct FilesReadSignal(ReadSignal<BTreeMap<PeerPath, File>>);
@@ -82,7 +82,7 @@ pub fn HdpUi() -> impl IntoView {
     let (home_dir, set_home_dir) = create_signal(Option::<String>::None);
 
     provide_context(RequesterSetter(set_requester));
-    provide_context(Requested(requested));
+    // provide_context(Requested(requested));
     provide_context(FilesReadSignal(files));
 
     spawn_local(async move {
@@ -394,7 +394,7 @@ pub fn HdpUi() -> impl IntoView {
                             </li>
                             <li class="mr-2" title={ move || { format!("{} connected topics", topics.get().len()) } }>
                                 <A href="topics" class={ ITEM_STYLE }>
-                                    { "Topics" }
+                                    { "🖧 Topics" }
                                     <span class={ NUMBER_LABEL}>
                                         {move || { topics.get().len() } }
                                     </span>
@@ -418,7 +418,7 @@ pub fn HdpUi() -> impl IntoView {
                             </li>
                             <li class="mr-2">
                                 <A href="transfers" class={ ITEM_STYLE}>
-                                    {"Transfers"}
+                                    {"⇅ Transfers"}
                                 </A>
                             </li>
                         </ul>

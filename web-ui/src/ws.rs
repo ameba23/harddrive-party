@@ -11,16 +11,13 @@ use leptos::*;
 use log::{debug, error, warn};
 use rand::{rngs::ThreadRng, Rng};
 use reqwasm::websocket::{futures::WebSocket, Message};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
-};
+use std::collections::{HashMap, HashSet};
 use wasm_bindgen_futures::spawn_local;
 
 #[derive(Clone, Debug)]
 pub struct WebsocketService {
     pub tx: Sender<UiClientMessage>,
-    pub last_event: Arc<Mutex<String>>,
+    // pub last_event: Arc<Mutex<String>>,
 }
 
 impl WebsocketService {
@@ -73,7 +70,7 @@ impl WebsocketService {
         Ok((
             Self {
                 tx: in_tx,
-                last_event: Default::default(),
+                // last_event: Default::default(),
             },
             out_rx,
         ))
@@ -90,7 +87,6 @@ pub struct Requester {
 
 impl Requester {
     pub fn new(ws_service: WebsocketService) -> Self {
-        // let (ws_service, mut ws_rx) = WebsocketService::new(ws_url);
         Self {
             ws_service,
             requests: HashMap::new(),
