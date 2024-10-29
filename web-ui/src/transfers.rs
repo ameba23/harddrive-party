@@ -40,22 +40,22 @@ pub fn Transfers(
     };
 
     view! {
-            <h2 class="text-xl">"Transfers"</h2>
-            <h3 class="text-lg">"Requested"</h3>
-            <ul class="list-disc list-inside">
-                <For
-                    each=wishlist
-                    key=|file| format!("{}{}", file.name, file.size)
-                    children=move |file| view! { <Request file /> }
-                />
-            </ul>
-            <h3 class="text-lg">"Downloaded"</h3>
-            <ul class="list-disc list-inside">
-                <For
-                    each=downloaded
-                    key=|file| format!("{}{}", file.name, file.size)
-                    children=move |file| view! { <Request file /> }
-                />
-            </ul>
+        <h2 class="text-xl">"Transfers"</h2>
+        <h3 class="text-lg">"Requested"</h3>
+        <ul class="list-disc list-inside">
+            <For
+                each=wishlist
+                key=|file| format!("{}{}", file.name, file.size)
+                children=move |file| view! { <Request file/> }
+            />
+        </ul>
+        <h3 class="text-lg">"Downloaded"</h3>
+        <ul class="list-disc list-inside">
+            <For
+                each=downloaded
+                key=|file| format!("{}{}", file.name, file.size)
+                children=move |file| view! { <Request file/> }
+            />
+        </ul>
     }
 }

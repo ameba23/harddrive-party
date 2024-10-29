@@ -76,54 +76,62 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
             None => (file_name, Default::default()),
         };
         view! {
-                <pre>
-                { indentation }
-                <strong>{ icon }</strong>
-                    <span class="text-sm font-medium">
-                    { name }
-                </span>
-                    </pre>
+            <pre>
+                {indentation} <strong>{icon}</strong>
+                <span class="text-sm font-medium">{name}</span>
+            </pre>
         }
     };
 
     view! {
         <tr class="hover:bg-gray-200">
-          <td>
-            { file_name_and_indentation() }
-          </td>
-          <td>
-          " "{ display_bytes(file.size) } " "
-          <button class={ BUTTON_STYLE } style={ download_button_style } on:click=download_request title="Download">"🠫"</button>
-          {
-                move || {
-                match file.download_status.get() {
+            <td>{file_name_and_indentation()}</td>
+            <td>
+                " " {display_bytes(file.size)} " "
+                <button
+                    class=BUTTON_STYLE
+                    style=download_button_style
+                    on:click=download_request
+                    title="Download"
+                >
+                    "🠫"
+                </button>
+                {move || {
+                    match file.download_status.get() {
                         DownloadStatus::Nothing => {
-                            view! { <span /> }
+                            view! { <span></span> }
                         }
                         DownloadStatus::Downloaded => {
-                            view! { <span> "Downloaded" </span> }
+                            view! { <span>"Downloaded"</span> }
                         }
                         DownloadStatus::Requested => {
-                            view! { <span> "Requested" </span> }
+                            view! { <span>"Requested"</span> }
                         }
                         DownloadStatus::Downloading(download_response) => {
-                            view! { <span><DownloadingFile download_response size=file.size /></span> }
+                            view! {
+                                <span>
+                                    <DownloadingFile download_response size=file.size/>
+                                </span>
+                            }
                         }
-                }
-                }
-        }
-        {
-            // TODO fix this
-            move || {
-                if is_shared {
-                    // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-                    view! { <span></span> }
-                } else {
-                    view! { <span /> }
-                }
-            }
-        }
-        </td>
+                    }
+                }}
+                {// TODO fix this
+                move || {
+                    if is_shared {
+                        view! {
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+                            <span></span>
+                        }
+                    } else {
+                        view! {
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+                            <span></span>
+                        }
+                    }
+                }}
+
+            </td>
         </tr>
     }
 }
@@ -144,10 +152,9 @@ pub enum DownloadStatus {
 /// Show progress when currently downloading
 #[component]
 pub fn DownloadingFile(download_response: DownloadResponse, size: u64) -> impl IntoView {
+    // This will be a progress bar
     view! {
-        <span>
-            { format!("Downloading {} of {} bytes...", download_response.bytes_read, size) }
-        </span>
+        <span>{format!("Downloading {} of {} bytes...", download_response.bytes_read, size)}</span>
     }
 }
 
@@ -158,32 +165,36 @@ pub fn Request(file: File) -> impl IntoView {
     match request_option {
         Some(request) => {
             view! {
-                    <li>
-                        { request.peer_name } " "
-                        <code>{ &request.path }</code>
-                        " " { display_bytes(request.size) } " "
-                        {
-                            move || {
-                                match file.download_status.get() {
-                                    DownloadStatus::Downloading(download_response) => {
-                                        view! { <span><DownloadingFile download_response size=file.size /></span> }
-                                    }
-                                    DownloadStatus::Downloaded => {
-                                        view! { <span><Preview file_path=&request.path shared=false/></span> }
-                                    }
-                                    _ => {
-                                        view! { <span /> }
-                                    }
+                <li>
+                    {request.peer_name} " " <code>{&request.path}</code> " "
+                    {display_bytes(request.size)} " "
+                    {move || {
+                        match file.download_status.get() {
+                            DownloadStatus::Downloading(download_response) => {
+                                view! {
+                                    <span>
+                                        <DownloadingFile download_response size=file.size/>
+                                    </span>
                                 }
                             }
+                            DownloadStatus::Downloaded => {
+                                view! {
+                                    <span>
+                                        <Preview file_path=&request.path shared=false/>
+                                    </span>
+                                }
+                            }
+                            _ => {
+                                view! { <span></span> }
+                            }
                         }
-                    </li>
+                    }}
+
+                </li>
             }
         }
         None => {
-            view! {
-              <li>"Never happens"</li>
-            }
+            view! { <li>"Never happens"</li> }
         }
     }
 }
@@ -196,13 +207,17 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
     match document().location() {
         Some(location) => {
             let protocol = location.protocol().unwrap_or("http:".to_string());
-            let host = location.host().unwrap_or("sfdd".to_string());
+            let host = location.host().unwrap_or("localhost:3030".to_string());
             let escaped_path = urlencoding::encode(&file_path);
             view! {
                 <span>
-                    <button class={ BUTTON_STYLE }>
-                        <a href={ format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)} target="_blank">"view"</a>
-                        {format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)}
+                    <button class=BUTTON_STYLE>
+                        <a
+                            href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
+                            target="_blank"
+                        >
+                            "View"
+                        </a>
                     </button>
                 </span>
             }

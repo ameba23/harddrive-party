@@ -372,15 +372,15 @@ pub fn HdpUi() -> impl IntoView {
     };
 
     let error_message_display = move || {
-        view!(
+        view! {
             <For
-                each={move || error_message.get()}
+                each=move || error_message.get()
                 key=|error_message| format!("{:?}", error_message)
-                children=move |error_message| view! {
-                    <ErrorMessage message={format!("{}", error_message)} />
+                children=move |error_message| {
+                    view! { <ErrorMessage message=format!("{}", error_message)/> }
                 }
             />
-        )
+        }
     };
 
     view! {
@@ -390,62 +390,61 @@ pub fn HdpUi() -> impl IntoView {
                     <div class="text-sm font-medium text-center text-gray-500 border-b border-gray-200 dark:text-gray-400 dark:border-gray-700">
                         <ul class="flex flex-wrap -mb-px">
                             <li class="mr-2">
-                                <img class="hover:invert" src="hdd.png" alt="hard drive" width="60" title="harddrive-party"/>
+                                <img
+                                    class="hover:invert"
+                                    src="hdd.png"
+                                    alt="hard drive"
+                                    width="60"
+                                    title="harddrive-party"
+                                />
                             </li>
-                            <li class="mr-2" title={ move || { format!("{} connected topics", topics.get().len()) } }>
-                                <A href="topics" class={ ITEM_STYLE }>
-                                    { "🖧 Topics" }
-                                    <span class={ NUMBER_LABEL}>
-                                        {move || { topics.get().len() } }
-                                    </span>
+                            <li
+                                class="mr-2"
+                                title=move || { format!("{} connected topics", topics.get().len()) }
+                            >
+                                <A href="topics" class=ITEM_STYLE>
+                                    {"🖧 Topics"}
+                                    <span class=NUMBER_LABEL>{move || { topics.get().len() }}</span>
                                 </A>
                             </li>
                             <li class="mr-2">
-                                <A href="shares" class={ ITEM_STYLE }>
+                                <A href="shares" class=ITEM_STYLE>
                                     "🖤 Shares"
-                                    <span class={ NUMBER_LABEL }>
-                                        { shared_files_size }
-                                    </span>
+                                    <span class=NUMBER_LABEL>{shared_files_size}</span>
                                 </A>
                             </li>
-                            <li class="mr-2" title={ move || { format!("{} connected peers", peers.get().len() ) } }>
-                                <A href="peers" class={ ITEM_STYLE }>
+                            <li
+                                class="mr-2"
+                                title=move || { format!("{} connected peers", peers.get().len()) }
+                            >
+                                <A href="peers" class=ITEM_STYLE>
                                     "👾 Peers"
-                                    <span class={ NUMBER_LABEL }>
-                                        {move || { peers.get().len() } }
-                                    </span>
+                                    <span class=NUMBER_LABEL>{move || { peers.get().len() }}</span>
                                 </A>
                             </li>
                             <li class="mr-2">
-                                <A href="transfers" class={ ITEM_STYLE}>
+                                <A href="transfers" class=ITEM_STYLE>
                                     {"⇅ Transfers"}
                                 </A>
                             </li>
                         </ul>
                     </div>
-                    { error_message_display }
+                    {error_message_display}
                 </nav>
                 <main>
                     <Routes>
-                        <Route
-                            path=""
-                            view=move || view! { <Peers peers /> }
-                        />
-                        <Route
-                            path="topics"
-                            view=move || view! { <Topics topics /> }
-                        />
+                        <Route path="" view=move || view! { <Peers peers/> }/>
+                        <Route path="topics" view=move || view! { <Topics topics/> }/>
                         <Route
                             path="shares"
-                            view=move || view! { <Shares shares add_or_remove_share_message home_dir /> }
+                            view=move || {
+                                view! { <Shares shares add_or_remove_share_message home_dir/> }
+                            }
                         />
-                        <Route
-                            path="peers"
-                            view=move || view! { <Peers peers /> }
-                        />
+                        <Route path="peers" view=move || view! { <Peers peers/> }/>
                         <Route
                             path="transfers"
-                            view=move || view! { <Transfers requested downloaded files /> }
+                            view=move || view! { <Transfers requested downloaded files/> }
                         />
                     </Routes>
                 </main>
@@ -471,22 +470,28 @@ fn display_bytes(bytes: u64) -> String {
 #[component]
 pub fn ErrorMessage(message: String) -> impl IntoView {
     view! {
-    <div class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800" role="alert">
-      <div>
-        <span class="font-medium">" ⚠ "{ message }</span>
-      </div>
-    </div>
+        <div
+            class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800"
+            role="alert"
+        >
+            <div>
+                <span class="font-medium">" ⚠ " {message}</span>
+            </div>
+        </div>
     }
 }
 
 #[component]
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
-    <div class="flex p-4 my-4 text-sm text-green-800 border border-green-300 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-800" role="alert">
-      <div>
-        <span class="font-medium">" ✅ "{ message }</span>
-      </div>
-    </div>
+        <div
+            class="flex p-4 my-4 text-sm text-green-800 border border-green-300 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-800"
+            role="alert"
+        >
+            <div>
+                <span class="font-medium">" ✅ " {message}</span>
+            </div>
+        </div>
     }
 }
 

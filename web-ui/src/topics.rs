@@ -23,25 +23,46 @@ pub fn Topics(topics: leptos::ReadSignal<Vec<(String, bool)>>) -> impl IntoView 
     view! {
         <h2 class="text-xl">"Connected topics"</h2>
         <form action="javascript:void(0);">
-            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name" />
-            <input type="submit" value="Join" class={ BUTTON_STYLE } on:click=join_topic />
+            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name"/>
+            <input type="submit" value="Join" class=BUTTON_STYLE on:click=join_topic/>
         </form>
         <h2>"Connected"</h2>
         <ul>
             <For
-                each={move || {
+                each=move || {
                     topics.get().into_iter().filter(|(_, connected)| *connected).collect::<Vec<_>>()
-                } }
+                }
+
                 key=|(topic, _): &(String, bool)| topic.clone()
-                children=move |(topic, connected) | view! { <Topic topic=create_rw_signal(Topic { name: topic.to_string(), connected}) /> }
+                children=move |(topic, connected)| {
+                    view! {
+                        <Topic topic=create_rw_signal(Topic {
+                            name: topic.to_string(),
+                            connected,
+                        })/>
+                    }
+                }
             />
         </ul>
         <h2>"Not connected"</h2>
         <ul>
             <For
-                each={move || topics.get().into_iter().filter(|(_, connected)| !*connected).collect::<Vec<_>>() }
+                each=move || {
+                    topics
+                        .get()
+                        .into_iter()
+                        .filter(|(_, connected)| !*connected)
+                        .collect::<Vec<_>>()
+                }
                 key=|(topic, _): &(String, bool)| topic.clone()
-                children=move |(topic, connected) | view! { <Topic topic=create_rw_signal(Topic { name: topic.to_string(), connected}) /> }
+                children=move |(topic, connected)| {
+                    view! {
+                        <Topic topic=create_rw_signal(Topic {
+                            name: topic.to_string(),
+                            connected,
+                        })/>
+                    }
+                }
             />
         </ul>
     }
@@ -79,23 +100,23 @@ pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
 
         if topic.get().connected {
             view! {
-              <button class={ BUTTON_STYLE } on:click=leave_topic>
-                  "Leave"
-              </button>
+                <button class=BUTTON_STYLE on:click=leave_topic>
+                    "Leave"
+                </button>
             }
         } else {
             view! {
-              <button class={ BUTTON_STYLE } on:click=join_topic>
-                  "Join"
-              </button>
+                <button class=BUTTON_STYLE on:click=join_topic>
+                    "Join"
+                </button>
             }
         }
     };
 
     view! {
         <li>
-              <code>{ topic.get().name }</code>
-              { join_or_leave_button }
+            <code>{topic.get().name}</code>
+            {join_or_leave_button}
         </li>
     }
 }

@@ -53,16 +53,14 @@ pub fn Peer(peer: Peer) -> impl IntoView {
     provide_context(PeerName(peer_signal));
     view! {
         <li>
-        {peer_signal.get().0 } " "
-        { display_bytes(root_size) } " shared"
-        <table>
+            {peer_signal.get().0} " " {display_bytes(root_size)} " shared" <table>
 
                 <For
                     each=files_iter
                     key=|file| file.name.clone()
-                    children=move | file: File| view! {   <File file is_shared=peer.is_self/> }
+                    children=move |file: File| view! { <File file is_shared=peer.is_self/> }
                 />
-                    </table>
+            </table>
         </li>
     }
 }
@@ -71,15 +69,19 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 pub fn Peers(peers: leptos::ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
-            view! { <div><p>"No peers connected"</p></div> }
+            view! {
+                <div>
+                    <p>"No peers connected"</p>
+                </div>
+            }
         } else {
             view! {
                 <div>
                     <ul>
                         <For
-                            each={move || peers.get()}
+                            each=move || peers.get()
                             key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                            children=move |(_peer_name, peer)| view! {  <Peer peer /> }
+                            children=move |(_peer_name, peer)| view! { <Peer peer/> }
                         />
                     </ul>
                 </div>
@@ -88,7 +90,7 @@ pub fn Peers(peers: leptos::ReadSignal<HashMap<String, Peer>>) -> impl IntoView 
     };
 
     view! {
-            <h2 class="text-xl">"Connected peers"</h2>
-            { show_peers }
+        <h2 class="text-xl">"Connected peers"</h2>
+        {show_peers}
     }
 }

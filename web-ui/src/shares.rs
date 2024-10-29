@@ -35,37 +35,50 @@ pub fn Shares(
     };
 
     view! {
-            <h2 class="text-xl">"Shared files"</h2>
-            <form action="javascript:void(0);">
-                <label for="add-share">"Add a directory to share"</label>
-                <div>
-                    <code>
-                        <input value={ home_dir_if_exists } class="border-2 mx-1" name="add-share" node_ref=input_ref />
-                    </code>
-                    <input type="submit" value="Add" class={ BUTTON_STYLE } on:click=add_share value="Add" />
-                </div>
-            </form>
-            {
-                move || {
-                    match add_or_remove_share_message.get() {
-                        Some(Ok(message)) => {
-                            view! {  <span> <SuccessMessage message /> </span> }
-                        }
-                        Some(Err(message)) => {
-                            view! {  <span> <ErrorMessage message /> </span> }
-                        }
-                        None => {
-                            view! { <span /> }
-                        }
+        <h2 class="text-xl">"Shared files"</h2>
+        <form action="javascript:void(0);">
+            <label for="add-share">"Add a directory to share"</label>
+            <div>
+                <code>
+                    <input
+                        value=home_dir_if_exists
+                        class="border-2 mx-1"
+                        name="add-share"
+                        node_ref=input_ref
+                    />
+                </code>
+                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share value="Add"/>
+            </div>
+        </form>
+
+        {move || {
+            match add_or_remove_share_message.get() {
+                Some(Ok(message)) => {
+                    view! {
+                        <span>
+                            <SuccessMessage message/>
+                        </span>
                     }
                 }
+                Some(Err(message)) => {
+                    view! {
+                        <span>
+                            <ErrorMessage message/>
+                        </span>
+                    }
+                }
+                None => {
+                    view! { <span></span> }
+                }
             }
-            <ul class="list-disc list-inside">
-                <For
-                    each=selves
-                    key=|peer| format!("{}{}", peer.name, peer.files.len())
-                    children=move |peer| view! { <Peer peer /> }
-                />
-            </ul>
+        }}
+
+        <ul class="list-disc list-inside">
+            <For
+                each=selves
+                key=|peer| format!("{}{}", peer.name, peer.files.len())
+                children=move |peer| view! { <Peer peer/> }
+            />
+        </ul>
     }
 }
