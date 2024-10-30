@@ -51,6 +51,7 @@ pub fn Shares(
             </div>
         </form>
 
+        // TODO could use <Show> here
         {move || {
             match add_or_remove_share_message.get() {
                 Some(Ok(message)) => {

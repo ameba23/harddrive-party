@@ -13,6 +13,7 @@ pub struct File {
     pub size: u64,
     pub is_dir: bool,
     pub download_status: RwSignal<DownloadStatus>,
+    /// The associated request, if there is one
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
 
@@ -85,7 +86,7 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 
     view! {
         <tr class="hover:bg-gray-200">
-            <td>{file_name_and_indentation()}</td>
+            <td>{file_name_and_indentation}</td>
             <td>
                 " " {display_bytes(file.size)} " "
                 <button

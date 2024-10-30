@@ -23,8 +23,10 @@ impl Peer {
 #[component]
 pub fn Peer(peer: Peer) -> impl IntoView {
     let files = use_context::<FilesReadSignal>().unwrap().0;
+    // This signal is used below to provide context to File
     let (peer_signal, _set_peer) = create_signal((peer.name.clone(), peer.is_self));
 
+    // This should probably be in a closure
     let root_size = match files.get().get(&PeerPath {
         peer_name: peer.name,
         path: "".to_string(),
@@ -34,7 +36,9 @@ pub fn Peer(peer: Peer) -> impl IntoView {
     };
 
     let files_iter = move || {
+        // Calling .get() clones - we should ideally use .with(|files| files.range...)
         let files = files.get();
+        // Get only files from this peer using a range of the BTreeMap
         files
             .range((
                 Included(PeerPath {

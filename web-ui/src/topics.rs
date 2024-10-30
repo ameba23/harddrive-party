@@ -74,15 +74,6 @@ pub struct Topic {
     connected: bool,
 }
 
-// impl Topic {
-//     fn new(name: String, connected: bool) -> Self {
-//         Self {
-//             name,
-//             connected: create_rw_signal(connected),
-//         }
-//     }
-// }
-
 #[component]
 pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
