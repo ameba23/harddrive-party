@@ -41,7 +41,7 @@ cryptoxide = { version = "0.4.4", default-features = false, features = [
   "chacha",
 ] }
 hex = "0.4.3"
-key-to-animal = { git = "https://gitlab.com/pegpeg/key-to-animal" }
+key-to-animal = "0.0.1"
 ring = "0.16.20"
 speedometer = "0.2.2"
 stunclient = "0.4.1"
