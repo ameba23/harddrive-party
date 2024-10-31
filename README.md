@@ -7,7 +7,7 @@ Allows two or more peers to share files. Peers can choose directories to share, 
 
 Currently **work-in-progress** - expect bugs and breaking changes.
 
-`cargo run -- --verbose start <path to store local db> <path of some files to share>`
+`harddrive-party --verbose start --topic "place to meet" --share-dir ~/my-dir-to-share`
 
 ## Design goals
 

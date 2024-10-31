@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use harddrive_party::{
@@ -28,41 +29,62 @@ struct Cli {
 enum CliCommand {
     /// Start the process - all other commands will communicate with this instance
     Start {
+        /// Directories to share (may be given multiple times)
+        #[arg(short, long)]
+        share_dir: Vec<String>,
+        /// Initial topics to join (may be given multiple times)
+        #[arg(short, long)]
+        topic: Vec<String>,
+        /// IP and port to host UI - defaults to 127.0.0.1:4001
+        #[arg(short, long)]
+        ui_address: Option<SocketAddr>,
+        /// Directory to store local database.
+        /// Defaults to $XDG_DATA_HOME/harddrive-party or ~/.local/share/harddrive-party
+        #[arg(long)]
         storage: Option<String>,
-        share_dir: Option<String>,
-        #[arg(short, long)]
-        ws_addr: Option<SocketAddr>,
-        #[arg(short, long)]
-        topic: Option<String>,
-        #[arg(short, long)]
-        dev: bool,
     },
     /// Join a given topic name
     Join { topic: String },
     /// Leave a given topic name
     Leave { topic: String },
     /// Download a file or dir
-    Download { path: String },
+    Download {
+        /// Peername and path - given as "peername/path"
+        path: String,
+    },
     /// Query remote peers' file index
     Ls {
+        /// The directory (defaults to all shared directories)
         path: Option<String>,
+        /// A search term to filter by
+        #[arg(short, long)]
         searchterm: Option<String>,
+        /// Whether to expand subdirectories
+        #[arg(short, long)]
         recursive: Option<bool>,
     },
     /// Query your shared files
     Shares {
+        /// The directory (defaults to all shared directories)
         path: Option<String>,
+        /// A search term to filter by
+        #[arg(short, long)]
         searchterm: Option<String>,
+        /// Whether to expand subdirectories
+        #[arg(short, long)]
         recursive: Option<bool>,
     },
     /// Read a single remote file directly to stdout
     Read {
+        /// Peername and path - given as "peername/path"
         path: String,
+        /// Offset to start reading at (defaults to beginning of file)
+        #[arg(short, long)]
         start: Option<u64>,
+        /// Offset to stop reading (defaults to end of file)
+        #[arg(short, long)]
         end: Option<u64>,
     },
-    /// Connect to a peer - directly (temporary)
-    Connect { addr: SocketAddr },
 }
 
 #[tokio::main]
@@ -85,36 +107,22 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Start {
             storage,
             share_dir,
-            ws_addr,
+            ui_address,
             topic,
-            dev,
         } => {
-            let ws_addr = ws_addr.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
+            let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
 
-            let mut initial_topics = Vec::new();
-            if let Some(t) = topic {
-                initial_topics.push(t);
-            }
-
-            let storage = storage.map(PathBuf::from).unwrap_or_else(|| {
-                if dev {
-                    PathBuf::from("harddrive-party")
-                } else {
-                    let os_home_dir = match std::env::var_os("HOME") {
-                        Some(o) => o.to_str().unwrap_or(".").to_string(),
-                        None => ".".to_string(),
-                    };
-                    let mut path_buf = PathBuf::from(os_home_dir);
-                    path_buf.push(".harddrive-party");
-                    path_buf
+            let storage = match storage {
+                Some(storage) => PathBuf::from(storage),
+                None => {
+                    let mut data_dir = get_data_dir()?;
+                    data_dir.push("harddrive-party");
+                    data_dir
                 }
-            });
-
-            let initial_share_dirs = if let Some(dir) = share_dir {
-                vec![dir]
-            } else {
-                Vec::new()
             };
+
+            let initial_topics = topic;
+            let initial_share_dirs = share_dir;
 
             match Hdp::new(storage, initial_share_dirs, initial_topics).await {
                 Ok((mut hdp, recv)) => {
@@ -126,8 +134,8 @@ async fn main() -> anyhow::Result<()> {
 
                     let command_tx = hdp.command_tx.clone();
 
-                    let ws_listener = TcpListener::bind(&ws_addr).await?;
-                    println!("WS Listening on: {}", ws_addr);
+                    let ws_listener = TcpListener::bind(&ui_address).await?;
+                    println!("WS Listening on: {}", ui_address);
                     tokio::spawn(async move {
                         harddrive_party::ws::server(ws_listener, command_tx, recv)
                             .await
@@ -137,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
                     let download_dir = hdp.download_dir.clone();
                     // HTTP server
                     tokio::spawn(async move {
-                        http_server(ws_addr, download_dir).await;
+                        http_server(ui_address, download_dir).await;
                     });
 
                     hdp.run().await;
@@ -186,9 +194,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-        }
-        CliCommand::Connect { addr } => {
-            harddrive_party::ws::single_client_command(ui_addr, Command::Connect(addr)).await?;
         }
         CliCommand::Ls {
             path,
@@ -379,5 +384,34 @@ fn path_to_peer_path(path: String) -> (Option<String>, String) {
         (Some(peer_name.to_string()), remaining_path)
     } else {
         (None, "".to_string())
+    }
+}
+
+/// Get local data directory according to XDG base directory specification
+fn get_data_dir() -> anyhow::Result<PathBuf> {
+    match std::env::var_os("XDG_DATA_HOME") {
+        Some(data_dir) => Ok(PathBuf::from(
+            data_dir
+                .to_str()
+                .ok_or(anyhow!("Cannot parse XDG_DATA_HOME"))?,
+        )),
+        None => {
+            let mut home_dir = match std::env::var_os("HOME") {
+                Some(home_dir) => {
+                    PathBuf::from(home_dir.to_str().ok_or(anyhow!("Cannot parse $HOME"))?)
+                }
+                None => {
+                    let username =
+                        std::env::var_os("USER").ok_or(anyhow!("Cannot get home directory"))?;
+                    let username = username.to_str().ok_or(anyhow!("Cannot parse $USER"))?;
+                    let mut home_dir = PathBuf::from("/home");
+                    home_dir.push(username);
+                    home_dir
+                }
+            };
+            home_dir.push(".local");
+            home_dir.push("share");
+            Ok(home_dir)
+        }
     }
 }
