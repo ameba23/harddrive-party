@@ -260,9 +260,7 @@ fn try_topics(
     their_addr: SocketAddr,
 ) -> Option<SessionToken> {
     for capability in capabilities {
-        println!("Tring a capability");
         for topic in topics {
-            println!("checking a topic");
             if let Ok(their_token) = handshake_response(capability, topic, their_addr) {
                 return Some(their_token);
             }
