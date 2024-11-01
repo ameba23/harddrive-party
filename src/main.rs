@@ -9,7 +9,7 @@ use harddrive_party::{
     ws::single_client_command,
 };
 use std::{env, net::SocketAddr, path::PathBuf};
-use tokio::net::TcpListener;
+use tokio::{fs::create_dir_all, net::TcpListener};
 
 const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
 
@@ -42,6 +42,9 @@ enum CliCommand {
         /// Defaults to $XDG_DATA_HOME/harddrive-party or ~/.local/share/harddrive-party
         #[arg(long)]
         storage: Option<String>,
+        /// Directory to store downloads. Defaults to ~/Downloads
+        #[arg(short, long)]
+        download_dir: Option<String>,
     },
     /// Join a given topic name
     Join { topic: String },
@@ -109,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
             share_dir,
             ui_address,
             topic,
+            download_dir,
         } => {
             let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
 
@@ -124,7 +128,18 @@ async fn main() -> anyhow::Result<()> {
             let initial_topics = topic;
             let initial_share_dirs = share_dir;
 
-            let (mut hdp, recv) = Hdp::new(storage, initial_share_dirs, initial_topics).await?;
+            let download_dir = match download_dir {
+                Some(download_dir) => PathBuf::from(download_dir),
+                None => {
+                    let mut download_dir = get_home_dir()?;
+                    download_dir.push("Downloads");
+                    download_dir
+                }
+            };
+            create_dir_all(&download_dir).await?;
+
+            let (mut hdp, recv) =
+                Hdp::new(storage, initial_share_dirs, initial_topics, download_dir).await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.name.green(),
@@ -134,7 +149,7 @@ async fn main() -> anyhow::Result<()> {
             let command_tx = hdp.command_tx.clone();
 
             let ws_listener = TcpListener::bind(&ui_address).await?;
-            println!("WS Listening on: {}", ui_address);
+            println!("Websocket server for UI listening on: {}", ui_address);
             tokio::spawn(async move {
                 harddrive_party::ws::server(ws_listener, command_tx, recv).await;
             });
@@ -388,21 +403,25 @@ fn get_data_dir() -> anyhow::Result<PathBuf> {
                 .ok_or(anyhow!("Cannot parse XDG_DATA_HOME"))?,
         )),
         None => {
-            let mut home_dir = match std::env::var_os("HOME") {
-                Some(home_dir) => {
-                    PathBuf::from(home_dir.to_str().ok_or(anyhow!("Cannot parse $HOME"))?)
-                }
-                None => {
-                    let username =
-                        std::env::var_os("USER").ok_or(anyhow!("Cannot get home directory"))?;
-                    let username = username.to_str().ok_or(anyhow!("Cannot parse $USER"))?;
-                    let mut home_dir = PathBuf::from("/home");
-                    home_dir.push(username);
-                    home_dir
-                }
-            };
-            home_dir.push(".local");
-            home_dir.push("share");
+            let mut data_dir = get_home_dir()?;
+            data_dir.push(".local");
+            data_dir.push("share");
+            Ok(data_dir)
+        }
+    }
+}
+
+/// Gets home directory
+fn get_home_dir() -> anyhow::Result<PathBuf> {
+    match std::env::var_os("HOME") {
+        Some(home_dir) => Ok(PathBuf::from(
+            home_dir.to_str().ok_or(anyhow!("Cannot parse $HOME"))?,
+        )),
+        None => {
+            let username = std::env::var_os("USER").ok_or(anyhow!("Cannot get home directory"))?;
+            let username = username.to_str().ok_or(anyhow!("Cannot parse $USER"))?;
+            let mut home_dir = PathBuf::from("/home");
+            home_dir.push(username);
             Ok(home_dir)
         }
     }

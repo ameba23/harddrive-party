@@ -14,11 +14,8 @@ pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".into()]);
     cert_params.alg = &rcgen::PKCS_ED25519;
     let cert = rcgen::Certificate::from_params(cert_params)?;
-    // let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()])?;
     let cert_der = cert.serialize_der()?;
     let priv_key = cert.serialize_private_key_der();
-    // let keypair = cert.get_key_pair();
-    // println!("keypair {:?}", keypair.serialize_pem());
     Ok((cert_der, priv_key))
 }
 
@@ -73,7 +70,6 @@ pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Cert
 }
 
 /// Returns default server configuration along with its certificate.
-// #[allow(clippy::field_reassign_with_default)] // https://github.com/rust-lang/rust-clippy/issues/6527
 fn configure_server(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
@@ -83,7 +79,6 @@ fn configure_server(
 
     let crypto = rustls::ServerConfig::builder()
         .with_safe_defaults()
-        // .with_no_client_auth()
         .with_client_cert_verifier(SkipClientVerification::new())
         .with_single_cert(cert_chain.clone(), priv_key)?;
 

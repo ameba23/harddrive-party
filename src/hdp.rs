@@ -31,7 +31,6 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    fs::create_dir_all,
     select,
     sync::{
         mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
@@ -82,6 +81,7 @@ impl Hdp {
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
+        download_dir: PathBuf,
     ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = unbounded_channel();
@@ -94,11 +94,6 @@ impl Hdp {
         let shares = Shares::new(db.clone(), share_dirs).await?;
 
         let config_db = db.open_tree(CONFIG)?;
-
-        // TODO if in production mode this should be homedir/Downloads
-        let mut download_dir = storage.as_ref().to_owned();
-        download_dir.push("downloads");
-        create_dir_all(&download_dir).await?;
 
         // Attempt to get keypair / certificate from storage, and otherwise generate them and store
         let (cert_der, priv_key_der) = {
