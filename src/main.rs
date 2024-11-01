@@ -124,36 +124,28 @@ async fn main() -> anyhow::Result<()> {
             let initial_topics = topic;
             let initial_share_dirs = share_dir;
 
-            match Hdp::new(storage, initial_share_dirs, initial_topics).await {
-                Ok((mut hdp, recv)) => {
-                    println!(
-                        "{} listening for peers on {}",
-                        hdp.name.green(),
-                        hdp.server_connection.to_string().yellow(),
-                    );
+            let (mut hdp, recv) = Hdp::new(storage, initial_share_dirs, initial_topics).await?;
+            println!(
+                "{} listening for peers on {}",
+                hdp.name.green(),
+                hdp.server_connection.to_string().yellow(),
+            );
 
-                    let command_tx = hdp.command_tx.clone();
+            let command_tx = hdp.command_tx.clone();
 
-                    let ws_listener = TcpListener::bind(&ui_address).await?;
-                    println!("WS Listening on: {}", ui_address);
-                    tokio::spawn(async move {
-                        harddrive_party::ws::server(ws_listener, command_tx, recv)
-                            .await
-                            .unwrap();
-                    });
+            let ws_listener = TcpListener::bind(&ui_address).await?;
+            println!("WS Listening on: {}", ui_address);
+            tokio::spawn(async move {
+                harddrive_party::ws::server(ws_listener, command_tx, recv).await;
+            });
 
-                    let download_dir = hdp.download_dir.clone();
-                    // HTTP server
-                    tokio::spawn(async move {
-                        http_server(ui_address, download_dir).await;
-                    });
+            let download_dir = hdp.download_dir.clone();
+            // HTTP server
+            tokio::spawn(async move {
+                http_server(ui_address, download_dir).await;
+            });
 
-                    hdp.run().await;
-                }
-                Err(error) => {
-                    println!("Error {}", error);
-                }
-            }
+            hdp.run().await;
         }
         CliCommand::Join { topic } => {
             let mut responses =

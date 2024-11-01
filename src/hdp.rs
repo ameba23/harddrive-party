@@ -334,7 +334,7 @@ impl Hdp {
     }
 
     /// Initiate a Quic connection to a remote peer
-    async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<UiResponse, UiServerError> {
+    async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<(), UiServerError> {
         let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
@@ -361,7 +361,7 @@ impl Hdp {
         if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
             self.handle_connection(connection, false, Some(peer.token), remote_cert)
                 .await;
-            Ok(UiResponse::Connect)
+            Ok(())
         } else {
             Err(UiServerError::ConnectionError)
         }
@@ -445,38 +445,6 @@ impl Hdp {
                 }
                 // TODO why an error?
                 return Err(HandleUiCommandError::ConnectionClosed);
-            }
-            Command::Connect(socket_address) => {
-                let response = {
-                    if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone()
-                    {
-                        // TODO handle errors
-                        let connection = endpoint
-                            .connect(socket_address, "ssss") // TODO
-                            .map_err(|_| UiServerError::ConnectionError)
-                            .unwrap()
-                            .await
-                            .map_err(|_| UiServerError::ConnectionError)
-                            .unwrap();
-
-                        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-                            self.handle_connection(connection, false, None, remote_cert)
-                                .await;
-                            Ok(UiResponse::Connect)
-                        } else {
-                            Err(UiServerError::ConnectionError)
-                        }
-                    } else {
-                        Err(UiServerError::ConnectionError)
-                    }
-                };
-                if self
-                    .response_tx
-                    .send(UiServerMessage::Response { id, response })
-                    .is_err()
-                {
-                    return Err(HandleUiCommandError::ChannelClosed);
-                }
             }
             Command::Ls(query, peer_name_option) => {
                 // If no name given send the query to all connected peers

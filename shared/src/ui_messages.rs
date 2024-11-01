@@ -2,7 +2,7 @@
 
 use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
 use serde::{Deserialize, Serialize};
-use std::{fmt, net::SocketAddr, time::Duration};
+use std::{fmt, time::Duration};
 use thiserror::Error;
 
 /// A command from the UI together with a random ID used to refer to it
@@ -19,8 +19,6 @@ pub enum Command {
     Join(String),
     /// Leave a given topic name
     Leave(String),
-    /// Directly connected to a peer with the given socketaddr (temporary)
-    Connect(SocketAddr),
     /// Query peers' files. If no peer name is given, query all connected peers
     Ls(IndexQuery, Option<String>),
     /// Read a portion a of a file, from the given connect peer name
@@ -115,7 +113,6 @@ pub enum UiResponse {
     Shares(LsResponse),
     AddShare(u32),
     RemoveShare,
-    Connect,
     EndResponse,
 }
 

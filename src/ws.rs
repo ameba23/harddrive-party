@@ -31,7 +31,7 @@ pub async fn server(
     listener: TcpListener,
     command_tx: UnboundedSender<UiClientMessage>,
     mut response_rx: UnboundedReceiver<UiServerMessage>,
-) -> anyhow::Result<()> {
+) {
     let state = ClientMap::new(Mutex::new(HashMap::new()));
     let event_cache = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
 
@@ -132,8 +132,6 @@ pub async fn server(
             };
         });
     }
-
-    Ok(())
 }
 
 /// WS client used for the CLI

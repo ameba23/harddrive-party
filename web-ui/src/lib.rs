@@ -160,10 +160,6 @@ pub fn HdpUi() -> impl IntoView {
                                 };
                             }
                         }
-                        Ok(UiResponse::Connect) => {
-                            // This is only for [Command::Connect] which is not normally used
-                            debug!("Successfully connected to peer");
-                        }
                         Ok(UiResponse::EndResponse) => {
                             remove_request(&id);
                         }
