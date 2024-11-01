@@ -989,6 +989,35 @@ pub enum HandleUiCommandError {
     DbError,
 }
 
+#[derive(Clone)]
+pub enum ServerConnection {
+    /// A single endpoint
+    WithEndpoint(Endpoint),
+    /// Certificate details used to create an endpoint for each peer connection
+    Symmetric(Vec<u8>, Vec<u8>),
+}
+
+impl std::fmt::Display for ServerConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServerConnection::WithEndpoint(endpoint) => {
+                write!(
+                    f,
+                    "{}",
+                    match endpoint.local_addr() {
+                        Ok(local_addr) => local_addr.to_string(),
+                        _ => "No local adddress".to_string(),
+                    }
+                )?;
+            }
+            ServerConnection::Symmetric(_, _) => {
+                f.write_str("Behind symmetric NAT")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::wire_messages::{Entry, ReadQuery};
@@ -998,7 +1027,8 @@ mod tests {
 
     async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, UnboundedReceiver<UiServerMessage>) {
         let storage = TempDir::new().unwrap();
-        Hdp::new(storage, share_dirs, vec!["foo".to_string()])
+        let downloads = storage.path().to_path_buf();
+        Hdp::new(storage, share_dirs, vec!["foo".to_string()], downloads)
             .await
             .unwrap()
     }
@@ -1138,34 +1168,5 @@ mod tests {
                 is_dir: false,
             },
         ]
-    }
-}
-
-#[derive(Clone)]
-pub enum ServerConnection {
-    /// A single endpoint
-    WithEndpoint(Endpoint),
-    /// Certificate details used to create an endpoint for each peer connection
-    Symmetric(Vec<u8>, Vec<u8>),
-}
-
-impl std::fmt::Display for ServerConnection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ServerConnection::WithEndpoint(endpoint) => {
-                write!(
-                    f,
-                    "{}",
-                    match endpoint.local_addr() {
-                        Ok(local_addr) => local_addr.to_string(),
-                        _ => "No local adddress".to_string(),
-                    }
-                )?;
-            }
-            ServerConnection::Symmetric(_, _) => {
-                f.write_str("Behind symmetric NAT")?;
-            }
-        }
-        Ok(())
     }
 }
