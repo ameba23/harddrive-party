@@ -292,8 +292,7 @@ impl HolePuncher {
         // Send a packet back
         self.udp_send
             .send(OutgoingHolepunchPacket::new_ack(sender))
-            .await
-            .unwrap();
+            .await?;
         Ok(sender)
     }
 

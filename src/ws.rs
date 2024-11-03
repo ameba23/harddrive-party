@@ -9,47 +9,46 @@ use futures::{
     SinkExt, StreamExt,
 };
 use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
-use log::{debug, trace, warn};
+use log::{debug, error, trace, warn};
 use rand::{rngs::ThreadRng, Rng};
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 use tokio::{
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     select,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        RwLock,
+    },
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
-type Tx = UnboundedSender<UiServerMessage>;
-type ClientMap = Arc<Mutex<HashMap<SocketAddr, Tx>>>;
+type Tx = Sender<UiServerMessage>;
+type ClientMap = Arc<RwLock<HashMap<SocketAddr, Tx>>>;
 
 /// WS server
 pub async fn server(
     listener: TcpListener,
-    command_tx: UnboundedSender<UiClientMessage>,
-    mut response_rx: UnboundedReceiver<UiServerMessage>,
+    command_tx: Sender<UiClientMessage>,
+    mut response_rx: Receiver<UiServerMessage>,
 ) {
-    let state = ClientMap::new(Mutex::new(HashMap::new()));
-    let event_cache = Arc::new(Mutex::new(Vec::<UiEvent>::new()));
+    let state = ClientMap::new(RwLock::new(HashMap::new()));
+    let event_cache = Arc::new(RwLock::new(Vec::<UiEvent>::new()));
 
     // Loop over response channel and send to each connected client
     let state_clone = state.clone();
     let event_cache_clone = event_cache.clone();
     tokio::spawn(async move {
         while let Some(msg) = response_rx.recv().await {
-            let clients = state_clone.lock().unwrap();
-            trace!("{} connected clients", clients.len());
-
             {
-                let mut cache = event_cache_clone.lock().unwrap();
+                let mut cache = event_cache_clone.write().await;
                 cache_event(&msg, &mut cache);
             }
 
+            let clients = state_clone.read().await;
+            trace!("{} connected UI clients", clients.len());
+
             for client in clients.values() {
-                if let Err(err) = client.send(msg.clone()) {
+                if let Err(err) = client.send(msg.clone()).await {
                     warn!("Cannot send msg to connected client {:?}", err);
                 };
             }
@@ -58,10 +57,10 @@ pub async fn server(
 
     // Accept connections from UI clients
     while let Ok((stream, client_addr)) = listener.accept().await {
-        let (tx, mut rx) = unbounded_channel();
-        // TODO err handle
-        state.lock().unwrap().insert(client_addr, tx);
-
+        let (tx, mut rx) = channel(65536);
+        {
+            state.write().await.insert(client_addr, tx);
+        }
         let state_clone = state.clone();
         let command_tx = command_tx.clone();
         let event_cache_clone = event_cache.clone();
@@ -75,16 +74,22 @@ pub async fn server(
             // Send cached messages that this client has missed out on
             {
                 let cache = {
-                    let cache = event_cache_clone.lock().unwrap();
+                    let cache = event_cache_clone.read().await;
                     cache.clone()
                 };
                 for event in cache.iter() {
                     let message = UiServerMessage::Event(event.clone());
-                    let message_buf = serialize(&message).unwrap();
-                    if let Err(err) = outgoing.send(Message::Binary(message_buf)).await {
-                        warn!("Cannot send ws message {:?}", err);
-                        break;
-                    };
+                    match serialize(&message) {
+                        Ok(message_buf) => {
+                            if let Err(err) = outgoing.send(Message::Binary(message_buf)).await {
+                                warn!("Cannot send ws message {:?}", err);
+                                break;
+                            };
+                        }
+                        Err(_) => {
+                            error!("Cannot serialize message {message:?}");
+                        }
+                    }
                 }
             }
 
@@ -100,7 +105,7 @@ pub async fn server(
                                     deserialize(&ws_msg_buf);
                                     match message_result {
                                         Ok(message) => {
-                                            if command_tx.send(message).is_err() {
+                                            if command_tx.send(message).await.is_err() {
                                                 warn!("WS message channel closed!");
                                                 break;
                                             };
@@ -117,17 +122,23 @@ pub async fn server(
                         }
                     }
                     // Send next message from application to UI client
-                    // TODO handle none
                     Some(msg) = rx.recv() => {
-                        if let Err(err) = outgoing.send(Message::Binary(serialize(&msg).unwrap())).await {
-                            warn!("cannot send ws message {:?}", err);
-                            break;
-                        };
+                        match serialize(&msg) {
+                            Ok(message_bytes) => {
+                                if let Err(err) = outgoing.send(Message::Binary(message_bytes)).await {
+                                    warn!("cannot send ws message {:?}", err);
+                                    break;
+                                };
+                            },
+                            Err(_) => {
+                                error!("Cannot serialize message {msg:?}")
+                            }
+                        }
                     }
                 }
             }
             // Remove the client from our map
-            if state_clone.lock().unwrap().remove(&client_addr).is_none() {
+            if state_clone.write().await.remove(&client_addr).is_none() {
                 warn!("WS client address not removed! {}", client_addr);
             };
         });
@@ -136,8 +147,8 @@ pub async fn server(
 
 /// WS client used for the CLI
 pub struct WsClient {
-    write: SplitSink<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, Message>,
-    read: SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
+    write: SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+    read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     rng: ThreadRng,
 }
 
@@ -166,60 +177,61 @@ impl WsClient {
 pub async fn single_client_command(
     server_addr: String,
     command: Command,
-) -> anyhow::Result<UnboundedReceiver<Result<UiResponse, UiServerError>>> {
+) -> anyhow::Result<Receiver<Result<UiResponse, UiServerError>>> {
     let mut ws_client = WsClient::new(server_addr).await?;
     let message_id = ws_client.send_message(command).await?;
     Ok(read_responses(ws_client.read, message_id).await)
 }
 
+/// Read UI respnses (used internally by single_client_command)
 // TODO this should return a result with a stream of messages
-pub async fn read_responses(
-    mut read: SplitStream<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
+async fn read_responses(
+    mut read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     message_id: u32,
-) -> UnboundedReceiver<Result<UiResponse, UiServerError>> {
-    let (tx, rx) = unbounded_channel();
+) -> Receiver<Result<UiResponse, UiServerError>> {
+    let (tx, rx) = channel(1024);
     tokio::spawn(async move {
         while let Some(msg_result) = read.next().await {
             match msg_result {
-                Ok(Message::Binary(buf)) => {
-                    let msg: UiServerMessage = deserialize(&buf).unwrap();
-                    match msg {
-                        UiServerMessage::Response { id, response } => {
-                            if id == message_id {
-                                if tx.send(response).is_err() {
-                                    warn!("Ws single response channel closed");
-                                    break;
-                                };
-                            } else {
-                                warn!("Unexpected msg id - got message for another client");
-                            }
+                Ok(Message::Binary(buf)) => match deserialize(&buf) {
+                    Ok(UiServerMessage::Response { id, response }) => {
+                        if id == message_id {
+                            if tx.send(response).await.is_err() {
+                                warn!("Ws single response channel closed");
+                                break;
+                            };
+                        } else {
+                            warn!("Unexpected msg id - got message for another client");
                         }
-                        UiServerMessage::Event(event) => match event {
-                            UiEvent::PeerConnected {
-                                name,
-                                peer_type: PeerRemoteOrSelf::Me { .. },
-                            } => {
-                                println!("{}", name);
-                            }
-                            UiEvent::PeerConnected {
-                                name,
-                                peer_type: PeerRemoteOrSelf::Remote,
-                            } => {
-                                println!("Connected to remote peer: {}", name);
-                            }
-                            UiEvent::Topics(topics) => {
-                                for (topic, connected) in topics {
-                                    if connected {
-                                        println!("Connected to {}", topic);
-                                    }
+                    }
+                    Ok(UiServerMessage::Event(event)) => match event {
+                        UiEvent::PeerConnected {
+                            name,
+                            peer_type: PeerRemoteOrSelf::Me { .. },
+                        } => {
+                            println!("{}", name);
+                        }
+                        UiEvent::PeerConnected {
+                            name,
+                            peer_type: PeerRemoteOrSelf::Remote,
+                        } => {
+                            println!("Connected to remote peer: {}", name);
+                        }
+                        UiEvent::Topics(topics) => {
+                            for (topic, connected) in topics {
+                                if connected {
+                                    println!("Connected to {}", topic);
                                 }
                             }
-                            _ => {
-                                println!("Got event {:?}", event);
-                            }
-                        },
+                        }
+                        _ => {
+                            println!("Got event {:?}", event);
+                        }
+                    },
+                    Err(_) => {
+                        error!("Cannot deserialize UI message");
                     }
-                }
+                },
                 Err(e) => {
                     println!("Error response {:?}", e);
                     break;
@@ -234,7 +246,7 @@ pub async fn read_responses(
     rx
 }
 
-// Decide which messages to cache so that clients who connect later dont miss them
+/// Decide which messages to cache so that clients who connect later dont miss them
 fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
     if let UiServerMessage::Event(ui_event) = server_message {
         match ui_event {
@@ -263,6 +275,62 @@ fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
                 cache.retain(|event| !matches!(event, UiEvent::Topics(..)));
                 cache.push(ui_event.clone());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::future::join_all;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_ws_server() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let server_addr = listener.local_addr().unwrap();
+        let server_addr = format!("ws://{server_addr}");
+
+        let (command_tx, mut command_rx) = channel(1024);
+        let (response_tx, response_rx) = channel(1024);
+        // Run the ws server
+        tokio::spawn(async move {
+            server(listener, command_tx, response_rx).await;
+        });
+
+        // Mock of Hdp
+        tokio::spawn(async move {
+            while let Some(client_message) = command_rx.recv().await {
+                if let Command::Join(_) = client_message.command {
+                    response_tx
+                        .send(UiServerMessage::Response {
+                            id: client_message.id,
+                            response: Ok(UiResponse::EndResponse),
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        });
+        let command = Command::Join("foo".to_string());
+
+        async fn run_command(server_addr: String, command: Command) -> UiResponse {
+            single_client_command(server_addr, command)
+                .await
+                .unwrap()
+                .recv()
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        // Connect with 3 clients
+        let client_futures: Vec<_> = (0..3)
+            .map(|_| run_command(server_addr.clone(), command.clone()))
+            .collect();
+
+        for response in join_all(client_futures).await {
+            assert_eq!(response, UiResponse::EndResponse);
         }
     }
 }
