@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{channel, Receiver, Sender},
 };
 
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
@@ -30,13 +30,13 @@ pub struct Rpc {
     /// The file index database
     pub shares: Shares,
     /// Channel for sending upload requests
-    upload_tx: UnboundedSender<ReadRequest>,
+    upload_tx: Sender<ReadRequest>,
     // upload_rx: UnboundedReceiver<ReadRequest>,
 }
 
 impl Rpc {
-    pub fn new(shares: Shares, event_tx: UnboundedSender<UiServerMessage>) -> Rpc {
-        let (upload_tx, upload_rx) = unbounded_channel();
+    pub fn new(shares: Shares, event_tx: Sender<UiServerMessage>) -> Rpc {
+        let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
 
         tokio::spawn(async move {
@@ -139,6 +139,7 @@ impl Rpc {
                 end,
                 output,
             })
+            .await
             .map_err(|_| RpcError::ChannelClosed)?;
         Ok(())
     }
@@ -149,9 +150,9 @@ struct Uploader {
     /// Our share db
     shares: Shares,
     /// Incoming read requests
-    upload_rx: UnboundedReceiver<ReadRequest>,
+    upload_rx: Receiver<ReadRequest>,
     /// Channel for sending messages to the UI
-    event_tx: UnboundedSender<UiServerMessage>,
+    event_tx: Sender<UiServerMessage>,
 }
 
 impl Uploader {
@@ -194,6 +195,7 @@ impl Uploader {
                             bytes_read,
                             speed: 0, // TODO
                         })))
+                        .await
                         .is_err()
                     {
                         warn!("Ui response channel closed");

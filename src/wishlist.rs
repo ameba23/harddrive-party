@@ -7,7 +7,7 @@ use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use key_to_animal::key_to_name;
 use std::time::{Duration, SystemTime};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 /// How many entries to send when updating the UI
 const MAX_ENTRIES: usize = 10;
@@ -179,14 +179,11 @@ pub struct WishList {
     db_by_timestamp: sled::Tree,
     // key: <timestamp><request_id><path> value: <peer_public_key><size>
     db_downloaded: sled::Tree,
-    response_tx: UnboundedSender<UiServerMessage>,
+    response_tx: Sender<UiServerMessage>,
 }
 
 impl WishList {
-    pub fn new(
-        db: &sled::Db,
-        response_tx: UnboundedSender<UiServerMessage>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(db: &sled::Db, response_tx: Sender<UiServerMessage>) -> anyhow::Result<Self> {
         Ok(WishList {
             db_by_peer: db.open_tree(WISHLIST_BY_PEER)?,
             db_by_timestamp: db.open_tree(WISHLIST_BY_TIMESTAMP)?,
@@ -292,17 +289,17 @@ impl WishList {
     }
 
     /// Add a download request
-    pub fn add(&self, download_request: &DownloadRequest) -> anyhow::Result<()> {
+    pub async fn add(&self, download_request: &DownloadRequest) -> anyhow::Result<()> {
         let ((key, value), (key2, value2)) = download_request.to_db_key_value();
         self.db_by_peer.insert(key, value)?;
         self.db_by_timestamp.insert(key2, value2)?;
-        self.updated()?;
+        self.updated().await?;
         Ok(())
     }
 
     /// Remove a specific completed item from the wishlist and
     /// add it to the downloaded list
-    pub fn completed(&self, download_request: DownloadRequest) -> anyhow::Result<()> {
+    pub async fn completed(&self, download_request: DownloadRequest) -> anyhow::Result<()> {
         let ((key, _value), (key2, _value2)) = download_request.to_db_key_value();
         self.db_by_peer.remove(key)?;
         self.db_by_timestamp.remove(key2)?;
@@ -310,14 +307,14 @@ impl WishList {
         // Add the item to 'downloaded' db
         let (key, value) = download_request.into_downloaded_db_key_value();
         self.db_downloaded.insert(key, value)?;
-        self.updated()?;
+        self.updated().await?;
         Ok(())
     }
 
     /// Send updated lists of requested / downloaded files to the UI
     /// This is called when the program starts, and whenever a file
     /// is requested or finished downloading
-    pub fn updated(&self) -> anyhow::Result<()> {
+    pub async fn updated(&self) -> anyhow::Result<()> {
         let requested: Vec<UiDownloadRequest> = self.requested()?.take(MAX_ENTRIES).collect();
         let downloaded: Vec<UiDownloadRequest> = self.downloaded()?.take(MAX_ENTRIES).collect();
 
@@ -325,7 +322,8 @@ impl WishList {
             .send(UiServerMessage::Event(UiEvent::Wishlist {
                 requested,
                 downloaded,
-            }))?;
+            }))
+            .await?;
         Ok(())
     }
 }
@@ -334,7 +332,7 @@ impl WishList {
 mod tests {
     use super::*;
     use tempfile::TempDir;
-    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::sync::mpsc::channel;
 
     #[test]
     fn create_download_request() {
@@ -357,13 +355,13 @@ mod tests {
         assert_eq!(dl_req.peer_public_key, decoded_request.peer_public_key);
     }
 
-    #[test]
-    fn create_wishlist() {
+    #[tokio::test]
+    async fn create_wishlist() {
         let storage = TempDir::new().unwrap();
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir).expect("open");
-        let (response_tx, _response_rx) = unbounded_channel();
+        let (response_tx, _response_rx) = channel(1024);
         let wishlist = WishList::new(&db, response_tx).unwrap();
 
         let dl_req = DownloadRequest::new(
@@ -373,7 +371,7 @@ mod tests {
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
 
-        wishlist.add(&dl_req).unwrap();
+        wishlist.add(&dl_req).await.unwrap();
 
         let requested_items = wishlist.requested().unwrap();
         for item in requested_items {
@@ -385,7 +383,7 @@ mod tests {
             assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
         }
 
-        wishlist.completed(dl_req.clone()).unwrap();
+        wishlist.completed(dl_req.clone()).await.unwrap();
 
         let downloaded_items = wishlist.downloaded().unwrap();
 

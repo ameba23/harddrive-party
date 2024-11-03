@@ -33,7 +33,7 @@ use thiserror::Error;
 use tokio::{
     select,
     sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        mpsc::{channel, Receiver, Sender},
         Mutex,
     },
 };
@@ -59,11 +59,11 @@ pub struct Hdp {
     /// The QUIC endpoint
     pub server_connection: ServerConnection,
     /// Channel for commands from the UI
-    pub command_tx: UnboundedSender<UiClientMessage>,
+    pub command_tx: Sender<UiClientMessage>,
     /// Channel for commands from the UI
-    command_rx: UnboundedReceiver<UiClientMessage>,
+    command_rx: Receiver<UiClientMessage>,
     /// Channel for responses to the UI
-    response_tx: UnboundedSender<UiServerMessage>,
+    response_tx: Sender<UiServerMessage>,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
     /// Download directory
@@ -82,10 +82,10 @@ impl Hdp {
         share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
         download_dir: PathBuf,
-    ) -> anyhow::Result<(Self, UnboundedReceiver<UiServerMessage>)> {
+    ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
-        let (command_tx, command_rx) = unbounded_channel();
-        let (response_tx, response_rx) = unbounded_channel();
+        let (command_tx, command_rx) = channel(1024);
+        let (response_tx, response_rx) = channel(1024);
 
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
@@ -128,7 +128,8 @@ impl Hdp {
                 name: name.clone(),
                 peer_type: PeerRemoteOrSelf::Me { os_home_dir },
             },
-        );
+        )
+        .await;
 
         let topics = initial_topic_names
             .iter()
@@ -179,17 +180,17 @@ impl Hdp {
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
         // Inform the UI of initial state of topics and wishlist
-        self.topics_updated();
-        if let Err(err) = self.wishlist.updated() {
+        self.topics_updated().await;
+        if let Err(err) = self.wishlist.updated().await {
             error!("Error when sending wishlist to UI {err}");
         };
 
-        let (incoming_connection_tx, mut incoming_connection_rx) = unbounded_channel();
+        let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
                 loop {
                     if let Some(incoming_conn) = endpoint.accept().await {
-                        if incoming_connection_tx.send(incoming_conn).is_err() {
+                        if incoming_connection_tx.send(incoming_conn).await.is_err() {
                             warn!("Cannot handle incoming connections - channel closed");
                         }
                     }
@@ -267,7 +268,8 @@ impl Hdp {
                     name: peer_name.clone(),
                     peer_type: PeerRemoteOrSelf::Remote,
                 },
-            );
+            )
+            .await;
             loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
@@ -290,7 +292,8 @@ impl Hdp {
                 UiEvent::PeerDisconnected {
                     name: peer_name.clone(),
                 },
-            );
+            )
+            .await;
         });
     }
 
@@ -379,11 +382,12 @@ impl Hdp {
                                 id,
                                 response: Ok(UiResponse::EndResponse),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
                         }
-                        self.topics_updated();
+                        self.topics_updated().await;
                     }
                     Err(error) => {
                         warn!("Error when joining topic {}", error);
@@ -394,6 +398,7 @@ impl Hdp {
                                 id,
                                 response: Err(UiServerError::JoinOrLeaveError),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -411,11 +416,12 @@ impl Hdp {
                                 id,
                                 response: Ok(UiResponse::EndResponse),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
                         }
-                        self.topics_updated();
+                        self.topics_updated().await;
                     }
                     Err(error) => {
                         warn!("Error when leaving topic {}", error);
@@ -426,6 +432,7 @@ impl Hdp {
                                 id,
                                 response: Err(UiServerError::JoinOrLeaveError),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -465,6 +472,7 @@ impl Hdp {
                             id,
                             response: Ok(UiResponse::EndResponse),
                         })
+                        .await
                         .is_err()
                 {
                     warn!("Response channel closed");
@@ -494,6 +502,7 @@ impl Hdp {
                                             peer_name.to_string(),
                                         )),
                                     })
+                                    .await
                                     .is_err()
                                 {
                                     warn!("Response channel closed");
@@ -512,6 +521,7 @@ impl Hdp {
                                         id,
                                         response: Ok(UiResponse::EndResponse),
                                     })
+                                    .await
                                     .is_err()
                             {
                                 warn!("Response channel closed");
@@ -559,6 +569,7 @@ impl Hdp {
                                                 peer_name_clone.to_string(),
                                             )),
                                         })
+                                        .await
                                         .is_err()
                                     {
                                         warn!("Response channel closed");
@@ -587,6 +598,7 @@ impl Hdp {
                                             id,
                                             response: Ok(UiResponse::EndResponse),
                                         })
+                                        .await
                                         .is_err()
                                 {
                                     warn!("Response channel closed");
@@ -602,6 +614,7 @@ impl Hdp {
                                     id,
                                     response: Err(UiServerError::RequestError),
                                 })
+                                .await
                                 .is_err()
                             {
                                 return Err(HandleUiCommandError::ChannelClosed);
@@ -626,6 +639,7 @@ impl Hdp {
                                     id,
                                     response: Ok(UiResponse::Shares(res)),
                                 })
+                                .await
                                 .is_err()
                             {
                                 warn!("Response channel closed");
@@ -638,6 +652,7 @@ impl Hdp {
                                 id,
                                 response: Ok(UiResponse::EndResponse),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -652,6 +667,7 @@ impl Hdp {
                                 id,
                                 response: Err(UiServerError::RequestError),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -701,12 +717,15 @@ impl Hdp {
                                         if !entry.is_dir {
                                             debug!("Adding {} to wishlist", entry.name);
 
-                                            if let Err(err) = wishlist.add(&DownloadRequest::new(
-                                                entry.name.clone(),
-                                                entry.size,
-                                                id,
-                                                peer_public_key,
-                                            )) {
+                                            if let Err(err) = wishlist
+                                                .add(&DownloadRequest::new(
+                                                    entry.name.clone(),
+                                                    entry.size,
+                                                    id,
+                                                    peer_public_key,
+                                                ))
+                                                .await
+                                            {
                                                 error!("Cannot make download request {:?}", err);
                                             };
                                         }
@@ -723,6 +742,7 @@ impl Hdp {
                                 id,
                                 response: Err(UiServerError::RequestError),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -749,6 +769,7 @@ impl Hdp {
                                         id,
                                         response: Ok(UiResponse::Read(buf[..n].to_vec())),
                                     })
+                                    .await
                                     .is_err()
                                 {
                                     warn!("Response channel closed");
@@ -761,6 +782,7 @@ impl Hdp {
                                     id,
                                     response: Ok(UiResponse::EndResponse),
                                 })
+                                .await
                                 .is_err()
                             {
                                 warn!("Response channel closed");
@@ -777,6 +799,7 @@ impl Hdp {
                                 id,
                                 response: Err(UiServerError::RequestError),
                             })
+                            .await
                             .is_err()
                         {
                             return Err(HandleUiCommandError::ChannelClosed);
@@ -797,6 +820,7 @@ impl Hdp {
                                     id,
                                     response: Ok(UiResponse::AddShare(num_added)),
                                 })
+                                .await
                                 .is_err()
                             {
                                 error!("Channel closed");
@@ -806,6 +830,7 @@ impl Hdp {
                                     id,
                                     response: Ok(UiResponse::EndResponse),
                                 })
+                                .await
                                 .is_err()
                             {
                                 error!("Channel closed");
@@ -818,6 +843,7 @@ impl Hdp {
                                     id,
                                     response: Err(UiServerError::ShareError(err.to_string())),
                                 })
+                                .await
                                 .is_err()
                             {
                                 error!("Channel closed");
@@ -838,6 +864,7 @@ impl Hdp {
                                     id,
                                     response: Ok(UiResponse::EndResponse),
                                 })
+                                .await
                                 .is_err()
                             {
                                 error!("Channel closed");
@@ -850,6 +877,7 @@ impl Hdp {
                                     id,
                                     response: Err(UiServerError::ShareError(err.to_string())),
                                 })
+                                .await
                                 .is_err()
                             {
                                 error!("Channel closed");
@@ -876,12 +904,13 @@ impl Hdp {
     }
 
     /// Called whenever the list of topics changes (user joins or leaves a topic) to inform the UI
-    fn topics_updated(&self) {
+    async fn topics_updated(&self) {
         if self
             .response_tx
             .send(UiServerMessage::Event(UiEvent::Topics(
                 self.peer_discovery.get_topic_names(),
             )))
+            .await
             .is_err()
         {
             warn!("UI response channel closed");
@@ -902,8 +931,8 @@ fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     (key_to_animal::key_to_name(&hash), hash)
 }
 
-fn send_event(sender: UnboundedSender<UiServerMessage>, event: UiEvent) {
-    if sender.send(UiServerMessage::Event(event)).is_err() {
+async fn send_event(sender: Sender<UiServerMessage>, event: UiEvent) {
+    if sender.send(UiServerMessage::Event(event)).await.is_err() {
         warn!("UI response channel closed");
     }
 }
@@ -1025,7 +1054,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, UnboundedReceiver<UiServerMessage>) {
+    async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, Receiver<UiServerMessage>) {
         let storage = TempDir::new().unwrap();
         let downloads = storage.path().to_path_buf();
         Hdp::new(storage, share_dirs, vec!["foo".to_string()], downloads)
@@ -1075,6 +1104,7 @@ mod tests {
                 id: 1,
                 command: Command::Read(req, alice_name.clone()),
             })
+            .await
             .unwrap();
 
         while let Some(res) = bob_rx.recv().await {
@@ -1096,6 +1126,7 @@ mod tests {
                 id: 2,
                 command: Command::Ls(req, Some(alice_name)),
             })
+            .await
             .unwrap();
 
         let mut entries = Vec::new();
@@ -1126,6 +1157,7 @@ mod tests {
                 id: 3,
                 command: Command::Close,
             })
+            .await
             .unwrap();
         Ok(())
     }

@@ -18,7 +18,7 @@ use speedometer::Speedometer;
 use tokio::{
     fs::{create_dir_all, File, OpenOptions},
     io::AsyncWriteExt,
-    sync::mpsc::UnboundedSender,
+    sync::mpsc::Sender,
 };
 
 // Maybe this is too big - not sure if it matters as this is only allocated
@@ -39,7 +39,7 @@ pub struct Peer {
 impl Peer {
     pub fn new(
         connection: Connection,
-        response_tx: UnboundedSender<UiServerMessage>,
+        response_tx: Sender<UiServerMessage>,
         download_dir: PathBuf,
         public_key: [u8; 32],
         wishlist: WishList,
@@ -62,7 +62,7 @@ impl Peer {
                 {
                     Ok(()) => {
                         debug!("Download successfull");
-                        if let Err(e) = wishlist.completed(request) {
+                        if let Err(e) = wishlist.completed(request).await {
                             warn!("Could not remove item from wishlist {:?}", e)
                         }
                     }
@@ -85,7 +85,7 @@ async fn download(
     download_request: &DownloadRequest,
     connection: &Connection,
     download_dir: &Path,
-    response_tx: UnboundedSender<UiServerMessage>,
+    response_tx: Sender<UiServerMessage>,
 ) -> anyhow::Result<()> {
     let id = download_request.request_id;
     let output_path = download_dir.join(download_request.path.clone());
@@ -149,6 +149,7 @@ async fn download(
                                 speed: speedometer.measure().unwrap(),
                             })),
                         })
+                        .await
                         .is_err()
                     {
                         warn!("Response channel closed");
