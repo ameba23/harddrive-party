@@ -85,7 +85,7 @@ impl Hdp {
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
-        let (response_tx, response_rx) = channel(1024);
+        let (response_tx, response_rx) = channel(65536);
 
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();

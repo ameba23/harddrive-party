@@ -57,7 +57,7 @@ pub async fn server(
 
     // Accept connections from UI clients
     while let Ok((stream, client_addr)) = listener.accept().await {
-        let (tx, mut rx) = channel(1024);
+        let (tx, mut rx) = channel(65536);
         {
             state.write().await.insert(client_addr, tx);
         }
