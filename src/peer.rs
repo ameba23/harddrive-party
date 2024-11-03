@@ -146,7 +146,7 @@ async fn download(
                                 path: download_request.path.clone(),
                                 bytes_read,
                                 total_bytes_read,
-                                speed: speedometer.measure().unwrap(),
+                                speed: speedometer.measure().unwrap_or_default(),
                             })),
                         })
                         .await

@@ -709,25 +709,29 @@ impl Hdp {
                         };
                         let wishlist = self.wishlist.clone();
                         tokio::spawn(async move {
-                            let ls_response_stream = process_length_prefix(recv).await.unwrap();
-                            pin_mut!(ls_response_stream);
-                            while let Some(Ok(ls_response)) = ls_response_stream.next().await {
-                                if let LsResponse::Success(entries) = ls_response {
-                                    for entry in entries.iter() {
-                                        if !entry.is_dir {
-                                            debug!("Adding {} to wishlist", entry.name);
+                            if let Ok(ls_response_stream) = process_length_prefix(recv).await {
+                                pin_mut!(ls_response_stream);
+                                while let Some(Ok(ls_response)) = ls_response_stream.next().await {
+                                    if let LsResponse::Success(entries) = ls_response {
+                                        for entry in entries.iter() {
+                                            if !entry.is_dir {
+                                                debug!("Adding {} to wishlist", entry.name);
 
-                                            if let Err(err) = wishlist
-                                                .add(&DownloadRequest::new(
-                                                    entry.name.clone(),
-                                                    entry.size,
-                                                    id,
-                                                    peer_public_key,
-                                                ))
-                                                .await
-                                            {
-                                                error!("Cannot make download request {:?}", err);
-                                            };
+                                                if let Err(err) = wishlist
+                                                    .add(&DownloadRequest::new(
+                                                        entry.name.clone(),
+                                                        entry.size,
+                                                        id,
+                                                        peer_public_key,
+                                                    ))
+                                                    .await
+                                                {
+                                                    error!(
+                                                        "Cannot make download request {:?}",
+                                                        err
+                                                    );
+                                                };
+                                            }
                                         }
                                     }
                                 }
@@ -939,6 +943,7 @@ async fn send_event(sender: Sender<UiServerMessage>, event: UiEvent) {
 
 /// A stream of Ls responses
 type LsResponseStream = BoxStream<'static, anyhow::Result<LsResponse>>;
+
 /// Process responses that are prefixed with their length in bytes
 async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsResponseStream> {
     // Read the length prefix
