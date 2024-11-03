@@ -1087,14 +1087,11 @@ mod tests {
         while let Some(res) = bob_rx.recv().await {
             println!("Res {:?}", res);
 
-            match res {
-                UiServerMessage::Event(UiEvent::PeerConnected { name, peer_type: _ }) => {
-                    if name == alice_name {
-                        println!("connected to {}", name);
-                        break;
-                    }
+            if let UiServerMessage::Event(UiEvent::PeerConnected { name, peer_type: _ }) = res {
+                if name == alice_name {
+                    println!("connected to {}", name);
+                    break;
                 }
-                _ => {}
             }
         }
 
@@ -1136,8 +1133,8 @@ mod tests {
 
         let mut entries = Vec::new();
         while let Some(res) = bob_rx.recv().await {
-            match res {
-                UiServerMessage::Response { id, response } => match response.unwrap() {
+            if let UiServerMessage::Response { id, response } = res {
+                match response.unwrap() {
                     UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
                         for entry in some_entries {
                             entries.push(entry);
@@ -1149,8 +1146,7 @@ mod tests {
                         }
                     }
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
         let test_entries = create_test_entries();
