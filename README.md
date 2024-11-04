@@ -68,6 +68,10 @@ You can switch on logging by setting the environment variable `RUST_LOG=harddriv
 
 There is a work-in-progress web-based front end build with [Leptos](https://docs.rs/leptos), served by default to `http://localhost:3030`. Source code in [`./web-ui`](./web-ui)
 
+## Contributing
+
+The source code is hosted on both [github](https://github.com/ameba23/harddrive-party) and [gitlab](https://gitlab.com/pegpeg/harddrive-party). I generally use gitlab for PRs and issues, but feel free to use github if you don't have a gitlab account.
+
 ## Project status
 
 Currently pre-alpha - expect bugs and breaking changes.

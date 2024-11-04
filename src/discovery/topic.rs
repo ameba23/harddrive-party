@@ -41,6 +41,7 @@ impl Topic {
         }
     }
 
+    /// Get the topic hash as hex
     pub fn as_hex(&self) -> String {
         hex::encode(self.hash)
     }
@@ -48,7 +49,6 @@ impl Topic {
     /// Encrypt a message using this topic as the key
     pub fn encrypt(&self, payload: &[u8]) -> Vec<u8> {
         let nonce: [u8; 8] = thread_rng().gen();
-        // let mut out: [u8; payload.len() + 16 + 8] = [0u8; 32 + 16 + 8];
         let mut out: Vec<u8> = Vec::with_capacity(payload.len() + 16 + 8);
         out.resize(payload.len(), 0);
         let mut tag: [u8; 16] = [0u8; 16];
@@ -57,9 +57,7 @@ impl Topic {
 
         // Encrypt the msg and append the tag at the end
         cipher.encrypt(payload, &mut out, &mut tag);
-        // out[32..32 + 16].copy_from_slice(&tag);
         out.append(&mut tag.to_vec());
-        // out[32 + 16..].copy_from_slice(&nonce);
         out.append(&mut nonce.to_vec());
         out
     }

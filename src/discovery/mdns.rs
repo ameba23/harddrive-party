@@ -8,7 +8,7 @@ use anyhow::anyhow;
 use log::{debug, error, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
 };
 use tokio::sync::{
@@ -16,7 +16,10 @@ use tokio::sync::{
     oneshot,
 };
 
+/// Name of the mDNS service
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
+
+/// Used in the naming of a topic when given as a property of a [ServiceInfo]
 const TOPIC: &str = "topic";
 
 /// Announces ourself on mDNS
@@ -80,13 +83,13 @@ impl MdnsServer {
                                     let unregister_status = receiver.recv_async().await;
                                     match unregister_status {
                                         Ok(UnregisterStatus::OK) => {
-                                            debug!("Unregister succesful");
+                                            debug!("Unregister mDNS service succesful");
                                         }
                                         Ok(UnregisterStatus::NotFound) => {
                                             warn!("Tried to unregister mDNS service, but it was not found");
                                         }
                                         Err(e) => {
-                                            error!("{:?}", e);
+                                            error!("Error when unregistering mDNS serice: {:?}", e);
                                         }
                                     }
                                 } else {
@@ -96,18 +99,18 @@ impl MdnsServer {
 
                             existing_service = Some(service.get_fullname().to_string().clone());
                             if mdns.register(service).is_ok() {
-                                debug!("Registered service");
+                                debug!("Registered mDNS service");
                                 if res_tx.send(true).is_err() {
-                                    error!("Cannot acknowledge registering mdns service - channel closed");
+                                    error!("Cannot acknowledge registering mDNS service - channel closed");
                                 };
                             } else {
-                                error!("Failed to register service");
+                                error!("Failed to register mDNS service");
                                 if res_tx.send(false).is_err() {
-                                    error!("Cannot acknowledge registering mdns service - channel closed");
+                                    error!("Cannot acknowledge registering mDNS service - channel closed");
                                 };
                             };
                         } else {
-                            warn!("Cannot create service");
+                            warn!("Cannot create mDNS service");
                             if res_tx.send(false).is_err() {
                                 error!("Cannot acknowledge registering mdns service - channel closed");
                             };
@@ -200,7 +203,7 @@ fn create_service_info(
 
     // Create a service info.
     let host_name = "localhost"; // TODO
-    let mut properties = std::collections::HashMap::new();
+    let mut properties = HashMap::new();
 
     for (topic_count, capability) in capabilities.into_iter().enumerate() {
         properties.insert(format!("{}{}", TOPIC, topic_count), hex::encode(capability));
@@ -217,10 +220,12 @@ fn create_service_info(
         )?;
         Ok(service_info)
     } else {
+        // TODO if we bump mdns-sd we can handle ipv6 addresses
         Err(anyhow!("ipv6 address cannot be used for MDNS"))
     }
 }
 
+/// Handle a discovered [ServiceInfo] from a remote peer
 fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<HandshakeRequest>)> {
     if info.get_type() != SERVICE_TYPE {
         return Err(anyhow!("Peer does not have expected service type"));
@@ -234,7 +239,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<Handsha
             if let Ok(buf) = hex::decode(capability_string) {
                 buf.try_into().ok()
             } else {
-                warn!("Cannot decode hex in mdns property");
+                warn!("Cannot decode hex in mDNS property");
                 None
             }
         })
@@ -244,7 +249,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, Vec<Handsha
         .get_addresses()
         .iter()
         .next()
-        .ok_or_else(|| anyhow!("Cannot get ip"))?;
+        .ok_or_else(|| anyhow!("Cannot get IP from discovered mDNS service info"))?;
 
     let their_port = info.get_port();
 

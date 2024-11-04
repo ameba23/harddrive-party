@@ -9,8 +9,8 @@ use log::{debug, error, info, trace, warn};
 use mqtt::{
     control::variable_header::ConnectReturnCode,
     packet::{
-        ConnectPacket, PingreqPacket, PublishPacket, QoSWithPacketIdentifier, SubscribePacket,
-        UnsubscribePacket, VariablePacket,
+        suback::SubscribeReturnCode, ConnectPacket, PingreqPacket, PublishPacket,
+        QoSWithPacketIdentifier, SubscribePacket, UnsubscribePacket, VariablePacket,
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
@@ -92,9 +92,14 @@ impl MqttClient {
 
             // Loop of reconnections following connection lost
             loop {
+                // A map of packet ids to oneshots for pending subscribe requests, together with
+                // the associated topic
                 let mut subscribe_results = HashMap::<u16, (oneshot::Sender<bool>, Topic)>::new();
+                // A map of packet ids to oneshots for pending unsubscribe requests
                 let mut unsubscribe_results = HashMap::<u16, oneshot::Sender<bool>>::new();
+                // Start the packet id counter at 10 to account for initial connect messages
                 let mut packet_id_count = 10;
+                // Announce messages we don't need to act on because we already did
                 let mut announcements_already_seen = HashSet::<Vec<u8>>::new();
 
                 let reconnect = loop {
@@ -224,17 +229,18 @@ impl MqttClient {
                                     debug!("Got suback packet");
                                     match subscribe_results.remove(&suback_packet.packet_identifier()) {
                                         Some((res_tx, topic)) => {
-                                            // TODO suback_packet.subscribes() != SubscribeReturnCode::Failure
-                                            if res_tx.send(true).is_err() {
+                                            let success = suback_packet.subscribes() != [SubscribeReturnCode::Failure];
+                                            if res_tx.send(success).is_err() {
                                                 error!("Cannot ackknowledge joining topic - channel closed");
                                             };
-
-                                            if let Some(mqtt_topic) = topics.get(&topic) {
-                                                // Publish our details to this topic
-                                                if let Err(e) = stream.write_all(&mqtt_topic.publish_packet[..]).await {
-                                                    error!("Error when writing to mqtt broker {:?}", e);
-                                                    break true;
-                                                };
+                                            if success {
+                                                if let Some(mqtt_topic) = topics.get(&topic) {
+                                                    // Publish our details to this topic
+                                                    if let Err(e) = stream.write_all(&mqtt_topic.publish_packet[..]).await {
+                                                        error!("Error when writing to mqtt broker {:?}", e);
+                                                        break true;
+                                                    };
+                                                }
                                             }
                                         }
                                         None => {
