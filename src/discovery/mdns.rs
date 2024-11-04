@@ -12,7 +12,7 @@ use std::{
     net::{IpAddr, SocketAddr},
 };
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    mpsc::{channel, Receiver, Sender},
     oneshot,
 };
 
@@ -22,18 +22,18 @@ const TOPIC: &str = "topic";
 /// Announces ourself on mDNS
 pub struct MdnsServer {
     /// Notifies us when joining or leaving a topic
-    topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
+    topic_events_tx: Sender<JoinOrLeaveEvent>,
 }
 
 impl MdnsServer {
     pub async fn new(
         id: &str,
         addr: SocketAddr,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         token: SessionToken,
         initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<Self> {
-        let (topic_events_tx, topic_events_rx) = unbounded_channel();
+        let (topic_events_tx, topic_events_rx) = channel(1024);
         let mdns_server = Self { topic_events_tx };
 
         mdns_server.run(id, addr, token, peers_tx, topic_events_rx, initial_topics)?;
@@ -45,8 +45,8 @@ impl MdnsServer {
         id: &str,
         addr: SocketAddr,
         token: SessionToken,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
-        mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
+        peers_tx: Sender<DiscoveredPeer>,
+        mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
         initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
@@ -135,7 +135,7 @@ impl MdnsServer {
                                                     socket_option: None,
                                                     token: their_token,
                                                     topic: None,
-                                                })
+                                                }).await
                                                 .is_err()
                                             {
                                                 warn!("Cannot send - peer discovery channel closed");
@@ -165,7 +165,8 @@ impl MdnsServer {
     pub async fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Join(topic, tx))?;
+            .send(JoinOrLeaveEvent::Join(topic, tx))
+            .await?;
         if let Ok(true) = rx.await {
             Ok(())
         } else {
@@ -176,7 +177,8 @@ impl MdnsServer {
     pub async fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Leave(topic, tx))?;
+            .send(JoinOrLeaveEvent::Leave(topic, tx))
+            .await?;
 
         if let Ok(true) = rx.await {
             Ok(())

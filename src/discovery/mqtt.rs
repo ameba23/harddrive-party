@@ -23,21 +23,28 @@ use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
     sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        mpsc::{channel, Receiver, Sender},
         oneshot,
     },
 };
 
-// Keep alive timeout in seconds
+/// MQTT keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
+/// MQTT TCP timeout
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Default MQTT server
+// TODO - An alternative: public.mqtthq.com:1883
 const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
 
+/// An MQTT client with functionality specific to publishing [AnnounceAddress] encrypted with
+/// [Topic]
 pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
+    /// Client Id used in Connect packet
     client_id: String,
     announce_address: AnnounceAddress,
-    topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
+    topic_events_tx: Sender<JoinOrLeaveEvent>,
     mqtt_server: String,
 }
 
@@ -45,13 +52,13 @@ impl MqttClient {
     pub async fn new(
         client_id: String,
         announce_address: AnnounceAddress,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
         mqtt_server: Option<String>,
     ) -> anyhow::Result<Self> {
         let announce_address_clone = announce_address.clone();
 
-        let (topic_events_tx, topic_events_rx) = unbounded_channel();
+        let (topic_events_tx, topic_events_rx) = channel(1024);
 
         let mqtt_client = Self {
             announce_address: announce_address_clone,
@@ -67,18 +74,18 @@ impl MqttClient {
         Ok(mqtt_client)
     }
 
-    pub async fn run(
+    /// Run the server in a separate task - called internally by new
+    async fn run(
         &self,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
-        mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
+        mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         let mqtt_server = self.mqtt_server.clone();
         let mut server_addr = mqtt_server
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
             .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
-        // TODO - An alternative: public.mqtthq.com:1883
 
         info!("MQTT Client identifier {:?}", self.client_id);
 
@@ -203,7 +210,7 @@ impl MqttClient {
                                                     Ok(Some(discovered_peer)) => {
                                                         debug!("Connect to {:?}", discovered_peer);
                                                         if peers_tx
-                                                            .send(discovered_peer)
+                                                            .send(discovered_peer).await
                                                                 .is_err()
                                                         {
                                                             error!("Cannot write to channel");
@@ -330,7 +337,8 @@ impl MqttClient {
         // TODO this could contain a oneshot with a result showing if subscribing was successful
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Join(topic, tx))?;
+            .send(JoinOrLeaveEvent::Join(topic, tx))
+            .await?;
         if let Ok(true) = rx.await {
             Ok(())
         } else {
@@ -342,7 +350,8 @@ impl MqttClient {
         // TODO this could contain a oneshot with a result showing if unsubscribing was successful
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Leave(topic, tx))?;
+            .send(JoinOrLeaveEvent::Leave(topic, tx))
+            .await?;
 
         if let Ok(true) = rx.await {
             Ok(())
@@ -438,4 +447,63 @@ fn mqtt_dns_resolve(server: &str) -> anyhow::Result<SocketAddr> {
         .find(|x| x.is_ipv4())
         .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
     Ok(server_addr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discovery::PeerConnectionDetails;
+    use mqttest::{Conf, Mqttest};
+
+    /// Used internally by test
+    async fn create_test_client(
+        name: String,
+        server_port: u16,
+        socket_address: SocketAddr,
+        token: [u8; 32],
+    ) -> (MqttClient, Receiver<DiscoveredPeer>) {
+        let (peers_tx, peers_rx) = channel(1024);
+        let announce_address = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat(socket_address),
+            token,
+        };
+        let client = MqttClient::new(
+            name,
+            announce_address,
+            peers_tx,
+            None,
+            Some(format!("localhost:{}", server_port)),
+        )
+        .await
+        .unwrap();
+        (client, peers_rx)
+    }
+
+    #[tokio::test]
+    async fn mqtt_client_test() {
+        let conf = Conf::new().max_connect(2);
+        let test_server = Mqttest::start(conf).await.unwrap();
+
+        let alice_socket_address = "127.0.0.1:1234".parse().unwrap();
+        let bob_socket_address = "192.168.0.1:5678".parse().unwrap();
+        let (alice, _alice_peers_rx) = create_test_client(
+            "alice".into(),
+            test_server.port,
+            alice_socket_address,
+            [0; 32],
+        )
+        .await;
+        let (bob, mut bob_peers_rx) =
+            create_test_client("bob".into(), test_server.port, bob_socket_address, [1; 32]).await;
+
+        // Alice and bob both join the same topic - so they should find each other
+        alice.add_topic(Topic::new("foo".into())).await.unwrap();
+        bob.add_topic(Topic::new("foo".into())).await.unwrap();
+
+        // Only bob finds alice - to avoid double connections being made
+        // bob and alices socket addresses are compared to decide who should connect
+        let discovered_peer = bob_peers_rx.recv().await.unwrap();
+        assert_eq!(discovered_peer.socket_address, alice_socket_address);
+        assert_eq!(discovered_peer.token, [0; 32]);
+    }
 }

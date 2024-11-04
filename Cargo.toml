@@ -15,7 +15,7 @@ keywords = ["peer-to-peer", "filesharing", "p2p"]
 
 [dependencies]
 harddrive-party-shared = { version = "0.0.1", path = "shared" }
-futures = "0.3.25"
+futures = "0.3.31"
 async-walkdir = "0.2.0"
 sled = "0.34.7"
 anyhow = "1.0.28"
@@ -55,3 +55,4 @@ mqtt-protocol = { version = "0.12.0", features = ["tokio"] }
 [dev-dependencies]
 sluice = "0.5.5"
 tempfile = "3.3.0"
+mqttest = { git="https://github.com/vincentdephily/mqttest", rev="9ff8e91" }
