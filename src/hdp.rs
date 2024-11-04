@@ -82,6 +82,7 @@ impl Hdp {
         share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
         download_dir: PathBuf,
+        mqtt_server: Option<String>,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
@@ -140,7 +141,7 @@ impl Hdp {
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, true, true, pk_hash, topics_db).await?;
+            PeerDiscovery::new(topics, true, true, pk_hash, topics_db, mqtt_server).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -445,6 +446,7 @@ impl Hdp {
                 if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
                     endpoint.wait_idle().await;
                 }
+                // TODO call flush on sled db
                 // TODO why an error?
                 return Err(HandleUiCommandError::ConnectionClosed);
             }
@@ -1062,9 +1064,15 @@ mod tests {
     async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, Receiver<UiServerMessage>) {
         let storage = TempDir::new().unwrap();
         let downloads = storage.path().to_path_buf();
-        Hdp::new(storage, share_dirs, vec!["foo".to_string()], downloads)
-            .await
-            .unwrap()
+        Hdp::new(
+            storage,
+            share_dirs,
+            vec!["foo".to_string()],
+            downloads,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]

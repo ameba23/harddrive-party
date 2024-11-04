@@ -88,6 +88,7 @@ impl PeerDiscovery {
         use_mqtt: bool,
         public_key: [u8; 32],
         topics_db: sled::Tree,
+        mqtt_server: Option<String>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Join topics given as arguments, as well as from db
         let mut topics_to_join: HashSet<Topic> = get_topic_names(&topics_db)
@@ -162,6 +163,7 @@ impl PeerDiscovery {
                         PeerConnectionDetails::Symmetric(_) => None,
                         _ => Some(hole_puncher),
                     },
+                    mqtt_server,
                 )
                 .await?,
             )

@@ -31,13 +31,14 @@ use tokio::{
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
-const MQTT_SERVER: &str = "broker.hivemq.com:1883";
+const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
 
 pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
     client_id: String,
     announce_address: AnnounceAddress,
     topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
+    mqtt_server: String,
 }
 
 impl MqttClient {
@@ -46,6 +47,7 @@ impl MqttClient {
         announce_address: AnnounceAddress,
         peers_tx: UnboundedSender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
+        mqtt_server: Option<String>,
     ) -> anyhow::Result<Self> {
         let announce_address_clone = announce_address.clone();
 
@@ -55,6 +57,7 @@ impl MqttClient {
             announce_address: announce_address_clone,
             client_id,
             topic_events_tx,
+            mqtt_server: mqtt_server.unwrap_or_else(|| DEFAULT_MQTT_SERVER.to_string()),
         };
 
         mqtt_client
@@ -70,8 +73,8 @@ impl MqttClient {
         hole_puncher: Option<HolePuncher>,
         mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
-        // let server_addr = "public.mqtthq.com:1883"
-        let mut server_addr = MQTT_SERVER
+        let mqtt_server = self.mqtt_server.clone();
+        let mut server_addr = mqtt_server
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
             .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
@@ -288,7 +291,7 @@ impl MqttClient {
                             tokio::time::sleep(Duration::from_secs(10)).await;
 
                             // Do DNS lookup again
-                            match mqtt_dns_resolve() {
+                            match mqtt_dns_resolve(&mqtt_server) {
                                 Ok(addr) => {
                                     server_addr = addr;
                                 }
@@ -429,8 +432,8 @@ async fn connect(server_addr: &SocketAddr, client_id: String) -> anyhow::Result<
     Ok(stream)
 }
 
-fn mqtt_dns_resolve() -> anyhow::Result<SocketAddr> {
-    let server_addr = MQTT_SERVER
+fn mqtt_dns_resolve(server: &str) -> anyhow::Result<SocketAddr> {
+    let server_addr = server
         .to_socket_addrs()?
         .find(|x| x.is_ipv4())
         .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
