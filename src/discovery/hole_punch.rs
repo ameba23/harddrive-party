@@ -1,5 +1,5 @@
 //! Udp hole-punch logic
-//! A lot of this is copied from https://github.com/Frando/quinn-holepunch
+//! A lot of this is copied from <https://github.com/Frando/quinn-holepunch>
 use anyhow::anyhow;
 use futures::ready;
 use log::{debug, info, warn};

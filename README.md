@@ -39,6 +39,8 @@ Peers discovery each other by connecting to a public [MQTT](https://en.wikipedia
 
 Since announcement messages are encrypted it is only possible to find peers who know the topic name. Udp hole-punching is used to connect peers who are behind a NAT or firewall.
 
+By default the public MQTT server `broker.hivemq.com:1883` is used. This project has no affiliation with hivemq. If you prefer to use a different server or host your own server, you can pass the `--mqtt-server` command line option when starting harddrive-party. MQTT 3.1.1 is used, and the client is tested against [mqttest](https://github.com/vincentdephily/mqttest).
+
 ### Transport
 
 Peers connect to each other using [Quic](https://en.wikipedia.org/wiki/QUIC), with client authentication using ed25519. A Quic stream is opened for each RPC request to a peer. There are two types of request message:

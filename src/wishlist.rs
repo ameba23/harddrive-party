@@ -47,7 +47,7 @@ impl DownloadRequest {
     }
 
     /// Given a serialized wishlist db entry, make a DownloadRequest
-    /// key: <peer_public_key><timestamp><path> value: <request_id><size>
+    /// key: `<peer_public_key><timestamp><path>` value: `<request_id><size>`
     pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
         let peer_public_key: [u8; 32] = key[0..32].try_into()?;
 
@@ -173,11 +173,11 @@ impl DownloadRequest {
 /// Keeps a record of requested and downloaded files
 #[derive(Clone)]
 pub struct WishList {
-    /// key: <peer_public_key><timestamp><path> value: <request_id><size>
+    /// key: `<peer_public_key><timestamp><path>` value: `<request_id><size>`
     db_by_peer: sled::Tree,
-    /// key: <timestamp><request_id> value: <peer_public_key>
+    /// key: `<timestamp><request_id>` value: `<peer_public_key>`
     db_by_timestamp: sled::Tree,
-    // key: <timestamp><request_id><path> value: <peer_public_key><size>
+    /// key: `<timestamp><request_id><path>` value: `<peer_public_key><size>`
     db_downloaded: sled::Tree,
     response_tx: Sender<UiServerMessage>,
 }
