@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     net::UdpSocket,
     sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver},
+        mpsc::{channel, Receiver},
         oneshot,
     },
 };
@@ -72,7 +72,7 @@ pub struct DiscoveredPeer {
 
 /// Handles the different peer discovery methods
 pub struct PeerDiscovery {
-    pub peers_rx: UnboundedReceiver<DiscoveredPeer>,
+    pub peers_rx: Receiver<DiscoveredPeer>,
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
@@ -107,7 +107,7 @@ impl PeerDiscovery {
         }
 
         // Channel for reporting discovered peers
-        let (peers_tx, peers_rx) = unbounded_channel();
+        let (peers_tx, peers_rx) = channel(1024);
 
         let my_local_ip = local_ip()?;
         let raw_socket = UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;

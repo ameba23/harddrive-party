@@ -23,7 +23,7 @@ use tokio::{
     io::AsyncWriteExt,
     net::TcpStream,
     sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        mpsc::{channel, Receiver, Sender},
         oneshot,
     },
 };
@@ -37,7 +37,7 @@ pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
     client_id: String,
     announce_address: AnnounceAddress,
-    topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
+    topic_events_tx: Sender<JoinOrLeaveEvent>,
     mqtt_server: String,
 }
 
@@ -45,13 +45,13 @@ impl MqttClient {
     pub async fn new(
         client_id: String,
         announce_address: AnnounceAddress,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
         mqtt_server: Option<String>,
     ) -> anyhow::Result<Self> {
         let announce_address_clone = announce_address.clone();
 
-        let (topic_events_tx, topic_events_rx) = unbounded_channel();
+        let (topic_events_tx, topic_events_rx) = channel(1024);
 
         let mqtt_client = Self {
             announce_address: announce_address_clone,
@@ -69,9 +69,9 @@ impl MqttClient {
 
     pub async fn run(
         &self,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
-        mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
+        mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         let mqtt_server = self.mqtt_server.clone();
         let mut server_addr = mqtt_server
@@ -208,7 +208,7 @@ impl MqttClient {
                                                     Ok(Some(discovered_peer)) => {
                                                         debug!("Connect to {:?}", discovered_peer);
                                                         if peers_tx
-                                                            .send(discovered_peer)
+                                                            .send(discovered_peer).await
                                                                 .is_err()
                                                         {
                                                             error!("Cannot write to channel");
@@ -336,7 +336,8 @@ impl MqttClient {
         // TODO this could contain a oneshot with a result showing if subscribing was successful
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Join(topic, tx))?;
+            .send(JoinOrLeaveEvent::Join(topic, tx))
+            .await?;
         if let Ok(true) = rx.await {
             Ok(())
         } else {
@@ -348,7 +349,8 @@ impl MqttClient {
         // TODO this could contain a oneshot with a result showing if unsubscribing was successful
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Leave(topic, tx))?;
+            .send(JoinOrLeaveEvent::Leave(topic, tx))
+            .await?;
 
         if let Ok(true) = rx.await {
             Ok(())

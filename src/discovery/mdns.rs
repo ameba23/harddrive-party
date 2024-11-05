@@ -8,11 +8,12 @@ use anyhow::anyhow;
 use log::{debug, error, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use std::{
+    cmp::min,
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
 };
 use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    mpsc::{channel, Receiver, Sender},
     oneshot,
 };
 
@@ -25,18 +26,18 @@ const TOPIC: &str = "topic";
 /// Announces ourself on mDNS
 pub struct MdnsServer {
     /// Notifies us when joining or leaving a topic
-    topic_events_tx: UnboundedSender<JoinOrLeaveEvent>,
+    topic_events_tx: Sender<JoinOrLeaveEvent>,
 }
 
 impl MdnsServer {
     pub async fn new(
         id: &str,
         addr: SocketAddr,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
+        peers_tx: Sender<DiscoveredPeer>,
         token: SessionToken,
         initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<Self> {
-        let (topic_events_tx, topic_events_rx) = unbounded_channel();
+        let (topic_events_tx, topic_events_rx) = channel(1024);
         let mdns_server = Self { topic_events_tx };
 
         mdns_server.run(id, addr, token, peers_tx, topic_events_rx, initial_topics)?;
@@ -48,11 +49,12 @@ impl MdnsServer {
         id: &str,
         addr: SocketAddr,
         token: SessionToken,
-        peers_tx: UnboundedSender<DiscoveredPeer>,
-        mut topic_events_rx: UnboundedReceiver<JoinOrLeaveEvent>,
+        peers_tx: Sender<DiscoveredPeer>,
+        mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
         initial_topics: HashSet<Topic>,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
+
         let mdns_receiver = mdns.browse(SERVICE_TYPE)?;
 
         let id_clone = id.to_string();
@@ -119,7 +121,6 @@ impl MdnsServer {
                     Ok(event) = mdns_receiver.recv_async() => {
                         match event {
                             ServiceEvent::ServiceResolved(info) => {
-                                debug!("Resolved a mdns service: {:?}", info);
                                 match parse_peer_info(info) {
                                     Ok((their_addr, capabilities)) => {
                                         if their_addr == addr {
@@ -138,7 +139,7 @@ impl MdnsServer {
                                                     socket_option: None,
                                                     token: their_token,
                                                     topic: None,
-                                                })
+                                                }).await
                                                 .is_err()
                                             {
                                                 warn!("Cannot send - peer discovery channel closed");
@@ -168,7 +169,8 @@ impl MdnsServer {
     pub async fn add_topic(&self, topic: Topic) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Join(topic, tx))?;
+            .send(JoinOrLeaveEvent::Join(topic, tx))
+            .await?;
         if let Ok(true) = rx.await {
             Ok(())
         } else {
@@ -179,7 +181,8 @@ impl MdnsServer {
     pub async fn remove_topic(&self, topic: Topic) -> anyhow::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.topic_events_tx
-            .send(JoinOrLeaveEvent::Leave(topic, tx))?;
+            .send(JoinOrLeaveEvent::Leave(topic, tx))
+            .await?;
 
         if let Ok(true) = rx.await {
             Ok(())
@@ -212,7 +215,7 @@ fn create_service_info(
     if let IpAddr::V4(ipv4_addr) = addr.ip() {
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
-            &id[0..16],
+            &id[0..min(16, id.len())],
             host_name,
             ipv4_addr,
             addr.port(), //+ 150, // TODO
@@ -272,4 +275,40 @@ fn try_topics(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn create_test_server(
+        name: &str,
+        socket_address: SocketAddr,
+        token: SessionToken,
+    ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
+        let (peers_tx, peers_rx) = channel(1024);
+        let initial_topics = HashSet::new();
+        let server = MdnsServer::new(name, socket_address, peers_tx, token, initial_topics)
+            .await
+            .unwrap();
+        (server, peers_rx)
+    }
+
+    #[tokio::test]
+    async fn test_mdns() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let local_ip = local_ip_address::local_ip().unwrap();
+        let alice_socket_address = SocketAddr::new(local_ip, 1234);
+        let bob_socket_address = SocketAddr::new(local_ip, 5678);
+        let (alice, _alice_peers_rx) =
+            create_test_server("alice", alice_socket_address, [0; 32]).await;
+        let (bob, mut bob_peers_rx) = create_test_server("bob", bob_socket_address, [1; 32]).await;
+
+        alice.add_topic(Topic::new("foo".into())).await.unwrap();
+        bob.add_topic(Topic::new("foo".into())).await.unwrap();
+        let discovered_peer = bob_peers_rx.recv().await.unwrap();
+        assert_eq!(discovered_peer.socket_address, alice_socket_address);
+        assert_eq!(discovered_peer.token, [0; 32]);
+    }
 }
