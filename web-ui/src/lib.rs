@@ -119,13 +119,13 @@ pub fn HdpUi() -> impl IntoView {
                                 });
                                 set_files.update(|files| {
                                     for entry in entries {
-                                        files.insert(
-                                            PeerPath {
-                                                peer_name: peer_name.clone(),
-                                                path: entry.name.clone(),
-                                            },
-                                            File::from_entry(entry),
-                                        );
+                                        let peer_path = PeerPath {
+                                            peer_name: peer_name.clone(),
+                                            path: entry.name.clone(),
+                                        };
+                                        if !files.contains_key(&peer_path) {
+                                            files.insert(peer_path, File::from_entry(entry));
+                                        }
                                     }
                                 });
                             }
@@ -183,13 +183,14 @@ pub fn HdpUi() -> impl IntoView {
                                         let peer_name = peer.name.clone();
                                         set_files.update(|files| {
                                             for entry in entries {
-                                                files.insert(
-                                                    PeerPath {
-                                                        peer_name: peer_name.clone(),
-                                                        path: entry.name.clone(),
-                                                    },
-                                                    File::from_entry(entry),
-                                                );
+                                                let peer_path = PeerPath {
+                                                    peer_name: peer_name.clone(),
+                                                    path: entry.name.clone(),
+                                                };
+                                                if !files.contains_key(&peer_path) {
+                                                    files
+                                                        .insert(peer_path, File::from_entry(entry));
+                                                }
                                             }
                                         });
                                     }
