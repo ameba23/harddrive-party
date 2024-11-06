@@ -27,13 +27,15 @@ pub fn Peer(peer: Peer) -> impl IntoView {
     let (peer_signal, _set_peer) = create_signal((peer.name.clone(), peer.is_self));
 
     // This should probably be in a closure
-    let root_size = match files.get().get(&PeerPath {
-        peer_name: peer.name,
-        path: "".to_string(),
-    }) {
-        Some(file) => file.size,
-        None => 0,
-    };
+    let root_size = display_bytes(
+        match files.get().get(&PeerPath {
+            peer_name: peer.name,
+            path: "".to_string(),
+        }) {
+            Some(file) => file.size,
+            None => 0,
+        },
+    );
 
     let files_iter = move || {
         // Calling .get() clones - we should ideally use .with(|files| files.range...)
@@ -57,7 +59,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
     provide_context(PeerName(peer_signal));
     view! {
         <li>
-            {peer_signal.get().0} " " {display_bytes(root_size)} " shared" <table>
+            {peer_signal.get().0} " " {root_size} " shared" <table>
 
                 <For
                     each=files_iter

@@ -138,13 +138,14 @@ pub fn HdpUi() -> impl IntoView {
                             // This is not currently used but could be used for previewing a
                             // portion of a file without downloading it
                             debug!("Got read response {:?}", read_response);
-                            // path: String,
-                            // bytes_read: u64,
-                            // total_bytes_read: u64,
-                            // speed: usize,
                         }
                         Ok(UiResponse::Download(download_response)) => {
                             debug!("Got download response {:?}", download_response);
+                            // TODO When downloading directories, also update the individual file
+                            // downloaded
+                            // Also, if the request was made in a previous session, we don't know
+                            // about it here, but we still want to show the user that a file is
+                            // downloading
                             if let Some(Command::Download { peer_name, path }) = request {
                                 let files = files.get();
                                 if let Some(file) = files.get(&PeerPath {

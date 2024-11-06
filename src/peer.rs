@@ -118,6 +118,7 @@ async fn download(
         match recv.read(&mut buf).await {
             Ok(Some(n)) => {
                 bytes_read_since_last_ui_update += n as u64;
+                speedometer.entry(n);
 
                 if let Err(error) = file.write(&buf[..n]).await {
                     warn!("Cannot write downloading file {:?}", error);
@@ -136,8 +137,6 @@ async fn download(
                         bytes_read_since_last_ui_update, bytes_read, download_request.size
                     );
                     bytes_read_since_last_ui_update = 0;
-
-                    speedometer.entry(n);
 
                     if response_tx
                         .send(UiServerMessage::Response {
@@ -168,6 +167,23 @@ async fn download(
                 break;
             }
         }
+    }
+
+    // Send a final update to give the UI an accurate report on bytes downloaded
+    if response_tx
+        .send(UiServerMessage::Response {
+            id,
+            response: Ok(UiResponse::Download(DownloadResponse {
+                path: download_request.path.clone(),
+                bytes_read,
+                total_bytes_read,
+                speed: speedometer.measure().unwrap_or_default(),
+            })),
+        })
+        .await
+        .is_err()
+    {
+        warn!("Response channel closed");
     }
 
     if bytes_read < download_request.size {
