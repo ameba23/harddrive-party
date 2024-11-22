@@ -73,7 +73,7 @@ impl DownloadRequest {
 
         let peer_public_key: [u8; 32] = value[16..48].try_into()?;
 
-        let path = std::str::from_utf8(&key[48..])?.to_string();
+        let path = std::str::from_utf8(&value[48..])?.to_string();
 
         Ok(Self {
             path,
@@ -526,10 +526,10 @@ mod tests {
             5144,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
-        let ((key, value), (_key2, _value2)) = dl_req.to_db_key_value(None);
+        let ((key, value), (_key2, _value2)) = dl_req.to_db_key_value();
         let decoded_request = DownloadRequest::from_db_key_value(key, value).unwrap();
         assert_eq!(dl_req.path, decoded_request.path);
-        assert_eq!(dl_req.size, decoded_request.size);
+        assert_eq!(dl_req.total_size, decoded_request.total_size);
         assert_eq!(dl_req.request_id, decoded_request.request_id);
         // This will fail if we compare durations due to the missing nanoseconds
         assert_eq!(
@@ -548,6 +548,11 @@ mod tests {
         let (response_tx, _response_rx) = channel(1024);
         let wishlist = WishList::new(&db, response_tx).unwrap();
 
+        let requested_file = RequestedFile {
+            path: "books/book.pdf".to_string(),
+            size: 501546,
+            request_id: 5144,
+        };
         let dl_req = DownloadRequest::new(
             "books/book.pdf".to_string(),
             501546,
@@ -555,29 +560,31 @@ mod tests {
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
 
-        wishlist.add(&dl_req, dl_req.path.clone()).await.unwrap();
+        wishlist.add_request(&dl_req).unwrap();
+
+        wishlist.add_requested_file(&requested_file).unwrap();
 
         let requested_items = wishlist.requested().unwrap();
         for item in requested_items {
             assert_eq!(dl_req.path, item.path);
-            assert_eq!(dl_req.size, item.size);
+            assert_eq!(dl_req.total_size, item.total_size);
             assert_eq!(dl_req.request_id, item.request_id);
             // This will fail if we compare durations due to the missing nanoseconds
             assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
             assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
         }
 
-        wishlist.completed(dl_req.clone()).await.unwrap();
+        wishlist.file_completed(requested_file.clone()).unwrap();
 
         let downloaded_items = wishlist.downloaded().unwrap();
 
         for item in downloaded_items {
-            assert_eq!(dl_req.path, item.path);
-            assert_eq!(dl_req.size, item.size);
-            assert_eq!(dl_req.request_id, item.request_id);
-            // This will fail if we compare durations due to the missing nanoseconds
-            assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
-            assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
+            assert_eq!(requested_file.path, item.path);
+            assert_eq!(requested_file.size, item.size);
+            assert_eq!(requested_file.request_id, item.request_id);
+            // // This will fail if we compare durations due to the missing nanoseconds
+            // assert_eq!(requested_file.timestamp.as_secs(), item.timestamp.as_secs());
+            // assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
         }
     }
 }
