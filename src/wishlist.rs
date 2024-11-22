@@ -38,9 +38,14 @@ pub struct DownloadRequest {
 impl DownloadRequest {
     pub fn new(path: String, total_size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
         let system_time = SystemTime::now();
-        let timestamp = system_time
+        // Ignore nanoseconds
+        let timestamp_secs = system_time
             .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards");
+            .expect("Time went backwards")
+            .as_secs();
+
+        let timestamp = Duration::from_secs(timestamp_secs);
+
         Self {
             path,
             total_size,
@@ -297,6 +302,24 @@ impl RequestedFile {
         })
     }
 
+    /// key: `<timestamp><request_id><path>` value: `<size>`
+    fn to_downloaded_files_db_key_value(&self, timestamp: Duration) -> (Vec<u8>, Vec<u8>) {
+        let path_buf = self.path.as_bytes();
+        let mut key: Vec<u8> = Vec::with_capacity(8 + 8 + path_buf.len());
+
+        let timestamp_secs = timestamp.as_secs();
+        let timestamp_secs_buf = timestamp_secs.to_be_bytes();
+        key.append(&mut timestamp_secs_buf.to_vec());
+
+        let request_id_buf = self.request_id.to_be_bytes();
+        key.append(&mut request_id_buf.to_vec());
+        key.append(&mut path_buf.to_vec());
+
+        let size_buf = self.size.to_be_bytes();
+
+        (key, size_buf.to_vec())
+    }
+
     fn into_ui_requested_file(self) -> UiRequestedFile {
         UiRequestedFile {
             path: self.path,
@@ -462,10 +485,11 @@ impl WishList {
             .insert(request_id, updated_bytes.to_be_bytes().to_vec())?;
 
         // Add the item to 'downloaded' db
-        // TODO
-        // let (key, value) = requested_file.into_downloaded_db_key_value();
-        // self.db_downloaded.insert(key, value)?;
-        // self.updated().await?;
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards");
+        let (key, value) = requested_file.to_downloaded_files_db_key_value(timestamp);
+        self.db_downloaded_files.insert(key, value)?;
 
         // TODO if this was the last file associatd with this download request, inform the UI
         Ok(())
@@ -528,7 +552,7 @@ mod tests {
         );
         let ((key, value), (_key2, _value2)) = dl_req.to_db_key_value();
         let decoded_request = DownloadRequest::from_db_key_value(key, value).unwrap();
-        assert_eq!(dl_req.path, decoded_request.path);
+        assert_eq!(dl_req, decoded_request);
         assert_eq!(dl_req.total_size, decoded_request.total_size);
         assert_eq!(dl_req.request_id, decoded_request.request_id);
         // This will fail if we compare durations due to the missing nanoseconds
@@ -564,27 +588,20 @@ mod tests {
 
         wishlist.add_requested_file(&requested_file).unwrap();
 
-        let requested_items = wishlist.requested().unwrap();
-        for item in requested_items {
-            assert_eq!(dl_req.path, item.path);
-            assert_eq!(dl_req.total_size, item.total_size);
-            assert_eq!(dl_req.request_id, item.request_id);
-            // This will fail if we compare durations due to the missing nanoseconds
-            assert_eq!(dl_req.timestamp.as_secs(), item.timestamp.as_secs());
-            assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
-        }
+        let mut requests = wishlist.requested().unwrap();
+
+        assert_eq!(Some(dl_req.into_ui_download_request()), requests.next());
+        assert_eq!(None, requests.next());
 
         wishlist.file_completed(requested_file.clone()).unwrap();
 
-        let downloaded_items = wishlist.downloaded().unwrap();
+        let mut downloaded_items = wishlist.downloaded().unwrap();
 
-        for item in downloaded_items {
-            assert_eq!(requested_file.path, item.path);
-            assert_eq!(requested_file.size, item.size);
-            assert_eq!(requested_file.request_id, item.request_id);
-            // // This will fail if we compare durations due to the missing nanoseconds
-            // assert_eq!(requested_file.timestamp.as_secs(), item.timestamp.as_secs());
-            // assert_eq!(key_to_name(&dl_req.peer_public_key), item.peer_name);
-        }
+        assert_eq!(
+            Some(requested_file.into_ui_requested_file()),
+            downloaded_items.next()
+        );
+
+        assert_eq!(None, downloaded_items.next());
     }
 }
