@@ -529,10 +529,7 @@ impl WishList {
             .get(request_id)?
             .ok_or(anyhow!("Unknown request ID"))?;
         // Depending on the context this is called from, we could also check completed requests
-        Ok(DownloadRequest::from_db_key_value(
-            request_id.to_vec(),
-            request_details.to_vec(),
-        )?)
+        DownloadRequest::from_db_key_value(request_id.to_vec(), request_details.to_vec())
     }
 }
 
