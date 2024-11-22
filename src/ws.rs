@@ -250,9 +250,6 @@ async fn read_responses(
 fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
     if let UiServerMessage::Event(ui_event) = server_message {
         match ui_event {
-            UiEvent::Wishlist { .. } => {
-                cache.push(ui_event.clone());
-            }
             UiEvent::Uploaded(_) => {}
             UiEvent::PeerConnected { .. } => {
                 cache.push(ui_event.clone());

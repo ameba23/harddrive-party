@@ -11,7 +11,7 @@ use crate::{
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
     wire_messages::{Entry, IndexQuery, LsResponse, Request},
-    wishlist::{DownloadRequest, WishList},
+    wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::ensure;
 use async_stream::try_stream;
@@ -45,9 +45,12 @@ const CACHE_SIZE: usize = 256;
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
 const TOPIC: &[u8; 1] = b"t";
-pub const WISHLIST_BY_PEER: &[u8; 1] = b"p";
-pub const WISHLIST_BY_TIMESTAMP: &[u8; 1] = b"T";
+pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
+pub const REQUESTS: &[u8; 1] = b"r";
+pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
+pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
 pub const DOWNLOADED: &[u8; 1] = b"D";
+pub const COMPLETED_REQUESTS: &[u8; 1] = b"C";
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
@@ -180,11 +183,8 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
-        // Inform the UI of initial state of topics and wishlist
+        // Inform the UI of initial state of topics
         self.topics_updated().await;
-        if let Err(err) = self.wishlist.updated().await {
-            error!("Error when sending wishlist to UI {err}");
-        };
 
         let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
@@ -274,7 +274,7 @@ impl Hdp {
             loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
-                        rpc.request(buf, send).await;
+                        rpc.request(buf, send, peer_name.clone()).await;
                     }
                     Err(err) => {
                         warn!("Failed to handle request: {:?}", err);
@@ -680,7 +680,7 @@ impl Hdp {
             Command::Download { path, peer_name } => {
                 // Get details of the file / dir
                 let ls_request = Request::Ls(IndexQuery {
-                    path: Some(path),
+                    path: Some(path.clone()),
                     searchterm: None,
                     recursive: true,
                 });
@@ -704,6 +704,7 @@ impl Hdp {
 
                 match self.request(ls_request, &peer_name).await {
                     Ok(recv) => {
+                        // w(path: String, total_size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
                         let peer_public_key = {
                             let peers = self.peers.lock().await;
                             let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
@@ -716,17 +717,27 @@ impl Hdp {
                                 while let Some(Ok(ls_response)) = ls_response_stream.next().await {
                                     if let LsResponse::Success(entries) = ls_response {
                                         for entry in entries.iter() {
-                                            if !entry.is_dir {
-                                                debug!("Adding {} to wishlist", entry.name);
-
-                                                if let Err(err) = wishlist
-                                                    .add(&DownloadRequest::new(
+                                            if entry.name == path {
+                                                if let Err(err) =
+                                                    wishlist.add_request(&DownloadRequest::new(
                                                         entry.name.clone(),
                                                         entry.size,
                                                         id,
                                                         peer_public_key,
                                                     ))
-                                                    .await
+                                                {
+                                                    error!("Cannot add download request {:?}", err);
+                                                }
+                                            }
+                                            if !entry.is_dir {
+                                                debug!("Adding {} to wishlist", entry.name);
+
+                                                if let Err(err) =
+                                                    wishlist.add_requested_file(&RequestedFile {
+                                                        path: entry.name.clone(),
+                                                        size: entry.size,
+                                                        request_id: id,
+                                                    })
                                                 {
                                                     error!(
                                                         "Cannot make download request {:?}",
@@ -892,6 +903,9 @@ impl Hdp {
                     };
                 });
             }
+            Command::RequestedFiles => {}
+            Command::DownloadedFiles => {}
+            Command::RemoveRequest(request_id) => {}
         };
         Ok(())
     }
@@ -1077,7 +1091,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::init();
         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice_name = alice.name.clone();
 

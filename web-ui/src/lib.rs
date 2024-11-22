@@ -76,8 +76,12 @@ pub fn HdpUi() -> impl IntoView {
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         create_signal(Option::<Result<String, String>>::None);
     let (topics, set_topics) = create_signal(Vec::<(String, bool)>::new());
+
+    // TODO this should be a btreemap timestamp to UiDownloadRequest
     let (requested, set_requested) = create_signal(HashSet::<PeerPath>::new());
+    // TODO this should be a btreemap timestamp to UiDownloadRequest
     let (downloaded, set_downloaded) = create_signal(HashSet::<PeerPath>::new());
+
     let (files, set_files) = create_signal(BTreeMap::<PeerPath, File>::new());
     let (home_dir, set_home_dir) = create_signal(Option::<String>::None);
 
@@ -141,11 +145,57 @@ pub fn HdpUi() -> impl IntoView {
                         }
                         Ok(UiResponse::Download(download_response)) => {
                             debug!("Got download response {:?}", download_response);
+                            // if incomplete, add the file as requested
+                            if let Some(download_progress) = download_response.download_progress {
+                                // File is downloading
+                                if download_progress
+                  //     set_requested.update(|existing_requested| {
+                  //             existing_requested.insert(PeerPath {
+                  //                 peer_name: request.peer_name.clone(),
+                  //                 path: request.path.clone(),
+                  //             });
+                  //     });
+                            } else {
+
+                            }
+                            //
+                  //
+                  //     set_files.update(|files| {
+                  //             files
+                  //                 .entry(PeerPath {
+                  //                     peer_name: request.peer_name.clone(),
+                  //                     path: request.path.clone(),
+                  //                 })
+                  //                 .and_modify(|file| {
+                  //                     file.download_status.set(DownloadStatus::Requested);
+                  //                     file.request.set(Some(request.clone()));
+                  //                 })
+                  //                 .or_insert(File::from_download_request(
+                  //                     request,
+                  //                     DownloadStatus::Requested,
+                  //                 ));
+                  //
+                            // - if complete, remove from requested and add to downloaded
+                  //     set_requested.update(|existing_requested| {
+                  //             existing_requested.remove(PeerPath {
+                  //                 peer_name: request.peer_name.clone(),
+                  //                 path: request.path.clone(),
+                  //             });
+                  //     });
+                  //
+                  //     set_downloaded.update(|existing_downloaded| {
+                  //             existing_downloaded.insert(PeerPath {
+                  //                 peer_name: request.peer_name.clone(),
+                  //                 path: request.path.clone(),
+                  //             });
+                  //     });
+                            //
                             // TODO When downloading directories, also update the individual file
                             // downloaded
                             // Also, if the request was made in a previous session, we don't know
                             // about it here, but we still want to show the user that a file is
                             // downloading
+                            //
                             if let Some(Command::Download { peer_name, path }) = request {
                                 let files = files.get();
                                 if let Some(file) = files.get(&PeerPath {
@@ -291,66 +341,65 @@ pub fn HdpUi() -> impl IntoView {
                             existing_topics.push(topic);
                         }
                     });
-                }
-                UiServerMessage::Event(UiEvent::Wishlist {
-                    requested,
-                    downloaded,
-                }) => {
-                    debug!("Requested {:?} Downloaded {:?}", requested, downloaded);
-                    let requested_clone = requested.clone();
-                    let downloaded_clone = downloaded.clone();
-                    set_files.update(|files| {
-                        for request in requested_clone {
-                            files
-                                .entry(PeerPath {
-                                    peer_name: request.peer_name.clone(),
-                                    path: request.path.clone(),
-                                })
-                                .and_modify(|file| {
-                                    file.download_status.set(DownloadStatus::Requested);
-                                    file.request.set(Some(request.clone()));
-                                })
-                                .or_insert(File::from_download_request(
-                                    request,
-                                    DownloadStatus::Requested,
-                                ));
-                        }
-
-                        for request in downloaded_clone {
-                            files
-                                .entry(PeerPath {
-                                    peer_name: request.peer_name.clone(),
-                                    path: request.path.clone(),
-                                })
-                                .and_modify(|file| {
-                                    file.download_status.set(DownloadStatus::Downloaded);
-                                    file.request.set(Some(request.clone()));
-                                })
-                                .or_insert(File::from_download_request(
-                                    request,
-                                    DownloadStatus::Downloaded,
-                                ));
-                        }
-                    });
-                    set_requested.update(|existing_requested| {
-                        existing_requested.clear();
-                        for request in requested {
-                            existing_requested.insert(PeerPath {
-                                peer_name: request.peer_name.clone(),
-                                path: request.path.clone(),
-                            });
-                        }
-                    });
-                    set_downloaded.update(|existing_downloaded| {
-                        existing_downloaded.clear();
-                        for request in downloaded {
-                            existing_downloaded.insert(PeerPath {
-                                peer_name: request.peer_name.clone(),
-                                path: request.path.clone(),
-                            });
-                        }
-                    });
-                }
+                } // UiServerMessage::Event(UiEvent::Wishlist {
+                  //     requested,
+                  //     downloaded,
+                  // }) => {
+                  //     debug!("Requested {:?} Downloaded {:?}", requested, downloaded);
+                  //     let requested_clone = requested.clone();
+                  //     let downloaded_clone = downloaded.clone();
+                  //     set_files.update(|files| {
+                  //         for request in requested_clone {
+                  //             files
+                  //                 .entry(PeerPath {
+                  //                     peer_name: request.peer_name.clone(),
+                  //                     path: request.path.clone(),
+                  //                 })
+                  //                 .and_modify(|file| {
+                  //                     file.download_status.set(DownloadStatus::Requested);
+                  //                     file.request.set(Some(request.clone()));
+                  //                 })
+                  //                 .or_insert(File::from_download_request(
+                  //                     request,
+                  //                     DownloadStatus::Requested,
+                  //                 ));
+                  //         }
+                  //
+                  //         for request in downloaded_clone {
+                  //             files
+                  //                 .entry(PeerPath {
+                  //                     peer_name: request.peer_name.clone(),
+                  //                     path: request.path.clone(),
+                  //                 })
+                  //                 .and_modify(|file| {
+                  //                     file.download_status.set(DownloadStatus::Downloaded);
+                  //                     file.request.set(Some(request.clone()));
+                  //                 })
+                  //                 .or_insert(File::from_download_request(
+                  //                     request,
+                  //                     DownloadStatus::Downloaded,
+                  //                 ));
+                  //         }
+                  //     });
+                  //     set_requested.update(|existing_requested| {
+                  //         existing_requested.clear();
+                  //         for request in requested {
+                  //             existing_requested.insert(PeerPath {
+                  //                 peer_name: request.peer_name.clone(),
+                  //                 path: request.path.clone(),
+                  //             });
+                  //         }
+                  //     });
+                  //     set_downloaded.update(|existing_downloaded| {
+                  //         existing_downloaded.clear();
+                  //         for request in downloaded {
+                  //             existing_downloaded.insert(PeerPath {
+                  //                 peer_name: request.peer_name.clone(),
+                  //                 path: request.path.clone(),
+                  //             });
+                  //         }
+                  //     });
+                  // }
             }
         }
         debug!("ws closed");

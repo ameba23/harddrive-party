@@ -24,13 +24,19 @@ pub enum Command {
     /// Read a portion a of a file, from the given connect peer name
     Read(ReadQuery, String),
     /// Download a file or dir
-    Download { path: String, peer_name: String },
+    Download {
+        path: String,
+        peer_name: String,
+    },
     /// Query our own shares
     Shares(IndexQuery),
     /// Add or update a directory to share
     AddShare(String),
     /// Stop sharing a directory
     RemoveShare(String),
+    RequestedFiles,
+    DownloadedFiles,
+    RemoveRequest(u32),
     /// Shutdown gracefully
     Close,
 }
@@ -63,11 +69,11 @@ pub enum UiEvent {
     Uploaded(UploadInfo),
     /// The topics connected to has changed
     Topics(Vec<(String, bool)>),
-    /// The requested or downloaded files have changed
-    Wishlist {
-        requested: Vec<UiDownloadRequest>,
-        downloaded: Vec<UiDownloadRequest>,
-    },
+    // /// The requested or downloaded files have changed
+    // Wishlist {
+    //     requested: Vec<UiDownloadRequest>,
+    //     downloaded: Vec<UiDownloadRequest>,
+    // },
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
@@ -85,8 +91,8 @@ pub enum PeerRemoteOrSelf {
 pub struct UiDownloadRequest {
     /// The path of the file on the remote
     pub path: String,
-    /// The size in bytes
-    pub size: u64,
+    /// The total size in bytes
+    pub total_size: u64,
     /// This id is not unique - it references which request this came from
     /// requesting a directory will be split into requests for each file
     pub request_id: u32,
@@ -96,12 +102,23 @@ pub struct UiDownloadRequest {
     pub peer_name: String,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct UiRequestedFile {
+    pub path: String,
+    /// The size in bytes
+    pub size: u64,
+    /// This id is not unique - it references which request this came from
+    /// requesting a directory will be split into requests for each file
+    pub request_id: u32,
+}
+
 /// Information about a current running upload
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct UploadInfo {
     pub path: String,
     pub bytes_read: u64,
     pub speed: usize,
+    pub peer_name: String,
 }
 
 /// Response to a UI command
@@ -113,6 +130,8 @@ pub enum UiResponse {
     Shares(LsResponse),
     AddShare(u32),
     RemoveShare,
+    RequestedFiles(Vec<UiDownloadRequest>),
+    DownloadedFiles(Vec<UiRequestedFile>),
     EndResponse,
 }
 
@@ -129,25 +148,54 @@ pub enum UiServerError {
     ShareError(String),
 }
 
-/// Information about a currently running download
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub enum DownloadInfo {
+    Requested(Duration),
+    Downloading {
+        /// File path of currently downloading file
+        path: String,
+        /// Number of bytes read for this file
+        bytes_read: u64,
+        /// Total number of bytes read from the associated download request
+        total_bytes_read: u64,
+        /// Current speed of download in bytes per second
+        speed: u32,
+    },
+    Completed(Duration),
+}
+
+/// A response to a download request
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct DownloadResponse {
-    /// File path
+    /// File path of requested file of directory
     pub path: String,
-    /// Number of bytes read for this file
-    pub bytes_read: u64,
-    /// Total number of bytes read from the associated download request
-    pub total_bytes_read: u64,
-    /// Current speed of download in bytes per second
-    pub speed: usize,
+    /// Name of the peer who holds the file or directory
+    pub peer_name: String,
+    pub download_info: DownloadInfo,
+    // pub total_size: u64,
 }
 
 impl fmt::Display for DownloadResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} {} bytes read, {} bytes per second.",
-            self.path, self.bytes_read, self.speed
-        )
+        match &self.download_info {
+            DownloadInfo::Requested(_time) => {
+                write!(f, "Requested {}/{}", self.peer_name, self.path)
+            }
+            DownloadInfo::Downloading {
+                path,
+                bytes_read,
+                total_bytes_read,
+                speed,
+            } => {
+                write!(
+                    f,
+                    "Downloading {}/{} {} bytes read, {} total bytes read, {} bps",
+                    self.peer_name, path, bytes_read, total_bytes_read, speed
+                )
+            }
+            DownloadInfo::Completed(_time) => {
+                write!(f, "Completed {}/{}", self.peer_name, self.path)
+            }
+        }
     }
 }

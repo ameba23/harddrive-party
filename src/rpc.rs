@@ -15,6 +15,7 @@ use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
 };
 
+/// Number of bytes uploaded at a time
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
 struct ReadRequest {
@@ -22,6 +23,7 @@ struct ReadRequest {
     start: Option<u64>,
     end: Option<u64>,
     output: quinn::SendStream,
+    requester_name: String,
 }
 
 /// Remote Procedure Call - process remote requests
@@ -52,7 +54,7 @@ impl Rpc {
     }
 
     /// Handle a request
-    pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream) {
+    pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream, peer_name: String) {
         let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
         match request {
             Ok(req) => {
@@ -67,7 +69,7 @@ impl Rpc {
                         // TODO else
                     }
                     Request::Read(ReadQuery { path, start, end }) => {
-                        if let Ok(()) = self.read(path, start, end, output).await {};
+                        if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
                         // TODO else
                     }
                 }
@@ -131,6 +133,7 @@ impl Rpc {
         start: Option<u64>,
         end: Option<u64>,
         output: quinn::SendStream,
+        requester_name: String,
     ) -> Result<(), RpcError> {
         self.upload_tx
             .send(ReadRequest {
@@ -138,6 +141,7 @@ impl Rpc {
                 start,
                 end,
                 output,
+                requester_name,
             })
             .await
             .map_err(|_| RpcError::ChannelClosed)?;
@@ -175,6 +179,7 @@ impl Uploader {
             start,
             end,
             mut output,
+            requester_name,
         } = read_request;
         match self.get_file_portion(path.clone(), start, end).await {
             Ok((file, size)) => {
@@ -194,6 +199,7 @@ impl Uploader {
                             path: path.clone(),
                             bytes_read,
                             speed: 0, // TODO
+                            peer_name: requester_name.clone(),
                         })))
                         .await
                         .is_err()
