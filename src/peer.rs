@@ -54,7 +54,7 @@ impl Peer {
             let request_stream = wishlist.requests_for_peer(&public_key);
             pin_mut!(request_stream);
             // Handle download requests for this peer in serial
-            while let Some(request) = request_stream.next().await {
+            while let Some(mut request) = request_stream.next().await {
                 let progress = wishlist
                     .get_download_progress_for_request(request.request_id)
                     .unwrap_or_default();
@@ -73,6 +73,7 @@ impl Peer {
                 {
                     Ok(()) => {
                         debug!("Download successfull");
+                        request.downloaded = true;
                         if let Err(e) = wishlist.file_completed(request) {
                             warn!("Could not remove item from wishlist {:?}", e)
                         }

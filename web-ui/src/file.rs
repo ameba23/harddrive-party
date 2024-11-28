@@ -1,7 +1,7 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
     display_bytes,
-    ui_messages::{Command, UiDownloadRequest},
+    ui_messages::{Command, UiDownloadRequest, UiRequestedFile},
     DownloadResponse, Entry, PeerName, RequesterSetter, BUTTON_STYLE,
 };
 use leptos::*;
@@ -10,10 +10,9 @@ use leptos::*;
 #[derive(Clone, Debug)]
 pub struct File {
     pub name: String,
-    pub size: u64,
+    pub size: Option<u64>,
     pub is_dir: bool,
     pub download_status: RwSignal<DownloadStatus>,
-    /// The associated request, if there is one
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
 
@@ -21,23 +20,20 @@ impl File {
     pub fn from_entry(entry: Entry) -> Self {
         Self {
             name: entry.name,
-            size: entry.size,
+            size: Some(entry.size),
             is_dir: entry.is_dir,
             download_status: create_rw_signal(DownloadStatus::Nothing),
             request: create_rw_signal(None),
         }
     }
 
-    pub fn from_download_request(
-        download_request: UiDownloadRequest,
-        download_status: DownloadStatus,
-    ) -> Self {
+    pub fn from_downloading_file(name: String, download_status: DownloadStatus) -> Self {
         Self {
-            name: download_request.path.clone(),
-            size: download_request.size,
+            name,
+            size: None,
             is_dir: false,
             download_status: create_rw_signal(download_status),
-            request: create_rw_signal(Some(download_request)),
+            request: create_rw_signal(None),
         }
     }
 }
@@ -58,7 +54,10 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button_style = move || {
-        if file.download_status.get() == DownloadStatus::Nothing && !peer_details.get().1 {
+        if file.download_status.get() == DownloadStatus::Nothing
+            && !peer_details.get().1
+            && file.request.get() == None
+        {
             ""
         } else {
             "display:none"
@@ -88,7 +87,7 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
         <tr class="hover:bg-gray-200">
             <td>{file_name_and_indentation}</td>
             <td>
-                " " {display_bytes(file.size)} " "
+                " " {display_bytes(file.size.unwrap_or_default())} " "
                 <button
                     class=BUTTON_STYLE
                     style=download_button_style
@@ -102,16 +101,16 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
                         DownloadStatus::Nothing => {
                             view! { <span></span> }
                         }
-                        DownloadStatus::Downloaded => {
+                        DownloadStatus::Downloaded(_) => {
                             view! { <span>"Downloaded"</span> }
                         }
-                        DownloadStatus::Requested => {
+                        DownloadStatus::Requested(_) => {
                             view! { <span>"Requested"</span> }
                         }
-                        DownloadStatus::Downloading(download_response) => {
+                        DownloadStatus::Downloading{ bytes_read, .. } => {
                             view! {
                                 <span>
-                                    <DownloadingFile download_response size=file.size/>
+                                    <DownloadingFile bytes_read size=file.size/>
                                 </span>
                             }
                         }
@@ -145,17 +144,17 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DownloadStatus {
     Nothing,
-    Requested,
-    Downloading(DownloadResponse),
-    Downloaded,
+    Requested(u32),
+    Downloading { bytes_read: u64, request_id: u32 },
+    Downloaded(u32),
 }
 
 /// Show progress when currently downloading
 #[component]
-pub fn DownloadingFile(download_response: DownloadResponse, size: u64) -> impl IntoView {
+pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
     // This will be a progress bar
     view! {
-        <span>{format!("Downloading {} of {} bytes...", download_response.bytes_read, size)}</span>
+        <span>{format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}</span>
     }
 }
 
@@ -168,17 +167,17 @@ pub fn Request(file: File) -> impl IntoView {
             view! {
                 <li>
                     {request.peer_name} " " <code>{&request.path}</code> " "
-                    {display_bytes(request.size)} " "
+                    {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
-                            DownloadStatus::Downloading(download_response) => {
+                            DownloadStatus::Downloading{ bytes_read, request_id: _} => {
                                 view! {
                                     <span>
-                                        <DownloadingFile download_response size=file.size/>
+                                        <DownloadingFile bytes_read size=file.size/>
                                     </span>
                                 }
                             }
-                            DownloadStatus::Downloaded => {
+                            DownloadStatus::Downloaded(_) => {
                                 view! {
                                     <span>
                                         <Preview file_path=&request.path shared=false/>

@@ -45,12 +45,11 @@ const CACHE_SIZE: usize = 256;
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
 const TOPIC: &[u8; 1] = b"t";
-pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
 pub const REQUESTS: &[u8; 1] = b"r";
 pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
 pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
-pub const DOWNLOADED: &[u8; 1] = b"D";
-pub const COMPLETED_REQUESTS: &[u8; 1] = b"C";
+pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
+pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
@@ -161,7 +160,7 @@ impl Hdp {
         };
 
         // Setup db for downloads requests
-        let wishlist = WishList::new(&db, response_tx.clone())?;
+        let wishlist = WishList::new(&db)?;
 
         Ok((
             Self {
@@ -737,6 +736,7 @@ impl Hdp {
                                                         path: entry.name.clone(),
                                                         size: entry.size,
                                                         request_id: id,
+                                                        downloaded: false,
                                                     })
                                                 {
                                                     error!(
@@ -903,9 +903,106 @@ impl Hdp {
                     };
                 });
             }
-            Command::RequestedFiles => {}
-            Command::DownloadedFiles => {}
-            Command::RemoveRequest(request_id) => {}
+            Command::RequestedFiles(request_id) => {
+                match self.wishlist.requested_files(request_id) {
+                    Ok(response_iterator) => {
+                        for res in response_iterator {
+                            // TODO chunking
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::RequestedFiles(vec![res])),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                                break;
+                            };
+                        }
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        error!("Error getting requested files from wishlist {:?}", error);
+                        // TODO more detailed error should be forwarded
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::RequestError),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        };
+                    }
+                }
+            }
+            Command::RemoveRequest(_request_id) => {
+                // TODO self.wishlist.remove_request
+                todo!();
+            }
+            Command::Requests => {
+                println!("Requests called");
+                match self.wishlist.requested() {
+                    Ok(response_iterator) => {
+                        for res in response_iterator {
+                            // TODO chunking
+                            println!("Sending response");
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::Requests(vec![res])),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                                break;
+                            };
+                        }
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        error!("Error getting requests from wishlist {:?}", error);
+                        // TODO more detailed error should be forwarded
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::RequestError),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        };
+                    }
+                }
+            }
         };
         Ok(())
     }

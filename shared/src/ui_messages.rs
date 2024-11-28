@@ -34,8 +34,10 @@ pub enum Command {
     AddShare(String),
     /// Stop sharing a directory
     RemoveShare(String),
-    RequestedFiles,
-    DownloadedFiles,
+    /// Get download requests
+    Requests,
+    /// Get files associated with a particular request
+    RequestedFiles(u32),
     RemoveRequest(u32),
     /// Shutdown gracefully
     Close,
@@ -91,10 +93,11 @@ pub enum PeerRemoteOrSelf {
 pub struct UiDownloadRequest {
     /// The path of the file on the remote
     pub path: String,
+    /// How much is already downloaded
+    pub progress: u64,
     /// The total size in bytes
     pub total_size: u64,
-    /// This id is not unique - it references which request this came from
-    /// requesting a directory will be split into requests for each file
+    /// Identifier for the request
     pub request_id: u32,
     /// Time when request made relative to unix epoch
     pub timestamp: Duration,
@@ -110,6 +113,7 @@ pub struct UiRequestedFile {
     /// This id is not unique - it references which request this came from
     /// requesting a directory will be split into requests for each file
     pub request_id: u32,
+    pub downloaded: bool,
 }
 
 /// Information about a current running upload
@@ -130,8 +134,8 @@ pub enum UiResponse {
     Shares(LsResponse),
     AddShare(u32),
     RemoveShare,
-    RequestedFiles(Vec<UiDownloadRequest>),
-    DownloadedFiles(Vec<UiRequestedFile>),
+    Requests(Vec<UiDownloadRequest>),
+    RequestedFiles(Vec<UiRequestedFile>),
     EndResponse,
 }
 

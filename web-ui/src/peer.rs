@@ -32,7 +32,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
             peer_name: peer.name,
             path: "".to_string(),
         }) {
-            Some(file) => file.size,
+            Some(file) => file.size.unwrap_or_default(),
             None => 0,
         },
     );
