@@ -1,7 +1,7 @@
 //! Representation of remote peer, and download handling
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -49,39 +49,19 @@ impl Peer {
         let connection_clone = connection.clone();
 
         let peer_name = key_to_name(&public_key);
-        // Loop over requests for files from this peer
+        // Process requests for this peer in a separate task
         tokio::spawn(async move {
-            let request_stream = wishlist.requests_for_peer(&public_key);
-            pin_mut!(request_stream);
-            // Handle download requests for this peer in serial
-            while let Some(mut request) = request_stream.next().await {
-                let progress = wishlist
-                    .get_download_progress_for_request(request.request_id)
-                    .unwrap_or_default();
-
-                let associated_request = wishlist.get_request(request.request_id).unwrap();
-                match download(
-                    &request,
-                    &connection_clone,
-                    &download_dir,
-                    response_tx.clone(),
-                    peer_name.clone(),
-                    progress,
-                    associated_request,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        debug!("Download successfull");
-                        request.downloaded = true;
-                        if let Err(e) = wishlist.file_completed(request) {
-                            warn!("Could not remove item from wishlist {:?}", e)
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Error downloading {:?}", e);
-                    }
-                }
+            if let Err(err) = process_requests(
+                public_key,
+                connection_clone,
+                peer_name,
+                wishlist,
+                download_dir,
+                response_tx,
+            )
+            .await
+            {
+                error!("Error when processing requests: {:?}", err);
             }
         });
 
@@ -90,6 +70,71 @@ impl Peer {
             public_key,
         }
     }
+}
+
+/// Loop over requests for files from this peer
+async fn process_requests(
+    public_key: [u8; 32],
+    connection: Connection,
+    peer_name: String,
+    wishlist: WishList,
+    download_dir: PathBuf,
+    response_tx: Sender<UiServerMessage>,
+) -> anyhow::Result<()> {
+    let request_stream = wishlist.requests_for_peer(&public_key);
+    pin_mut!(request_stream);
+    // Handle download requests for this peer in serial
+    while let Some(mut request) = request_stream.next().await {
+        let progress = wishlist
+            .get_download_progress_for_request(request.request_id)
+            .unwrap_or_default();
+
+        let associated_request = wishlist.get_request(request.request_id)?;
+        match download(
+            &request,
+            &connection,
+            &download_dir,
+            response_tx.clone(),
+            peer_name.clone(),
+            progress,
+            associated_request.clone(),
+        )
+        .await
+        {
+            Ok(()) => {
+                debug!("Download successfull");
+                request.downloaded = true;
+                let id = request.request_id;
+                match wishlist.file_completed(request) {
+                    Ok(request_complete) => {
+                        if request_complete {
+                            if response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::Download(DownloadResponse {
+                                        path: associated_request.path.clone(),
+                                        peer_name: peer_name.clone(),
+                                        download_info: DownloadInfo::Completed(get_timestamp()),
+                                    })),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Could not remove item from wishlist {:?}", e)
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Error downloading {:?}", e);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Download a file (or file portion) from the remote peer
@@ -156,8 +201,7 @@ async fn download(
                         .send(UiServerMessage::Response {
                             id,
                             response: Ok(UiResponse::Download(DownloadResponse {
-                                path: requested_file.path.clone(), // TODO this should be the path
-                                // from the original request
+                                path: associated_request.path.clone(),
                                 peer_name: peer_name.clone(),
                                 download_info: DownloadInfo::Downloading {
                                     path: requested_file.path.clone(),
@@ -289,4 +333,12 @@ async fn setup_download(file_path: PathBuf, size: u64) -> anyhow::Result<(File, 
     };
 
     Ok((file, start_offset))
+}
+
+/// Get the current time as a [Duration]
+pub fn get_timestamp() -> Duration {
+    let system_time = SystemTime::now();
+    system_time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("Time went backwards")
 }

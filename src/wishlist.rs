@@ -522,7 +522,7 @@ impl WishList {
 
     /// Remove a specific completed item from the wishlist and
     /// add it to the downloaded list
-    pub fn file_completed(&self, requested_file: RequestedFile) -> anyhow::Result<()> {
+    pub fn file_completed(&self, requested_file: RequestedFile) -> anyhow::Result<bool> {
         if !requested_file.downloaded {
             return Err(anyhow!("File not marked as downloaded"));
         }
@@ -553,9 +553,8 @@ impl WishList {
         // let (key, value) = requested_file.to_downloaded_files_db_key_value(timestamp);
         // self.db_downloaded_files.insert(key, value)?;
 
-        // TODO if this was the last file associatd with this download request, inform the UI
-        // We can maybe check this by checking if download progress == total_size
-        Ok(())
+        // Check if this was the last file associatd with this download request
+        Ok(updated_bytes == download_request.total_size)
     }
 
     // pub async fn requested_files(&self) -> anyhow::Result<Vec<UiDownloadRequest>> {
@@ -630,7 +629,7 @@ mod tests {
         let db = sled::open(db_dir).expect("open");
         let wishlist = WishList::new(&db).unwrap();
 
-        let requested_file = RequestedFile {
+        let mut requested_file = RequestedFile {
             path: "books/book.pdf".to_string(),
             size: 501546,
             request_id: 5144,
@@ -652,8 +651,10 @@ mod tests {
         assert_eq!(Some(dl_req.into_ui_download_request(0)), requests.next());
         assert_eq!(None, requests.next());
 
-        wishlist.file_completed(requested_file.clone()).unwrap();
+        requested_file.downloaded = true;
+        let request_complete = wishlist.file_completed(requested_file.clone()).unwrap();
 
+        assert!(request_complete);
         // let mut downloaded_items = wishlist.downloaded().unwrap();
         //
         // assert_eq!(
