@@ -105,8 +105,10 @@ async fn process_requests(
                 debug!("Download successfull");
                 request.downloaded = true;
                 let id = request.request_id;
+                // Mark the file as completed
                 match wishlist.file_completed(request) {
                     Ok(request_complete) => {
+                        // If all files associated with this request have been downloaded
                         if request_complete {
                             if response_tx
                                 .send(UiServerMessage::Response {

@@ -1,7 +1,9 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{topic::Topic, DiscoveredPeer, PeerDiscovery, SessionToken, TOKEN_LENGTH},
+    discovery::{
+        topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, SessionToken, TOKEN_LENGTH,
+    },
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -85,6 +87,7 @@ impl Hdp {
         initial_topic_names: Vec<String>,
         download_dir: PathBuf,
         mqtt_server: Option<String>,
+        discovery_methods: DiscoveryMethods,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
@@ -143,7 +146,7 @@ impl Hdp {
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, true, true, pk_hash, topics_db, mqtt_server).await?;
+            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db, mqtt_server).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -1181,6 +1184,7 @@ mod tests {
             vec!["foo".to_string()],
             downloads,
             None,
+            DiscoveryMethods::MdnsOnly,
         )
         .await
         .unwrap()

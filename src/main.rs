@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use harddrive_party::{
+    discovery::DiscoveryMethods,
     hdp::Hdp,
     http::http_server,
     ui_messages::{Command, UiResponse},
@@ -148,6 +149,7 @@ async fn main() -> anyhow::Result<()> {
                 initial_topics,
                 download_dir,
                 mqtt_server,
+                DiscoveryMethods::MqttAndMdns,
             )
             .await?;
             println!(
