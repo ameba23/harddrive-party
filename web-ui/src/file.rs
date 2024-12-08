@@ -2,36 +2,46 @@
 use crate::{
     display_bytes,
     ui_messages::{Command, UiDownloadRequest, UiRequestedFile},
-    DownloadResponse, Entry, PeerName, RequesterSetter, BUTTON_STYLE,
+    DownloadResponse, Entry, FilesReadSignal, PeerName, PeerPath, RequesterSetter, BUTTON_STYLE,
 };
 use leptos::*;
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]
 pub struct File {
+    /// Path of file
     pub name: String,
+    /// Name of peer who holds this file
+    pub peer_name: String,
+    /// Size, if known
     pub size: Option<u64>,
-    pub is_dir: bool,
+    pub is_dir: Option<bool>,
     pub download_status: RwSignal<DownloadStatus>,
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
 
 impl File {
-    pub fn from_entry(entry: Entry) -> Self {
+    pub fn from_entry(entry: Entry, peer_name: String) -> Self {
         Self {
             name: entry.name,
+            peer_name,
             size: Some(entry.size),
-            is_dir: entry.is_dir,
+            is_dir: Some(entry.is_dir),
             download_status: create_rw_signal(DownloadStatus::Nothing),
             request: create_rw_signal(None),
         }
     }
 
-    pub fn from_downloading_file(name: String, download_status: DownloadStatus) -> Self {
+    pub fn from_downloading_file(
+        name: String,
+        peer_name: String,
+        download_status: DownloadStatus,
+    ) -> Self {
         Self {
             name,
+            peer_name,
             size: None,
-            is_dir: false,
+            is_dir: Some(false),
             download_status: create_rw_signal(download_status),
             request: create_rw_signal(None),
         }
@@ -41,13 +51,13 @@ impl File {
 #[component]
 pub fn File(file: File, is_shared: bool) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    let peer_details = use_context::<PeerName>().unwrap().0;
+    // let peer_details = use_context::<PeerName>().unwrap().0;
     let (file_name, _set_file_name) = create_signal(file.name);
 
     let download_request = move |_| {
         let download = Command::Download {
             path: file_name.get().to_string(),
-            peer_name: peer_details.get().0,
+            peer_name: file.peer_name.clone(),
         };
         set_requester.update(|requester| requester.make_request(download));
     };
@@ -55,7 +65,7 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
     // Only display download button if we dont have it requested, and it is not our share
     let download_button_style = move || {
         if file.download_status.get() == DownloadStatus::Nothing
-            && !peer_details.get().1
+            && !is_shared
             && file.request.get() == None
         {
             ""
@@ -66,7 +76,11 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
-        let icon = if file.is_dir { "🗀 " } else { "🗎 " };
+        let icon = match file.is_dir {
+            Some(true) => "🗀 ",
+            Some(false) => "🗎 ",
+            None => " ",
+        };
         let (name, indentation) = match file_name.rsplit_once('/') {
             Some((path, name)) => {
                 let indent = path.split('/').count();
@@ -82,6 +96,8 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
             </pre>
         }
     };
+
+    let is_dir = file.is_dir == Some(true);
 
     view! {
         <tr class="hover:bg-gray-200">
@@ -102,7 +118,15 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
                             view! { <span></span> }
                         }
                         DownloadStatus::Downloaded(_) => {
-                            view! { <span>"Downloaded"</span> }
+                            if is_dir {
+                                view! { <span> "Downloaded" </span> }
+                            } else {
+
+                            view! { <span>
+                                "Downloaded"
+                                        <Preview file_path=&file_name.get() shared=is_shared />
+                                    </span> }
+                            }
                         }
                         DownloadStatus::Requested(_) => {
                             view! { <span>"Requested"</span> }
@@ -164,9 +188,32 @@ pub fn Request(file: File) -> impl IntoView {
     let request_option = file.request.get();
     match request_option {
         Some(request) => {
+            let files = use_context::<FilesReadSignal>().unwrap().0;
+            let peer_path = PeerPath {
+                peer_name: request.peer_name.clone(),
+                path: request.path.clone(),
+            };
+
+            let child_files = move || {
+                // Calling .get() clones - we should ideally use .with(|files| files.range...)
+                let files = files.get();
+
+                let mut upper_bound = peer_path.path.clone();
+                upper_bound.push_str("~");
+                files
+                    .range(
+                        peer_path.clone()..PeerPath {
+                            peer_name: peer_path.peer_name.clone(),
+                            path: upper_bound,
+                        },
+                    )
+                    .map(|(_, file)| file.clone()) // TODO ideally dont clone
+                    .collect::<Vec<File>>()
+            };
+            let is_dir = file.is_dir == Some(true);
             view! {
                 <li>
-                    {request.peer_name} " " <code>{&request.path}</code> " "
+                    {request.peer_name} " "
                     {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
@@ -178,11 +225,7 @@ pub fn Request(file: File) -> impl IntoView {
                                 }
                             }
                             DownloadStatus::Downloaded(_) => {
-                                view! {
-                                    <span>
-                                        <Preview file_path=&request.path shared=false/>
-                                    </span>
-                                }
+                                    view! { <span> "✅"</span>}
                             }
                             _ => {
                                 view! { <span></span> }
@@ -190,6 +233,13 @@ pub fn Request(file: File) -> impl IntoView {
                         }
                     }}
 
+               <table>
+                <For
+                    each=child_files
+                    key=|file| format!("{}{:?}", file.name, file.size)
+                    children=move |file: File| view! { <File file is_shared=false /> }
+                />
+            </table>
                 </li>
             }
         }

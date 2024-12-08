@@ -1,6 +1,8 @@
 use crate::{PeerPath, UiDownloadRequest};
 use std::collections::BTreeMap;
 
+/// For requests (requested or downloaded items)
+/// Map timestamp, request id to peer name and path
 #[derive(Clone)]
 pub struct Requests(BTreeMap<(u64, u32), PeerPath>);
 

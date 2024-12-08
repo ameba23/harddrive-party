@@ -130,9 +130,9 @@ pub fn HdpUi() -> impl IntoView {
                                             .entry(peer_path)
                                             .and_modify(|file| {
                                                 file.size = Some(entry.size);
-                                                file.is_dir = entry.is_dir;
+                                                file.is_dir = Some(entry.is_dir);
                                             })
-                                            .or_insert(File::from_entry(entry));
+                                            .or_insert(File::from_entry(entry, peer_name.clone()));
                                     }
                                 });
                             }
@@ -211,6 +211,7 @@ pub fn HdpUi() -> impl IntoView {
                                             })
                                             .or_insert(File::from_downloading_file(
                                                 path,
+                                                download_response.peer_name.clone(),
                                                 DownloadStatus::Downloading {
                                                     bytes_read,
                                                     request_id: id,
@@ -270,8 +271,10 @@ pub fn HdpUi() -> impl IntoView {
                                                     path: entry.name.clone(),
                                                 };
                                                 if !files.contains_key(&peer_path) {
-                                                    files
-                                                        .insert(peer_path, File::from_entry(entry));
+                                                    files.insert(
+                                                        peer_path,
+                                                        File::from_entry(entry, peer_name.clone()),
+                                                    );
                                                 }
                                             }
                                         });
@@ -339,12 +342,13 @@ pub fn HdpUi() -> impl IntoView {
                                         })
                                         .or_insert(File {
                                             name: request.path.clone(),
+                                            peer_name: request.peer_name.clone(),
                                             size: Some(request.total_size),
                                             download_status: create_rw_signal(
                                                 download_status.clone(),
                                             ),
                                             request: create_rw_signal(Some(request.clone())),
-                                            is_dir: false,
+                                            is_dir: None,
                                         });
 
                                     let mut upper_bound = peer_path.path.clone();
@@ -392,12 +396,13 @@ pub fn HdpUi() -> impl IntoView {
                                                 })
                                                 .or_insert(File {
                                                     name: requested_file.path,
+                                                    peer_name: peer_path.peer_name.clone(),
                                                     size: Some(requested_file.size),
                                                     download_status: create_rw_signal(
                                                         download_status,
                                                     ),
                                                     request: create_rw_signal(None),
-                                                    is_dir: false,
+                                                    is_dir: Some(false),
                                                 });
                                         }
                                     });

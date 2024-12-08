@@ -20,7 +20,7 @@ use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
-use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
+use harddrive_party_shared::ui_messages::{DownloadInfo, DownloadResponse, PeerRemoteOrSelf};
 use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Endpoint, RecvStream};
@@ -30,6 +30,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, SystemTime},
 };
 use thiserror::Error;
 use tokio::{
@@ -712,6 +713,7 @@ impl Hdp {
                             let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
                             peer.public_key
                         };
+                        let response_tx = self.response_tx.clone();
                         let wishlist = self.wishlist.clone();
                         tokio::spawn(async move {
                             if let Ok(ls_response_stream) = process_length_prefix(recv).await {
@@ -750,6 +752,21 @@ impl Hdp {
                                             }
                                         }
                                     }
+                                }
+                                // Inform the UI that the request has been made
+                                if response_tx
+                                    .send(UiServerMessage::Response {
+                                        id,
+                                        response: Ok(UiResponse::Download(DownloadResponse {
+                                            download_info: DownloadInfo::Requested(get_timestamp()),
+                                            path,
+                                            peer_name,
+                                        })),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    // log error
                                 }
                             }
                         });
@@ -1166,6 +1183,14 @@ impl std::fmt::Display for ServerConnection {
         }
         Ok(())
     }
+}
+
+/// Get the current time as a [Duration]
+pub fn get_timestamp() -> Duration {
+    let system_time = SystemTime::now();
+    system_time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("Time went backwards")
 }
 
 #[cfg(test)]

@@ -1,10 +1,11 @@
 //! Representation of remote peer, and download handling
 use std::{
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use crate::{
+    hdp::get_timestamp,
     ui_messages::{DownloadResponse, UiResponse, UiServerMessage},
     wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
@@ -335,12 +336,4 @@ async fn setup_download(file_path: PathBuf, size: u64) -> anyhow::Result<(File, 
     };
 
     Ok((file, start_offset))
-}
-
-/// Get the current time as a [Duration]
-pub fn get_timestamp() -> Duration {
-    let system_time = SystemTime::now();
-    system_time
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .expect("Time went backwards")
 }

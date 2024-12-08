@@ -56,7 +56,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
             .collect::<Vec<File>>()
     };
 
-    provide_context(PeerName(peer_signal));
+    // provide_context(PeerName(peer_signal));
     view! {
         <li>
             {peer_signal.get().0} " " {root_size} " shared" <table>
