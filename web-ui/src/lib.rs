@@ -152,21 +152,41 @@ pub fn HdpUi() -> impl IntoView {
                             // it
                             match download_response.download_info {
                                 DownloadInfo::Requested(timestamp) => {
+                                    let request = UiDownloadRequest {
+                                        path: download_response.path.clone(),
+                                        peer_name: download_response.peer_name.clone(),
+                                        progress: 0,
+                                        total_size: 0, // TODO
+                                        request_id: id,
+                                        timestamp,
+                                    };
                                     set_requests.update(|requests| {
                                         if requests.get_by_id(id).is_none() {
-                                            requests.insert(&UiDownloadRequest {
-                                                path: download_response.path.clone(),
-                                                peer_name: download_response.peer_name.clone(),
-                                                progress: 0,
-                                                total_size: 0, // TODO
-                                                request_id: id,
-                                                timestamp,
-                                            });
+                                            requests.insert(&request);
                                         }
                                     });
-                                    // Mark all files below this one in the dir heirarchy as
-                                    // requested
                                     set_files.update(|files| {
+                                        let peer_path = PeerPath {
+                                            peer_name: download_response.peer_name.clone(),
+                                            path: download_response.path.clone(),
+                                        };
+                                        files
+                                            .entry(peer_path.clone())
+                                            .and_modify(|file| {
+                                                file.request.set(Some(request.clone()));
+                                            })
+                                            .or_insert(File {
+                                                name: request.path.clone(),
+                                                peer_name: request.peer_name.clone(),
+                                                size: None,
+                                                download_status: create_rw_signal(
+                                                    DownloadStatus::Requested(id),
+                                                ),
+                                                request: create_rw_signal(Some(request.clone())),
+                                                is_dir: None,
+                                            });
+                                        // Mark all files below this one in the dir heirarchy as
+                                        // requested
                                         let mut upper_bound = download_response.path.clone();
                                         upper_bound.push_str("~");
                                         for (_, file) in files.range_mut(

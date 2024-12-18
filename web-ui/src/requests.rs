@@ -16,8 +16,11 @@ impl Requests {
             peer_name: request.peer_name.clone(),
             path: request.path.clone(),
         };
-        self.0
-            .insert((request.timestamp.as_secs(), request.request_id), peer_path)
+        // To make them be ordered newest first, invert the timestamp
+        self.0.insert(
+            (u64::MAX - request.timestamp.as_secs(), request.request_id),
+            peer_path,
+        )
     }
 
     pub fn get_by_id(&self, id: u32) -> Option<&PeerPath> {
