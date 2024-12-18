@@ -154,91 +154,102 @@ async fn download(
     let output_path = download_dir.join(requested_file.path.clone());
     let (mut file, start_offset) = setup_download(output_path, requested_file.size).await?;
 
-    if start_offset == Some(requested_file.size) {
-        debug!("File already downloaded");
-        return Ok(());
-    }
-
-    debug!(
-        "Requesting {} from offset {:?}",
-        requested_file.path, start_offset
-    );
-
-    let mut recv = make_read_request(connection, requested_file, start_offset).await?;
-    let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] = [0; DOWNLOAD_BLOCK_SIZE];
-    let mut bytes_read: u64 = 0;
+    // Bytes read from this file
+    let mut bytes_read: u64 = start_offset.unwrap_or_default();
 
     // A running total of all files downloaded in this request
     let mut total_bytes_read = progress_request;
 
-    let mut bytes_read_since_last_ui_update = 0;
-    let mut speedometer = Speedometer::new(Duration::from_secs(5));
+    let mut final_speed = 0;
+    if start_offset >= Some(requested_file.size) {
+        debug!("File already downloaded");
+    } else {
+        debug!(
+            "Requesting {} from offset {:?}",
+            requested_file.path, start_offset
+        );
 
-    loop {
-        // TODO try reading chunks with offset to avoid head of line blocking
-        // let recv_result = recv.read(&mut buf).await;
-        match recv.read(&mut buf).await {
-            Ok(Some(n)) => {
-                bytes_read_since_last_ui_update += n as u64;
-                speedometer.entry(n);
+        let mut recv = make_read_request(connection, requested_file, start_offset).await?;
+        let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] = [0; DOWNLOAD_BLOCK_SIZE];
 
-                if let Err(error) = file.write(&buf[..n]).await {
-                    warn!("Cannot write downloading file {:?}", error);
-                    break;
-                }
+        let mut bytes_read_since_last_ui_update = 0;
+        let mut speedometer = Speedometer::new(Duration::from_secs(5));
 
-                if bytes_read_since_last_ui_update > UPDATE_EVERY {
-                    bytes_read += bytes_read_since_last_ui_update;
-                    total_bytes_read += bytes_read_since_last_ui_update;
-                    if bytes_read > requested_file.size {
-                        error!("Downloading file is bigger than expected!");
+        loop {
+            // TODO try reading chunks with offset to avoid head of line blocking
+            // let recv_result = recv.read(&mut buf).await;
+            match recv.read(&mut buf).await {
+                Ok(Some(n)) => {
+                    bytes_read_since_last_ui_update += n as u64;
+                    speedometer.entry(n);
+
+                    if let Err(error) = file.write(&buf[..n]).await {
+                        warn!("Cannot write downloading file {:?}", error);
+                        break;
                     }
 
-                    debug!(
-                        "Read {} bytes - {} of {}",
-                        bytes_read_since_last_ui_update, bytes_read, requested_file.size
-                    );
-                    bytes_read_since_last_ui_update = 0;
+                    if bytes_read_since_last_ui_update > UPDATE_EVERY {
+                        bytes_read += bytes_read_since_last_ui_update;
+                        total_bytes_read += bytes_read_since_last_ui_update;
+                        if bytes_read > requested_file.size {
+                            error!("Downloading file is bigger than expected!");
+                        }
 
-                    if response_tx
-                        .send(UiServerMessage::Response {
-                            id,
-                            response: Ok(UiResponse::Download(DownloadResponse {
-                                path: associated_request.path.clone(),
-                                peer_name: peer_name.clone(),
-                                download_info: DownloadInfo::Downloading {
-                                    path: requested_file.path.clone(),
-                                    bytes_read,
-                                    total_bytes_read,
-                                    speed: speedometer
-                                        .measure()
-                                        .unwrap_or_default()
-                                        .try_into()
-                                        .unwrap(),
-                                },
-                            })),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        warn!("Response channel closed");
-                        break;
-                    };
+                        debug!(
+                            "Read {} bytes - {} of {}",
+                            bytes_read_since_last_ui_update, bytes_read, requested_file.size
+                        );
+                        bytes_read_since_last_ui_update = 0;
+
+                        if response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::Download(DownloadResponse {
+                                    path: associated_request.path.clone(),
+                                    peer_name: peer_name.clone(),
+                                    download_info: DownloadInfo::Downloading {
+                                        path: requested_file.path.clone(),
+                                        bytes_read,
+                                        total_bytes_read,
+                                        speed: speedometer
+                                            .measure()
+                                            .unwrap_or_default()
+                                            .try_into()
+                                            .unwrap(),
+                                    },
+                                })),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            warn!("Response channel closed");
+                            break;
+                        };
+                    }
                 }
-            }
-            Ok(None) => {
-                debug!("Stream ended");
-                bytes_read += bytes_read_since_last_ui_update;
-                break;
-            }
-            Err(error) => {
-                error!("Got error {:?}", error);
-                bytes_read += bytes_read_since_last_ui_update;
-                break;
+                Ok(None) => {
+                    debug!("Stream ended");
+                    bytes_read += bytes_read_since_last_ui_update;
+                    final_speed = speedometer
+                        .measure()
+                        .unwrap_or_default()
+                        .try_into()
+                        .unwrap();
+                    break;
+                }
+                Err(error) => {
+                    error!("Got error {:?}", error);
+                    bytes_read += bytes_read_since_last_ui_update;
+                    final_speed = speedometer
+                        .measure()
+                        .unwrap_or_default()
+                        .try_into()
+                        .unwrap();
+                    break;
+                }
             }
         }
     }
-
     // Send a final update to give the UI an accurate report on bytes downloaded
     if response_tx
         .send(UiServerMessage::Response {
@@ -250,11 +261,7 @@ async fn download(
                     path: requested_file.path.clone(),
                     bytes_read,
                     total_bytes_read,
-                    speed: speedometer
-                        .measure()
-                        .unwrap_or_default()
-                        .try_into()
-                        .unwrap(),
+                    speed: final_speed,
                 },
             })),
         })
@@ -271,16 +278,6 @@ async fn download(
             requested_file.size
         ));
     }
-    // Terminate with an endresponse
-    // if self.response_tx
-    //     .send(UiServerMessage::Response {
-    //         id,
-    //         response: Ok(UiResponse::EndResponse),
-    //     })
-    //     .is_err()
-    // {
-    //     warn!("Response channel closed");
-    // }
     Ok(())
 }
 
@@ -304,6 +301,8 @@ async fn make_read_request(
     Ok(recv)
 }
 
+/// Setup download and return the file as well as the offset if the file is already partially
+/// downloaded
 async fn setup_download(file_path: PathBuf, size: u64) -> anyhow::Result<(File, Option<u64>)> {
     // Create directory to put the downloaded file in
     create_dir_all(
