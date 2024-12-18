@@ -82,6 +82,14 @@ pub struct Hdp {
 }
 
 impl Hdp {
+    /// Constructor which also returns a [Receiver] for UI events
+    /// Takes:
+    /// - The directory to store the database
+    /// - Initial directories to share, if any
+    /// - Initial topic names to join, if any
+    /// - The path to store downloaded files
+    /// - An optional MQTT server to use for peer discovery if you do not want to use the default
+    /// - [DiscoveryMethods]
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
@@ -122,6 +130,8 @@ impl Hdp {
         // Derive a human-readable name from the public key
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
 
+        // Set home dir - this is used in the UI as a placeholder when choosing a directory to
+        // share
         // TODO for cross platform support we should use the `home` crate
         let os_home_dir = match std::env::var_os("HOME") {
             Some(o) => o.to_str().map(|s| s.to_string()),
@@ -138,6 +148,7 @@ impl Hdp {
         )
         .await;
 
+        // Setup initial topics
         let topics = initial_topic_names
             .iter()
             .map(|name| Topic::new(name.to_string()))
@@ -157,13 +168,15 @@ impl Hdp {
                 )
             }
             None => {
+                // This is for the case that we are behind an unfriendly NAT and don't have a fixed
+                // socket that peers can connect to
                 // Give cert_der and priv_key_der which we use to create an endpoint on a different
                 // port for each connecting peer
                 ServerConnection::Symmetric(cert_der, priv_key_der)
             }
         };
 
-        // Setup db for downloads requests
+        // Setup db for downloads/requests
         let wishlist = WishList::new(&db)?;
 
         Ok((
@@ -204,15 +217,18 @@ impl Hdp {
 
         loop {
             select! {
+                // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
                     self.handle_incoming_connection(incoming_conn).await;
                 }
+                // A command from the UI
                 Some(command) = self.command_rx.recv() => {
                     if let Err(err) = self.handle_command(command).await {
                         error!("Closing connection {err}");
                         break;
                     };
                 }
+                // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
                     if self.connect_to_peer(peer).await.is_err() {

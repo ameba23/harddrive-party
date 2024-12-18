@@ -10,3 +10,4 @@ pub mod ws;
 
 pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
+pub use hdp::Hdp;
