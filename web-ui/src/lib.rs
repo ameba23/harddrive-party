@@ -27,7 +27,7 @@ use leptos_router::*;
 use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use ui_messages::{DownloadResponse, UiDownloadRequest, UiResponse, UiServerMessage};
+use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage};
 use wasm_bindgen_futures::spawn_local;
 use wire_messages::{Entry, LsResponse};
 
@@ -148,15 +148,22 @@ pub fn HdpUi() -> impl IntoView {
                         }
                         Ok(UiResponse::Download(download_response)) => {
                             debug!("Got download response {:?}", download_response);
-                            // TODO check if we already have the associated request, otherwise get
-                            // it
+                            // TODO check if we already have the associated request
                             match download_response.download_info {
                                 DownloadInfo::Requested(timestamp) => {
+                                    let peer_path = PeerPath {
+                                        peer_name: download_response.peer_name.clone(),
+                                        path: download_response.path.clone(),
+                                    };
+                                    let total_size = files
+                                        .get()
+                                        .get(&peer_path)
+                                        .map_or(0, |file| file.size.unwrap_or_default());
                                     let request = UiDownloadRequest {
                                         path: download_response.path.clone(),
                                         peer_name: download_response.peer_name.clone(),
                                         progress: 0,
-                                        total_size: 0, // TODO
+                                        total_size,
                                         request_id: id,
                                         timestamp,
                                     };
@@ -166,10 +173,6 @@ pub fn HdpUi() -> impl IntoView {
                                         }
                                     });
                                     set_files.update(|files| {
-                                        let peer_path = PeerPath {
-                                            peer_name: download_response.peer_name.clone(),
-                                            path: download_response.path.clone(),
-                                        };
                                         files
                                             .entry(peer_path.clone())
                                             .and_modify(|file| {

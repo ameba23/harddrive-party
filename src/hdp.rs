@@ -991,12 +991,10 @@ impl Hdp {
                 todo!();
             }
             Command::Requests => {
-                println!("Requests called");
                 match self.wishlist.requested() {
                     Ok(response_iterator) => {
                         for res in response_iterator {
                             // TODO chunking
-                            println!("Sending response");
                             if self
                                 .response_tx
                                 .send(UiServerMessage::Response {

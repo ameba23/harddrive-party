@@ -1,8 +1,8 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
     display_bytes,
-    ui_messages::{Command, UiDownloadRequest, UiRequestedFile},
-    DownloadResponse, Entry, FilesReadSignal, PeerName, PeerPath, RequesterSetter, BUTTON_STYLE,
+    ui_messages::{Command, UiDownloadRequest},
+    Entry, RequesterSetter, BUTTON_STYLE,
 };
 use leptos::*;
 
@@ -48,8 +48,15 @@ impl File {
     }
 }
 
+#[derive(Eq, PartialEq)]
+pub enum FileDisplayContext {
+    Peer,
+    Transfer,
+    SearchResult,
+}
+
 #[component]
-pub fn File(file: File, is_shared: bool) -> impl IntoView {
+pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
     // let peer_details = use_context::<PeerName>().unwrap().0;
     let (file_name, _set_file_name) = create_signal(file.name);
@@ -67,6 +74,7 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
         if file.download_status.get() == DownloadStatus::Nothing
             && !is_shared
             && file.request.get() == None
+            && context != FileDisplayContext::Transfer
         {
             ""
         } else {
@@ -179,73 +187,6 @@ pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
     // This will be a progress bar
     view! {
         <span>{format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}</span>
-    }
-}
-
-/// A file which has been requested / downloaded
-#[component]
-pub fn Request(file: File) -> impl IntoView {
-    let request_option = file.request.get();
-    match request_option {
-        Some(request) => {
-            let files = use_context::<FilesReadSignal>().unwrap().0;
-            let peer_path = PeerPath {
-                peer_name: request.peer_name.clone(),
-                path: request.path.clone(),
-            };
-
-            let child_files = move || {
-                // Calling .get() clones - we should ideally use .with(|files| files.range...)
-                let files = files.get();
-
-                let mut upper_bound = peer_path.path.clone();
-                upper_bound.push_str("~");
-                files
-                    .range(
-                        peer_path.clone()..PeerPath {
-                            peer_name: peer_path.peer_name.clone(),
-                            path: upper_bound,
-                        },
-                    )
-                    .map(|(_, file)| file.clone()) // TODO ideally dont clone
-                    .collect::<Vec<File>>()
-            };
-            let is_dir = file.is_dir == Some(true);
-            view! {
-                <li>
-                    {request.peer_name} " "
-                    {display_bytes(request.total_size)} " "
-                    {move || {
-                        match file.download_status.get() {
-                            DownloadStatus::Downloading{ bytes_read, request_id: _} => {
-                                view! {
-                                    <span>
-                                        <DownloadingFile bytes_read size=file.size/>
-                                    </span>
-                                }
-                            }
-                            DownloadStatus::Downloaded(_) => {
-                                    view! { <span> "✅"</span>}
-                            }
-                            _ => {
-                                view! { <span></span> }
-                            }
-                        }
-                    }}
-
-               <table>
-                <For
-                    each=child_files
-                    key=|file| format!("{}{:?}", file.name, file.size)
-                    children=move |file: File| view! { <File file is_shared=false /> }
-                />
-            </table>
-                </li>
-            }
-        }
-        None => {
-            view! { <li>"Never happens"</li> }
-        }
     }
 }
 

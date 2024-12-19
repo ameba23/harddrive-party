@@ -1,4 +1,8 @@
-use crate::{display_bytes, file::File, FilesReadSignal, PeerName, PeerPath};
+use crate::{
+    display_bytes,
+    file::{File, FileDisplayContext},
+    FilesReadSignal, PeerName, PeerPath,
+};
 use leptos::*;
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
@@ -64,7 +68,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                 <For
                     each=files_iter
                     key=|file| file.name.clone()
-                    children=move |file: File| view! { <File file is_shared=peer.is_self/> }
+                    children=move |file: File| view! { <File file is_shared=peer.is_self context=FileDisplayContext::Peer /> }
                 />
             </table>
         </li>
