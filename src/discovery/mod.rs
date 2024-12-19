@@ -342,6 +342,15 @@ pub async fn handle_peer(
                         None
                     })
                 }
+                PeerConnectionDetails::Symmetric(_) => {
+                    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+                    Ok(Some(DiscoveredPeer {
+                        socket_address,
+                        socket_option: Some(socket),
+                        token: remote.token,
+                        topic: None,
+                    }))
+                }
                 _ => Ok(Some(DiscoveredPeer {
                     socket_address,
                     socket_option: None,
