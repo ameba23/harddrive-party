@@ -371,17 +371,10 @@ pub struct WishList {
     /// key: `<peer_public_key><timestamp><path>` value: `<request_id><size>`
     requested_files_by_peer: sled::Tree,
     /// Requested files ordered by request_id
+    /// We dont store bytes downloaded for individual files - only bool whether or not they are
+    /// completely downloaded
     /// key: `<requestid><path>` value: `<size><downloaded>`
     requested_files_by_request_id: sled::Tree,
-    // /// Downloaded files
-    // /// key: `<timestamp><request_id><path>` value: `<size>`
-    // db_downloaded_files: sled::Tree,
-    // Completed download requests
-    // key: `<request_id>` value: `<timestamp><peer_public_key><total_size><path>`
-    // db_completed_requests: sled::Tree,
-    // TODO completed requests_by_timestamp
-    // key: `<timestamp><request_id>` value:
-    // response_tx: Sender<UiServerMessage>,
 }
 
 impl WishList {
@@ -420,6 +413,7 @@ impl WishList {
         Ok(Box::new(iter))
     }
 
+    /// Get files associated with a given request id
     pub fn requested_files(
         &self,
         request_id: u32,
@@ -439,28 +433,6 @@ impl WishList {
 
         Ok(Box::new(iter))
     }
-    // /// Get all downloaded items to send to UI
-    // pub fn downloaded(
-    //     &self,
-    // ) -> anyhow::Result<Box<dyn Iterator<Item = UiRequestedFile> + Send + '_>> {
-    //     let iter = self
-    //         .db_downloaded_files
-    //         .iter()
-    //         .filter_map(|kv_result| match kv_result {
-    //             Ok((key, value)) => {
-    //                 match RequestedFile::from_downloaded_files_db_key_value(
-    //                     key.to_vec(),
-    //                     value.to_vec(),
-    //                 ) {
-    //                     Ok(download_request) => Some(download_request.into_ui_requested_file()),
-    //                     Err(_) => None,
-    //                 }
-    //             }
-    //             Err(_) => None,
-    //         });
-    //
-    //     Ok(Box::new(iter))
-    // }
 
     /// Subscribe to requested files for a particular peer
     pub fn requests_for_peer(
@@ -508,6 +480,7 @@ impl WishList {
     }
 
     /// Add a download request for a particular file
+    /// Should be called after add_request
     pub fn add_requested_file(&self, requested_file: &RequestedFile) -> anyhow::Result<()> {
         let download_request = self.get_request(requested_file.request_id)?;
 
@@ -515,13 +488,11 @@ impl WishList {
             .to_db_key_value(download_request.peer_public_key, download_request.timestamp);
         self.requested_files_by_peer.insert(key, value)?;
         self.requested_files_by_request_id.insert(key2, value2)?;
-        // self.requests_by_timestamp.insert(key2, value2)?;
 
         Ok(())
     }
 
-    /// Remove a specific completed item from the wishlist and
-    /// add it to the downloaded list
+    /// Mark a particular requested file as completely downloaded
     pub fn file_completed(&self, requested_file: RequestedFile) -> anyhow::Result<bool> {
         if !requested_file.downloaded {
             return Err(anyhow!("File not marked as downloaded"));
@@ -546,27 +517,11 @@ impl WishList {
         // Mark file as downloaded
         self.requested_files_by_request_id.insert(key2, value2)?;
 
-        // // Add the item to 'downloaded' db
-        // let timestamp = SystemTime::now()
-        //     .duration_since(SystemTime::UNIX_EPOCH)
-        //     .expect("Time went backwards");
-        // let (key, value) = requested_file.to_downloaded_files_db_key_value(timestamp);
-        // self.db_downloaded_files.insert(key, value)?;
-
         // Check if this was the last file associatd with this download request
         Ok(updated_bytes == download_request.total_size)
     }
 
-    // pub async fn requested_files(&self) -> anyhow::Result<Vec<UiDownloadRequest>> {
-    //     let requested: Vec<UiDownloadRequest> = self.requested()?.take(MAX_ENTRIES).collect();
-    //     Ok(requested)
-    // }
-    //
-    // pub async fn downloaded_files(&self) -> anyhow::Result<Vec<UiRequestedFile>> {
-    //     let downloaded: Vec<UiRequestedFile> = self.downloaded()?.take(MAX_ENTRIES).collect();
-    //     Ok(downloaded)
-    // }
-
+    /// Given a request id, return the number of bytes downloaded so far
     pub fn get_download_progress_for_request(&self, request_id: u32) -> anyhow::Result<u64> {
         Ok(
             match self
@@ -584,6 +539,7 @@ impl WishList {
         )
     }
 
+    /// Given a request id, return a request
     pub fn get_request(&self, request_id: u32) -> anyhow::Result<DownloadRequest> {
         let request_id = request_id.to_be_bytes();
         let request_details = self

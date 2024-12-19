@@ -125,6 +125,7 @@ async fn process_requests(
                             {
                                 warn!("Response channel closed");
                             };
+                            // TODO here we could also send an EndResponse message
                         }
                     }
                     Err(e) => {

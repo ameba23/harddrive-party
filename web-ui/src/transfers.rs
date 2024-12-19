@@ -11,20 +11,6 @@ pub fn Transfers(
     requests: ReadSignal<Requests>,
     files: ReadSignal<BTreeMap<PeerPath, File>>,
 ) -> impl IntoView {
-    // let downloaded = move || {
-    //     downloaded
-    //         .get()
-    //         .iter()
-    //         .filter_map(|peer_path| {
-    //             let files = files.get();
-    //             match files.get(peer_path) {
-    //                 Some(file) => Some(file.clone()),
-    //                 None => None,
-    //             }
-    //         })
-    //         .collect::<Vec<File>>()
-    // };
-
     let wishlist = move || {
         requests
             .get()
