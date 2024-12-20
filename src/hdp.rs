@@ -943,12 +943,11 @@ impl Hdp {
                 match self.wishlist.requested_files(request_id) {
                     Ok(response_iterator) => {
                         for res in response_iterator {
-                            // TODO chunking
                             if self
                                 .response_tx
                                 .send(UiServerMessage::Response {
                                     id,
-                                    response: Ok(UiResponse::RequestedFiles(vec![res])),
+                                    response: Ok(UiResponse::RequestedFiles(res)),
                                 })
                                 .await
                                 .is_err()
@@ -994,12 +993,11 @@ impl Hdp {
                 match self.wishlist.requested() {
                     Ok(response_iterator) => {
                         for res in response_iterator {
-                            // TODO chunking
                             if self
                                 .response_tx
                                 .send(UiServerMessage::Response {
                                     id,
-                                    response: Ok(UiResponse::Requests(vec![res])),
+                                    response: Ok(UiResponse::Requests(res)),
                                 })
                                 .await
                                 .is_err()

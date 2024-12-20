@@ -247,7 +247,7 @@ fn kv_filter_map(
             full_suffix
         };
         if suffix.contains(MAIN_SEPARATOR) {
-            println!("skipping entry {}", suffix);
+            debug!("Skipping entry {} during share filter map", suffix);
             return None;
         }
     }
@@ -268,13 +268,13 @@ fn kv_filter_map(
 }
 
 /// Turn an iterator into an iterator containing vectors of chunks of a given size
-struct Chunker {
-    inner: Box<dyn Iterator<Item = Entry> + Send>,
-    chunk_size: usize,
+pub struct Chunker<T> {
+    pub inner: Box<dyn Iterator<Item = T> + Send>,
+    pub chunk_size: usize,
 }
 
-impl Iterator for Chunker {
-    type Item = Vec<Entry>;
+impl<T> Iterator for Chunker<T> {
+    type Item = Vec<T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut entries = Vec::new();

@@ -4,6 +4,7 @@ use crate::{
         REQUESTED_FILES_BY_PEER, REQUESTED_FILES_BY_REQUEST_ID, REQUESTS, REQUESTS_BY_TIMESTAMP,
         REQUESTS_PROGRESS,
     },
+    shares::Chunker,
     ui_messages::UiDownloadRequest,
 };
 use anyhow::anyhow;
@@ -14,7 +15,7 @@ use key_to_animal::key_to_name;
 use std::time::{Duration, SystemTime};
 
 /// How many entries to send when updating the UI
-const MAX_ENTRIES: usize = 100;
+const MAX_ENTRIES_PER_MESSAGE: usize = 64;
 
 type KeyValue = (Vec<u8>, Vec<u8>);
 
@@ -394,30 +395,41 @@ impl WishList {
     /// Get all requested items to send to UI
     pub fn requested(
         &self,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = UiDownloadRequest> + Send + '_>> {
-        let iter = self.requests_by_timestamp.iter().filter_map(|kv_result| {
-            let (_key, request_id) = kv_result.ok()?;
-            let request_details = self.requests_by_request_id.get(&request_id).ok()??;
-            let download_request =
-                DownloadRequest::from_db_key_value(request_id.to_vec(), request_details.to_vec())
-                    .ok()?;
-            let progress = self
-                .get_download_progress_for_request(u32::from_be_bytes(
-                    request_id.to_vec().try_into().ok()?,
-                ))
+    ) -> anyhow::Result<Box<dyn Iterator<Item = Vec<UiDownloadRequest>> + Send + '_>> {
+        let wishlist = self.clone();
+        let iter = self
+            .requests_by_timestamp
+            .iter()
+            .filter_map(move |kv_result| {
+                let (_key, request_id) = kv_result.ok()?;
+                let request_details = wishlist.requests_by_request_id.get(&request_id).ok()??;
+                let download_request = DownloadRequest::from_db_key_value(
+                    request_id.to_vec(),
+                    request_details.to_vec(),
+                )
                 .ok()?;
+                let progress = wishlist
+                    .get_download_progress_for_request(u32::from_be_bytes(
+                        request_id.to_vec().try_into().ok()?,
+                    ))
+                    .ok()?;
 
-            Some(download_request.into_ui_download_request(progress))
-        });
+                Some(download_request.into_ui_download_request(progress))
+            });
 
-        Ok(Box::new(iter))
+        let chunked = Chunker {
+            inner: Box::new(iter),
+            chunk_size: MAX_ENTRIES_PER_MESSAGE,
+        };
+
+        Ok(Box::new(chunked))
     }
 
     /// Get files associated with a given request id
     pub fn requested_files(
         &self,
         request_id: u32,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = UiRequestedFile> + Send + '_>> {
+    ) -> anyhow::Result<Box<dyn Iterator<Item = Vec<UiRequestedFile>> + Send + '_>> {
         let request_id_buf = request_id.to_be_bytes();
         let iter = self
             .requested_files_by_request_id
@@ -431,7 +443,12 @@ impl WishList {
                 Err(_) => None,
             });
 
-        Ok(Box::new(iter))
+        let chunked = Chunker {
+            inner: Box::new(iter),
+            chunk_size: MAX_ENTRIES_PER_MESSAGE,
+        };
+
+        Ok(Box::new(chunked))
     }
 
     /// Subscribe to requested files for a particular peer
@@ -604,7 +621,10 @@ mod tests {
 
         let mut requests = wishlist.requested().unwrap();
 
-        assert_eq!(Some(dl_req.into_ui_download_request(0)), requests.next());
+        assert_eq!(
+            Some(vec![dl_req.into_ui_download_request(0)]),
+            requests.next()
+        );
         assert_eq!(None, requests.next());
 
         requested_file.downloaded = true;
