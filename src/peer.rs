@@ -110,8 +110,9 @@ async fn process_requests(
                 match wishlist.file_completed(request) {
                     Ok(request_complete) => {
                         // If all files associated with this request have been downloaded
-                        if request_complete {
-                            if response_tx
+                        // TODO here we could also send an EndResponse message
+                        if request_complete
+                            && response_tx
                                 .send(UiServerMessage::Response {
                                     id,
                                     response: Ok(UiResponse::Download(DownloadResponse {
@@ -122,11 +123,9 @@ async fn process_requests(
                                 })
                                 .await
                                 .is_err()
-                            {
-                                warn!("Response channel closed");
-                            };
-                            // TODO here we could also send an EndResponse message
-                        }
+                        {
+                            warn!("Response channel closed");
+                        };
                     }
                     Err(e) => {
                         warn!("Could not remove item from wishlist {:?}", e)
