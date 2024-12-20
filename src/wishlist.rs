@@ -95,17 +95,10 @@ impl DownloadRequest {
     /// key: <timestamp> value: `<request_id>`
     fn to_db_key_value(&self) -> (KeyValue, KeyValue) {
         let path_buf = self.path.as_bytes();
-        // let mut key: Vec<u8> = Vec::with_capacity(32 + 8 + path_buf.len());
-        // key.append(&mut self.peer_public_key.clone().to_vec());
 
         let timestamp_secs = self.timestamp.as_secs();
         let timestamp_secs_buf = timestamp_secs.to_be_bytes();
-        // key.append(&mut timestamp_secs_buf.to_vec());
-        //
-        // let path_clone = self.path.clone();
-        // let path_buf = path_clone.as_bytes();
-        // key.append(&mut path_buf.to_vec());
-        //
+
         let request_id_buf = self.request_id.to_be_bytes();
         let total_size_buf = self.total_size.to_be_bytes();
 
@@ -117,55 +110,8 @@ impl DownloadRequest {
         let kv1 = (request_id_buf.to_vec(), value1);
 
         let kv2 = (timestamp_secs_buf.to_vec(), request_id_buf.to_vec());
-        //
-        // let mut value: [u8; 4 + 8] = [0u8; 4 + 8];
-        // value[0..4].copy_from_slice(&request_id_buf);
-        // value[4..4 + 8].copy_from_slice(&size_buf);
-        // let kv1 = (key.to_vec(), value.to_vec());
-        //
-        // let mut key2: [u8; 8 + 4] = [0u8; 8 + 4];
-        // key2[0..8].copy_from_slice(&timestamp_secs_buf);
-        // key2[8..8 + 4].copy_from_slice(&request_id_buf);
-        //
-        // let requested_path = requested_path.unwrap_or_default();
-        // let mut value2: Vec<u8> = Vec::with_capacity(32 + requested_path.len());
-        // value2.append(&mut self.peer_public_key.to_vec());
-        // value2.append(&mut requested_path.as_bytes().to_vec());
-        //
-        // let kv2 = (key2.to_vec(), value2);
         (kv1, kv2)
     }
-
-    // // Convert a completed download request to the format for storing a record
-    // // of the completed download
-    // fn into_downloaded_db_key_value(self) -> KeyValue {
-    //     // key: <timestamp><request_id><path> value: <peer_public_key><size>
-    //     let path_buf = self.path.as_bytes();
-    //     let mut key: Vec<u8> = Vec::with_capacity(8 + 4 + path_buf.len());
-    //
-    //     // Record the time of the completed download
-    //     let system_time = SystemTime::now();
-    //     let timestamp = system_time
-    //         .duration_since(SystemTime::UNIX_EPOCH)
-    //         .expect("Time went backwards");
-    //
-    //     let timestamp_secs = timestamp.as_secs();
-    //     let timestamp_secs_buf = timestamp_secs.to_be_bytes();
-    //     key.append(&mut timestamp_secs_buf.to_vec());
-    //
-    //     let request_id_buf = self.request_id.to_be_bytes();
-    //     key.append(&mut request_id_buf.to_vec());
-    //
-    //     key.append(&mut path_buf.to_vec());
-    //
-    //     let mut value: [u8; 32 + 8] = [0u8; 32 + 8];
-    //     value[0..32].copy_from_slice(&self.peer_public_key);
-    //
-    //     let size_buf = self.total_size.to_be_bytes();
-    //     value[32..32 + 8].copy_from_slice(&size_buf);
-    //
-    //     (key, value.to_vec())
-    // }
 
     /// Given a completed requests db record, create a download request
     ///
@@ -309,41 +255,6 @@ impl RequestedFile {
         (kv1, kv2)
     }
 
-    // /// key: `<timestamp><request_id><path>` value: `<size>`
-    // fn from_downloaded_files_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
-    //     // TODO add assertions that key / value have minimum length
-    //     let request_id_buf: [u8; 4] = key[8..8 + 4].try_into()?;
-    //     let request_id = u32::from_be_bytes(request_id_buf);
-    //
-    //     let path = std::str::from_utf8(&key[8 + 4..])?.to_string();
-    //
-    //     let size_buf: [u8; 8] = value[..8].try_into()?;
-    //     let size = u64::from_be_bytes(size_buf);
-    //     Ok(Self {
-    //         path,
-    //         size,
-    //         request_id,
-    //     })
-    // }
-    //
-    // /// key: `<timestamp><request_id><path>` value: `<size>`
-    // fn to_downloaded_files_db_key_value(&self, timestamp: Duration) -> (Vec<u8>, Vec<u8>) {
-    //     let path_buf = self.path.as_bytes();
-    //     let mut key: Vec<u8> = Vec::with_capacity(8 + 8 + path_buf.len());
-    //
-    //     let timestamp_secs = timestamp.as_secs();
-    //     let timestamp_secs_buf = timestamp_secs.to_be_bytes();
-    //     key.append(&mut timestamp_secs_buf.to_vec());
-    //
-    //     let request_id_buf = self.request_id.to_be_bytes();
-    //     key.append(&mut request_id_buf.to_vec());
-    //     key.append(&mut path_buf.to_vec());
-    //
-    //     let size_buf = self.size.to_be_bytes();
-    //
-    //     (key, size_buf.to_vec())
-    // }
-
     fn into_ui_requested_file(self) -> UiRequestedFile {
         UiRequestedFile {
             path: self.path,
@@ -385,10 +296,7 @@ impl WishList {
             requests_by_timestamp: db.open_tree(REQUESTS_BY_TIMESTAMP)?,
             requested_files_by_peer: db.open_tree(REQUESTED_FILES_BY_PEER)?,
             bytes_downloaded_by_request_id: db.open_tree(REQUESTS_PROGRESS)?,
-            // db_downloaded_files: db.open_tree(DOWNLOADED)?,
             requested_files_by_request_id: db.open_tree(REQUESTED_FILES_BY_REQUEST_ID)?,
-            // db_completed_requests: db.open_tree(COMPLETED_REQUESTS)?,
-            // response_tx,
         })
     }
 
@@ -491,8 +399,6 @@ impl WishList {
         let ((key, value), (key2, value2)) = download_request.to_db_key_value();
         self.requests_by_request_id.insert(key, value)?;
         self.requests_by_timestamp.insert(key2, value2)?;
-        // TODO here we should send a download response indicating that a request is made
-        // or do it in the fn that calls this
         Ok(())
     }
 
@@ -602,16 +508,18 @@ mod tests {
         let db = sled::open(db_dir).expect("open");
         let wishlist = WishList::new(&db).unwrap();
 
+        let request_id = 42;
+
         let mut requested_file = RequestedFile {
             path: "books/book.pdf".to_string(),
             size: 501546,
-            request_id: 5144,
+            request_id,
             downloaded: false,
         };
         let dl_req = DownloadRequest::new(
             "books/book.pdf".to_string(),
             501546,
-            5144,
+            request_id,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
         );
 
@@ -626,6 +534,14 @@ mod tests {
             requests.next()
         );
         assert_eq!(None, requests.next());
+
+        let mut requested_files = wishlist.requested_files(request_id).unwrap();
+
+        assert_eq!(
+            Some(vec![requested_file.clone().into_ui_requested_file()]),
+            requested_files.next()
+        );
+        assert_eq!(None, requested_files.next());
 
         requested_file.downloaded = true;
         let request_complete = wishlist.file_completed(requested_file.clone()).unwrap();
