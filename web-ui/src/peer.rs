@@ -1,7 +1,7 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    FilesReadSignal, PeerName, PeerPath,
+    FilesReadSignal, PeerPath,
 };
 use leptos::*;
 use std::collections::{HashMap, HashSet};

@@ -40,12 +40,6 @@ pub const BUTTON_STYLE: &str =
 struct RequesterSetter(WriteSignal<Requester>);
 
 #[derive(Clone)]
-struct PeerName(ReadSignal<(String, bool)>);
-
-// #[derive(Clone)]
-// struct Requested(ReadSignal<HashSet<PeerPath>>);
-
-#[derive(Clone)]
 struct FilesReadSignal(ReadSignal<BTreeMap<PeerPath, File>>);
 
 /// Represents a remote file
@@ -210,7 +204,7 @@ pub fn HdpUi() -> impl IntoView {
                                     path,
                                     bytes_read,
                                     total_bytes_read,
-                                    speed,
+                                    speed: _,
                                 } => {
                                     set_files.update(|files| {
                                         files
@@ -219,7 +213,6 @@ pub fn HdpUi() -> impl IntoView {
                                                 path: path.clone(),
                                             })
                                             .and_modify(|file| {
-                                                // TODO if bytes_read == size mark as completed
                                                 let download_status = if bytes_read
                                                     == file.size.unwrap_or_default()
                                                 {
@@ -243,7 +236,7 @@ pub fn HdpUi() -> impl IntoView {
                                     });
 
                                     set_requests.update(|requests| {
-                                        // Find request with this request id
+                                        // TODO Find request with this request id
                                         // update the total_bytes_read
                                     });
                                 }
