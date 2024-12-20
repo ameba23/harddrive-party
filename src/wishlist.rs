@@ -547,13 +547,5 @@ mod tests {
         let request_complete = wishlist.file_completed(requested_file.clone()).unwrap();
 
         assert!(request_complete);
-        // let mut downloaded_items = wishlist.downloaded().unwrap();
-        //
-        // assert_eq!(
-        //     Some(requested_file.into_ui_requested_file()),
-        //     downloaded_items.next()
-        // );
-        //
-        // assert_eq!(None, downloaded_items.next());
     }
 }
