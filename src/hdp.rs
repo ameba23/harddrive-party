@@ -318,7 +318,7 @@ impl Hdp {
     }
 
     /// Handle an incoming connection from a remote peer
-    async fn handle_incoming_connection(&mut self, incoming_conn: quinn::Connecting) {
+    async fn handle_incoming_connection(&mut self, incoming_conn: quinn::Incoming) {
         // if self
         //     .peers
         //     .contains_key(&incoming_conn.remote_address().to_string())
@@ -1047,7 +1047,7 @@ impl Hdp {
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
         send.write_all(&buf).await?;
-        send.finish().await?;
+        send.finish()?;
         debug!("message sent");
         Ok(recv)
     }
@@ -1127,9 +1127,9 @@ async fn handle_session_token(
     if let Some(thier_token) = token {
         let (mut send, _recv) = conn.open_bi().await?;
         send.write_all(&thier_token).await?;
-        send.finish().await?;
+        send.finish()?;
     } else {
-        let (_send, recv) = conn.accept_bi().await?;
+        let (_send, mut recv) = conn.accept_bi().await?;
         let buf = recv.read_to_end(TOKEN_LENGTH).await?;
         ensure!(buf == our_token, "Rejected remote peer's token");
     }
@@ -1139,7 +1139,7 @@ async fn handle_session_token(
 async fn accept_incoming_request(
     conn: &quinn::Connection,
 ) -> anyhow::Result<(quinn::SendStream, Vec<u8>)> {
-    let (send, recv) = conn.accept_bi().await?;
+    let (send, mut recv) = conn.accept_bi().await?;
     let buf = recv.read_to_end(MAX_REQUEST_SIZE).await?;
     Ok((send, buf))
 }

@@ -41,7 +41,7 @@ impl PunchingUdpSocket {
     pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
         let socket = socket.into_std()?;
 
-        quinn_udp::UdpSocketState::configure((&socket).into())?;
+        let quinn_socket_state = quinn_udp::UdpSocketState::new((&socket).into())?;
 
         let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
@@ -70,7 +70,7 @@ impl PunchingUdpSocket {
         Ok((
             Self {
                 socket,
-                quinn_socket_state: quinn_udp::UdpSocketState::new(),
+                quinn_socket_state,
                 udp_recv_tx: udp_recv_tx.clone(),
             },
             HolePuncher {
@@ -83,22 +83,13 @@ impl PunchingUdpSocket {
 }
 
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {
-    fn poll_send(
-        &mut self,
-        state: &quinn_udp::UdpState,
-        cx: &mut Context,
-        transmits: &[quinn::Transmit],
-    ) -> Poll<io::Result<usize>> {
-        let quinn_socket_state = &mut self.quinn_socket_state;
+    fn create_io_poller(self: Arc<Self>) -> std::pin::Pin<Box<dyn quinn::UdpPoller>> {
+        todo!()
+    }
+
+    fn try_send(&self, transmit: &quinn_udp::Transmit) -> io::Result<()> {
         let io = &*self.socket;
-        loop {
-            ready!(io.poll_send_ready(cx))?;
-            if let Ok(res) = io.try_io(Interest::WRITABLE, || {
-                quinn_socket_state.send(io.into(), state, transmits)
-            }) {
-                return Poll::Ready(Ok(res));
-            }
-        }
+        self.quinn_socket_state.try_send(io.into(), transmit)
     }
 
     fn poll_recv(

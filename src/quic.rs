@@ -1,9 +1,12 @@
 //! Configuration for QUIC connections to remote peers
 use anyhow::anyhow;
 use log::{debug, warn};
-use quinn::{AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig};
+use quinn::{
+    crypto::rustls::QuicServerConfig, AsyncUdpSocket, ClientConfig, Connection, Endpoint,
+    ServerConfig,
+};
 use ring::signature::Ed25519KeyPair;
-use rustls::{Certificate, SignatureScheme};
+use rustls::{pki_types::CertificateDer, SignatureScheme};
 use std::{sync::Arc, time::Duration};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -30,8 +33,8 @@ pub async fn make_server_endpoint(
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         Default::default(),
         Some(server_config),
-        socket,
-        quinn::TokioRuntime,
+        Arc::new(socket),
+        Arc::new(quinn::TokioRuntime),
     )?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
@@ -48,20 +51,20 @@ pub async fn make_server_endpoint_basic_socket(
         Default::default(),
         Some(server_config),
         socket.into_std()?,
-        quinn::TokioRuntime,
+        Arc::new(quinn::TokioRuntime),
     )?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
 }
 
 /// Given a Quic connection, get the TLS certificate
-pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<CertificateDer> {
     let identity = conn
         .peer_identity()
         .ok_or_else(|| anyhow!("No peer certificate"))?;
 
     let remote_cert = identity
-        .downcast::<Vec<Certificate>>()
+        .downcast::<Vec<CertificateDer>>()
         .map_err(|_| anyhow!("No certificate"))?;
     remote_cert
         .first()
@@ -82,6 +85,7 @@ fn configure_server(
         .with_client_cert_verifier(SkipClientVerification::new())
         .with_single_cert(cert_chain.clone(), priv_key)?;
 
+    let conf = QuicServerConfig::try_from(crypto).unwrap();
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
     Arc::get_mut(&mut server_config.transport)
