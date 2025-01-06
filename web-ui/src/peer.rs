@@ -1,4 +1,8 @@
-use crate::{display_bytes, file::File, FilesReadSignal, PeerName, PeerPath};
+use crate::{
+    display_bytes,
+    file::{File, FileDisplayContext},
+    FilesReadSignal, PeerPath,
+};
 use leptos::*;
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
@@ -27,13 +31,15 @@ pub fn Peer(peer: Peer) -> impl IntoView {
     let (peer_signal, _set_peer) = create_signal((peer.name.clone(), peer.is_self));
 
     // This should probably be in a closure
-    let root_size = match files.get().get(&PeerPath {
-        peer_name: peer.name,
-        path: "".to_string(),
-    }) {
-        Some(file) => file.size,
-        None => 0,
-    };
+    let root_size = display_bytes(
+        match files.get().get(&PeerPath {
+            peer_name: peer.name,
+            path: "".to_string(),
+        }) {
+            Some(file) => file.size.unwrap_or_default(),
+            None => 0,
+        },
+    );
 
     let files_iter = move || {
         // Calling .get() clones - we should ideally use .with(|files| files.range...)
@@ -54,15 +60,15 @@ pub fn Peer(peer: Peer) -> impl IntoView {
             .collect::<Vec<File>>()
     };
 
-    provide_context(PeerName(peer_signal));
+    // provide_context(PeerName(peer_signal));
     view! {
         <li>
-            {peer_signal.get().0} " " {display_bytes(root_size)} " shared" <table>
+            {peer_signal.get().0} " " {root_size} " shared" <table>
 
                 <For
                     each=files_iter
                     key=|file| file.name.clone()
-                    children=move |file: File| view! { <File file is_shared=peer.is_self/> }
+                    children=move |file: File| view! { <File file is_shared=peer.is_self context=FileDisplayContext::Peer /> }
                 />
             </table>
         </li>

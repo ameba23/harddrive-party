@@ -53,5 +53,4 @@ rust-embed = "6"
 mqtt-protocol = { version = "0.12.0", features = ["tokio"] }
 
 [dev-dependencies]
-sluice = "0.5.5"
 tempfile = "3.3.0"

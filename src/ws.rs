@@ -1,4 +1,8 @@
 //! Websocket server / client for communication with UI
+//!
+//! This is optional - you can use this crate as a library and have a desktop or terminal UI which
+//! communicates directly with the [crate::Hdp] instance, but the advantage of using this module is
+//! that the UI can be run on a different machine than the back-end, or in the browser.
 
 use crate::ui_messages::{
     Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage,
@@ -25,7 +29,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 type Tx = Sender<UiServerMessage>;
 type ClientMap = Arc<RwLock<HashMap<SocketAddr, Tx>>>;
 
-/// WS server
+/// Websocket server
 pub async fn server(
     listener: TcpListener,
     command_tx: Sender<UiClientMessage>,
@@ -250,9 +254,6 @@ async fn read_responses(
 fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
     if let UiServerMessage::Event(ui_event) = server_message {
         match ui_event {
-            UiEvent::Wishlist { .. } => {
-                cache.push(ui_event.clone());
-            }
             UiEvent::Uploaded(_) => {}
             UiEvent::PeerConnected { .. } => {
                 cache.push(ui_event.clone());

@@ -2,63 +2,80 @@
 use crate::{
     display_bytes,
     ui_messages::{Command, UiDownloadRequest},
-    DownloadResponse, Entry, PeerName, RequesterSetter, BUTTON_STYLE,
+    Entry, RequesterSetter, BUTTON_STYLE,
 };
 use leptos::*;
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]
 pub struct File {
+    /// Path of file
     pub name: String,
-    pub size: u64,
-    pub is_dir: bool,
+    /// Name of peer who holds this file
+    pub peer_name: String,
+    /// Size, if known
+    pub size: Option<u64>,
+    pub is_dir: Option<bool>,
     pub download_status: RwSignal<DownloadStatus>,
-    /// The associated request, if there is one
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
 
 impl File {
-    pub fn from_entry(entry: Entry) -> Self {
+    pub fn from_entry(entry: Entry, peer_name: String) -> Self {
         Self {
             name: entry.name,
-            size: entry.size,
-            is_dir: entry.is_dir,
+            peer_name,
+            size: Some(entry.size),
+            is_dir: Some(entry.is_dir),
             download_status: create_rw_signal(DownloadStatus::Nothing),
             request: create_rw_signal(None),
         }
     }
 
-    pub fn from_download_request(
-        download_request: UiDownloadRequest,
+    pub fn from_downloading_file(
+        name: String,
+        peer_name: String,
         download_status: DownloadStatus,
     ) -> Self {
         Self {
-            name: download_request.path.clone(),
-            size: download_request.size,
-            is_dir: false,
+            name,
+            peer_name,
+            size: None,
+            is_dir: Some(false),
             download_status: create_rw_signal(download_status),
-            request: create_rw_signal(Some(download_request)),
+            request: create_rw_signal(None),
         }
     }
 }
 
+#[derive(Eq, PartialEq)]
+pub enum FileDisplayContext {
+    Peer,
+    Transfer,
+    SearchResult,
+}
+
 #[component]
-pub fn File(file: File, is_shared: bool) -> impl IntoView {
+pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    let peer_details = use_context::<PeerName>().unwrap().0;
+    // let peer_details = use_context::<PeerName>().unwrap().0;
     let (file_name, _set_file_name) = create_signal(file.name);
 
     let download_request = move |_| {
         let download = Command::Download {
             path: file_name.get().to_string(),
-            peer_name: peer_details.get().0,
+            peer_name: file.peer_name.clone(),
         };
         set_requester.update(|requester| requester.make_request(download));
     };
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button_style = move || {
-        if file.download_status.get() == DownloadStatus::Nothing && !peer_details.get().1 {
+        if file.download_status.get() == DownloadStatus::Nothing
+            && !is_shared
+            && file.request.get() == None
+            && context != FileDisplayContext::Transfer
+        {
             ""
         } else {
             "display:none"
@@ -67,7 +84,11 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
-        let icon = if file.is_dir { "🗀 " } else { "🗎 " };
+        let icon = match file.is_dir {
+            Some(true) => "🗀 ",
+            Some(false) => "🗎 ",
+            None => " ",
+        };
         let (name, indentation) = match file_name.rsplit_once('/') {
             Some((path, name)) => {
                 let indent = path.split('/').count();
@@ -84,11 +105,13 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
         }
     };
 
+    let is_dir = file.is_dir == Some(true);
+
     view! {
         <tr class="hover:bg-gray-200">
             <td>{file_name_and_indentation}</td>
             <td>
-                " " {display_bytes(file.size)} " "
+                " " {display_bytes(file.size.unwrap_or_default())} " "
                 <button
                     class=BUTTON_STYLE
                     style=download_button_style
@@ -102,16 +125,24 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
                         DownloadStatus::Nothing => {
                             view! { <span></span> }
                         }
-                        DownloadStatus::Downloaded => {
-                            view! { <span>"Downloaded"</span> }
+                        DownloadStatus::Downloaded(_) => {
+                            if is_dir {
+                                view! { <span> "Downloaded" </span> }
+                            } else {
+
+                            view! { <span>
+                                "Downloaded"
+                                        <Preview file_path=&file_name.get() shared=is_shared />
+                                    </span> }
+                            }
                         }
-                        DownloadStatus::Requested => {
+                        DownloadStatus::Requested(_) => {
                             view! { <span>"Requested"</span> }
                         }
-                        DownloadStatus::Downloading(download_response) => {
+                        DownloadStatus::Downloading{ bytes_read, .. } => {
                             view! {
                                 <span>
-                                    <DownloadingFile download_response size=file.size/>
+                                    <DownloadingFile bytes_read size=file.size/>
                                 </span>
                             }
                         }
@@ -145,58 +176,17 @@ pub fn File(file: File, is_shared: bool) -> impl IntoView {
 #[derive(Clone, Debug, PartialEq)]
 pub enum DownloadStatus {
     Nothing,
-    Requested,
-    Downloading(DownloadResponse),
-    Downloaded,
+    Requested(u32),
+    Downloading { bytes_read: u64, request_id: u32 },
+    Downloaded(u32),
 }
 
 /// Show progress when currently downloading
 #[component]
-pub fn DownloadingFile(download_response: DownloadResponse, size: u64) -> impl IntoView {
+pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
     // This will be a progress bar
     view! {
-        <span>{format!("Downloading {} of {} bytes...", download_response.bytes_read, size)}</span>
-    }
-}
-
-/// A file which has been requested / downloaded
-#[component]
-pub fn Request(file: File) -> impl IntoView {
-    let request_option = file.request.get();
-    match request_option {
-        Some(request) => {
-            view! {
-                <li>
-                    {request.peer_name} " " <code>{&request.path}</code> " "
-                    {display_bytes(request.size)} " "
-                    {move || {
-                        match file.download_status.get() {
-                            DownloadStatus::Downloading(download_response) => {
-                                view! {
-                                    <span>
-                                        <DownloadingFile download_response size=file.size/>
-                                    </span>
-                                }
-                            }
-                            DownloadStatus::Downloaded => {
-                                view! {
-                                    <span>
-                                        <Preview file_path=&request.path shared=false/>
-                                    </span>
-                                }
-                            }
-                            _ => {
-                                view! { <span></span> }
-                            }
-                        }
-                    }}
-
-                </li>
-            }
-        }
-        None => {
-            view! { <li>"Never happens"</li> }
-        }
+        <span>{format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}</span>
     }
 }
 

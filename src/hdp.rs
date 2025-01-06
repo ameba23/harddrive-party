@@ -1,7 +1,9 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{topic::Topic, DiscoveredPeer, PeerDiscovery, SessionToken, TOKEN_LENGTH},
+    discovery::{
+        topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, SessionToken, TOKEN_LENGTH,
+    },
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -11,14 +13,14 @@ use crate::{
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
     wire_messages::{Entry, IndexQuery, LsResponse, Request},
-    wishlist::{DownloadRequest, WishList},
+    wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::ensure;
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use futures::{pin_mut, stream::BoxStream, StreamExt};
-use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
+use harddrive_party_shared::ui_messages::{DownloadInfo, DownloadResponse, PeerRemoteOrSelf};
 use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Endpoint, RecvStream};
@@ -28,6 +30,7 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, SystemTime},
 };
 use thiserror::Error;
 use tokio::{
@@ -45,9 +48,11 @@ const CACHE_SIZE: usize = 256;
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
 const TOPIC: &[u8; 1] = b"t";
-pub const WISHLIST_BY_PEER: &[u8; 1] = b"p";
-pub const WISHLIST_BY_TIMESTAMP: &[u8; 1] = b"T";
-pub const DOWNLOADED: &[u8; 1] = b"D";
+pub const REQUESTS: &[u8; 1] = b"r";
+pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
+pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
+pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
+pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
 
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
@@ -77,12 +82,21 @@ pub struct Hdp {
 }
 
 impl Hdp {
+    /// Constructor which also returns a [Receiver] for UI events
+    /// Takes:
+    /// - The directory to store the database
+    /// - Initial directories to share, if any
+    /// - Initial topic names to join, if any
+    /// - The path to store downloaded files
+    /// - An optional MQTT server to use for peer discovery if you do not want to use the default
+    /// - [DiscoveryMethods]
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
         download_dir: PathBuf,
         mqtt_server: Option<String>,
+        discovery_methods: DiscoveryMethods,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
@@ -116,6 +130,8 @@ impl Hdp {
         // Derive a human-readable name from the public key
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
 
+        // Set home dir - this is used in the UI as a placeholder when choosing a directory to
+        // share
         // TODO for cross platform support we should use the `home` crate
         let os_home_dir = match std::env::var_os("HOME") {
             Some(o) => o.to_str().map(|s| s.to_string()),
@@ -132,6 +148,7 @@ impl Hdp {
         )
         .await;
 
+        // Setup initial topics
         let topics = initial_topic_names
             .iter()
             .map(|name| Topic::new(name.to_string()))
@@ -141,7 +158,7 @@ impl Hdp {
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, true, true, pk_hash, topics_db, mqtt_server).await?;
+            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db, mqtt_server).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -151,14 +168,16 @@ impl Hdp {
                 )
             }
             None => {
+                // This is for the case that we are behind an unfriendly NAT and don't have a fixed
+                // socket that peers can connect to
                 // Give cert_der and priv_key_der which we use to create an endpoint on a different
                 // port for each connecting peer
                 ServerConnection::Symmetric(cert_der, priv_key_der)
             }
         };
 
-        // Setup db for downloads requests
-        let wishlist = WishList::new(&db, response_tx.clone())?;
+        // Setup db for downloads/requests
+        let wishlist = WishList::new(&db)?;
 
         Ok((
             Self {
@@ -180,11 +199,8 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
-        // Inform the UI of initial state of topics and wishlist
+        // Inform the UI of initial state of topics
         self.topics_updated().await;
-        if let Err(err) = self.wishlist.updated().await {
-            error!("Error when sending wishlist to UI {err}");
-        };
 
         let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
@@ -201,15 +217,18 @@ impl Hdp {
 
         loop {
             select! {
+                // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
                     self.handle_incoming_connection(incoming_conn).await;
                 }
+                // A command from the UI
                 Some(command) = self.command_rx.recv() => {
                     if let Err(err) = self.handle_command(command).await {
                         error!("Closing connection {err}");
                         break;
                     };
                 }
+                // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
                     if self.connect_to_peer(peer).await.is_err() {
@@ -274,7 +293,7 @@ impl Hdp {
             loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
-                        rpc.request(buf, send).await;
+                        rpc.request(buf, send, peer_name.clone()).await;
                     }
                     Err(err) => {
                         warn!("Failed to handle request: {:?}", err);
@@ -680,7 +699,7 @@ impl Hdp {
             Command::Download { path, peer_name } => {
                 // Get details of the file / dir
                 let ls_request = Request::Ls(IndexQuery {
-                    path: Some(path),
+                    path: Some(path.clone()),
                     searchterm: None,
                     recursive: true,
                 });
@@ -704,11 +723,13 @@ impl Hdp {
 
                 match self.request(ls_request, &peer_name).await {
                     Ok(recv) => {
+                        // w(path: String, total_size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
                         let peer_public_key = {
                             let peers = self.peers.lock().await;
                             let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
                             peer.public_key
                         };
+                        let response_tx = self.response_tx.clone();
                         let wishlist = self.wishlist.clone();
                         tokio::spawn(async move {
                             if let Ok(ls_response_stream) = process_length_prefix(recv).await {
@@ -716,17 +737,28 @@ impl Hdp {
                                 while let Some(Ok(ls_response)) = ls_response_stream.next().await {
                                     if let LsResponse::Success(entries) = ls_response {
                                         for entry in entries.iter() {
-                                            if !entry.is_dir {
-                                                debug!("Adding {} to wishlist", entry.name);
-
-                                                if let Err(err) = wishlist
-                                                    .add(&DownloadRequest::new(
+                                            if entry.name == path {
+                                                if let Err(err) =
+                                                    wishlist.add_request(&DownloadRequest::new(
                                                         entry.name.clone(),
                                                         entry.size,
                                                         id,
                                                         peer_public_key,
                                                     ))
-                                                    .await
+                                                {
+                                                    error!("Cannot add download request {:?}", err);
+                                                }
+                                            }
+                                            if !entry.is_dir {
+                                                debug!("Adding {} to wishlist", entry.name);
+
+                                                if let Err(err) =
+                                                    wishlist.add_requested_file(&RequestedFile {
+                                                        path: entry.name.clone(),
+                                                        size: entry.size,
+                                                        request_id: id,
+                                                        downloaded: false,
+                                                    })
                                                 {
                                                     error!(
                                                         "Cannot make download request {:?}",
@@ -736,6 +768,21 @@ impl Hdp {
                                             }
                                         }
                                     }
+                                }
+                                // Inform the UI that the request has been made
+                                if response_tx
+                                    .send(UiServerMessage::Response {
+                                        id,
+                                        response: Ok(UiResponse::Download(DownloadResponse {
+                                            download_info: DownloadInfo::Requested(get_timestamp()),
+                                            path,
+                                            peer_name,
+                                        })),
+                                    })
+                                    .await
+                                    .is_err()
+                                {
+                                    // log error
                                 }
                             }
                         });
@@ -891,6 +938,102 @@ impl Hdp {
                         }
                     };
                 });
+            }
+            Command::RequestedFiles(request_id) => {
+                match self.wishlist.requested_files(request_id) {
+                    Ok(response_iterator) => {
+                        for res in response_iterator {
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::RequestedFiles(res)),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                                break;
+                            };
+                        }
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        error!("Error getting requested files from wishlist {:?}", error);
+                        // TODO more detailed error should be forwarded
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::RequestError),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        };
+                    }
+                }
+            }
+            Command::RemoveRequest(_request_id) => {
+                // TODO self.wishlist.remove_request
+                todo!();
+            }
+            Command::Requests => {
+                match self.wishlist.requested() {
+                    Ok(response_iterator) => {
+                        for res in response_iterator {
+                            if self
+                                .response_tx
+                                .send(UiServerMessage::Response {
+                                    id,
+                                    response: Ok(UiResponse::Requests(res)),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                warn!("Response channel closed");
+                                break;
+                            };
+                        }
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Ok(UiResponse::EndResponse),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        }
+                    }
+                    Err(error) => {
+                        error!("Error getting requests from wishlist {:?}", error);
+                        // TODO more detailed error should be forwarded
+                        if self
+                            .response_tx
+                            .send(UiServerMessage::Response {
+                                id,
+                                response: Err(UiServerError::RequestError),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            return Err(HandleUiCommandError::ChannelClosed);
+                        };
+                    }
+                }
             }
         };
         Ok(())
@@ -1054,6 +1197,14 @@ impl std::fmt::Display for ServerConnection {
     }
 }
 
+/// Get the current time as a [Duration]
+pub fn get_timestamp() -> Duration {
+    let system_time = SystemTime::now();
+    system_time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("Time went backwards")
+}
+
 #[cfg(test)]
 mod tests {
     use crate::wire_messages::{Entry, ReadQuery};
@@ -1070,6 +1221,7 @@ mod tests {
             vec!["foo".to_string()],
             downloads,
             None,
+            DiscoveryMethods::MdnsOnly,
         )
         .await
         .unwrap()
@@ -1077,7 +1229,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::init();
         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice_name = alice.name.clone();
 

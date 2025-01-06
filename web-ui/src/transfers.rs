@@ -1,35 +1,21 @@
 use crate::{
-    file::{File, Request},
+    file::File,
+    requests::{Request, Requests},
     PeerPath,
 };
 use leptos::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 #[component]
 pub fn Transfers(
-    requested: ReadSignal<HashSet<PeerPath>>,
-    downloaded: ReadSignal<HashSet<PeerPath>>,
+    requests: ReadSignal<Requests>,
     files: ReadSignal<BTreeMap<PeerPath, File>>,
 ) -> impl IntoView {
-    let downloaded = move || {
-        downloaded
-            .get()
-            .iter()
-            .filter_map(|peer_path| {
-                let files = files.get();
-                match files.get(peer_path) {
-                    Some(file) => Some(file.clone()),
-                    None => None,
-                }
-            })
-            .collect::<Vec<File>>()
-    };
-
     let wishlist = move || {
-        requested
+        requests
             .get()
             .iter()
-            .filter_map(|peer_path| {
+            .filter_map(|((_timestamp, _id), peer_path)| {
                 let files = files.get();
                 match files.get(peer_path) {
                     Some(file) => Some(file.clone()),
@@ -45,15 +31,7 @@ pub fn Transfers(
         <ul class="list-disc list-inside">
             <For
                 each=wishlist
-                key=|file| format!("{}{}", file.name, file.size)
-                children=move |file| view! { <Request file/> }
-            />
-        </ul>
-        <h3 class="text-lg">"Downloaded"</h3>
-        <ul class="list-disc list-inside">
-            <For
-                each=downloaded
-                key=|file| format!("{}{}", file.name, file.size)
+                key=|file| format!("{}{:?}", file.name, file.size)
                 children=move |file| view! { <Request file/> }
             />
         </ul>

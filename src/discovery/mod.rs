@@ -82,10 +82,8 @@ pub struct PeerDiscovery {
 impl PeerDiscovery {
     pub async fn new(
         initial_topics: Vec<Topic>,
-        // Whether to use mdns
-        use_mdns: bool,
-        // Wheter to use mqtt discovery
-        use_mqtt: bool,
+        // Whether to use mDNS, MQTT or both
+        discovery_methods: DiscoveryMethods,
         public_key: [u8; 32],
         topics_db: sled::Tree,
         mqtt_server: Option<String>,
@@ -129,7 +127,7 @@ impl PeerDiscovery {
         let session_token: [u8; 32] = rng.gen();
 
         // Only use mdns if we are on a local network
-        let mdns_server = if use_mdns && is_private(my_local_ip) {
+        let mdns_server = if discovery_methods.use_mdns() && is_private(my_local_ip) {
             Some(
                 MdnsServer::new(
                     &id,
@@ -149,7 +147,7 @@ impl PeerDiscovery {
             PeerConnectionDetails::Symmetric(_) => None,
             _ => Some(socket),
         };
-        let mqtt_client = if use_mqtt {
+        let mqtt_client = if discovery_methods.use_mqtt() {
             Some(
                 MqttClient::new(
                     id,
@@ -344,6 +342,15 @@ pub async fn handle_peer(
                         None
                     })
                 }
+                PeerConnectionDetails::Symmetric(_) => {
+                    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+                    Ok(Some(DiscoveredPeer {
+                        socket_address,
+                        socket_option: Some(socket),
+                        token: remote.token,
+                        topic: None,
+                    }))
+                }
                 _ => Ok(Some(DiscoveredPeer {
                     socket_address,
                     socket_option: None,
@@ -352,5 +359,22 @@ pub async fn handle_peer(
                 })),
             }
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiscoveryMethods {
+    MqttOnly,
+    MdnsOnly,
+    MqttAndMdns,
+}
+
+impl DiscoveryMethods {
+    fn use_mdns(&self) -> bool {
+        self != &DiscoveryMethods::MqttOnly
+    }
+
+    fn use_mqtt(&self) -> bool {
+        self != &DiscoveryMethods::MdnsOnly
     }
 }
