@@ -2,8 +2,8 @@
 use anyhow::anyhow;
 use log::{debug, warn};
 use quinn::{
-    crypto::rustls::QuicServerConfig, AsyncUdpSocket, ClientConfig, Connection, Endpoint,
-    ServerConfig,
+    crypto::rustls::{QuicClientConfig, QuicServerConfig},
+    AsyncUdpSocket, ClientConfig, Endpoint, ServerConfig,
 };
 use ring::signature::Ed25519KeyPair;
 use rustls::{pki_types::CertificateDer, SignatureScheme};
@@ -28,6 +28,9 @@ pub async fn make_server_endpoint(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<Endpoint> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
     let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
@@ -58,10 +61,12 @@ pub async fn make_server_endpoint_basic_socket(
 }
 
 /// Given a Quic connection, get the TLS certificate
-pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<CertificateDer> {
-    let identity = conn
-        .peer_identity()
-        .ok_or_else(|| anyhow!("No peer certificate"))?;
+pub fn get_certificate_from_connection<'a>(
+    identity: Option<Box<dyn std::any::Any>>, // conn: &'a Connection,
+) -> anyhow::Result<CertificateDer<'a>> {
+    // let identity = conn
+    //     .peer_identity()
+    let identity = identity.ok_or_else(|| anyhow!("No peer certificate"))?;
 
     let remote_cert = identity
         .downcast::<Vec<CertificateDer>>()
@@ -77,55 +82,83 @@ fn configure_server(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
 ) -> anyhow::Result<(ServerConfig, ClientConfig)> {
-    let priv_key = rustls::PrivateKey(priv_key_der.clone());
-    let cert_chain = vec![rustls::Certificate(cert_der)];
+    let pkd_2 = priv_key_der.clone();
+    let priv_key: rustls_pki_types::PrivateKeyDer = priv_key_der.try_into().unwrap();
+    // let pkd: &'static [u8] = &priv_key_der;
+    // let priv_key = rustls_pki_types::PrivateKeyDer::Pkcs8(pkd.into());
+    let cert: rustls_pki_types::CertificateDer = cert_der.into();
+    let cert_chain = vec![cert];
 
     let crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
         .with_client_cert_verifier(SkipClientVerification::new())
         .with_single_cert(cert_chain.clone(), priv_key)?;
 
     let conf = QuicServerConfig::try_from(crypto).unwrap();
-    let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
+    let mut server_config = ServerConfig::with_crypto(Arc::new(conf));
 
     Arc::get_mut(&mut server_config.transport)
         .ok_or_else(|| anyhow!("Cannot get transport config"))?
         .max_concurrent_uni_streams(0_u8.into())
         .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
 
-    let client_crypto = rustls::ClientConfig::builder()
-        .with_safe_defaults()
-        .with_custom_certificate_verifier(SkipServerVerification::new())
-        .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key_der));
+    let client_crypto = rustls::ClientConfig::builder();
 
-    let client_config = ClientConfig::new(Arc::new(client_crypto));
+    let client_config = rustls::client::danger::DangerousClientConfigBuilder { cfg: client_crypto }
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+        .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, pkd_2));
+
+    let quic_client_config: QuicClientConfig = Arc::new(client_config).try_into().unwrap();
+    let client_config = ClientConfig::new(Arc::new(quic_client_config));
 
     Ok((server_config, client_config))
 }
 
+#[derive(Debug)]
 struct SkipServerVerification;
 
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
+// impl SkipServerVerification {
+//     fn new() -> Arc<Self> {
+//         Arc::new(Self)
+//     }
+// }
 
-impl rustls::client::ServerCertVerifier for SkipServerVerification {
+impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &rustls_pki_types::ServerName,
         _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
         debug!("verifying {:?}", _server_name);
-        Ok(rustls::client::ServerCertVerified::assertion())
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![SignatureScheme::ED25519]
     }
 }
 
+#[derive(Debug)]
 struct SkipClientVerification;
 
 impl SkipClientVerification {
@@ -134,29 +167,55 @@ impl SkipClientVerification {
     }
 }
 
-impl rustls::server::ClientCertVerifier for SkipClientVerification {
-    fn client_auth_root_subjects(&self) -> Option<rustls::DistinguishedNames> {
-        Some(Vec::new())
+impl rustls::server::danger::ClientCertVerifier for SkipClientVerification {
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
     }
 
     fn verify_client_cert(
         &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _now: std::time::SystemTime,
-    ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::server::danger::ClientCertVerified, rustls::Error> {
         debug!("verifying client");
-        Ok(rustls::server::ClientCertVerified::assertion())
+        Ok(rustls::server::danger::ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![SignatureScheme::ED25519]
     }
 }
 
+#[derive(Debug)]
 struct SimpleClientCertResolver {
-    cert_chain: Vec<rustls::Certificate>,
+    cert_chain: Vec<rustls_pki_types::CertificateDer<'static>>,
     our_signing_key: Arc<OurSigningKey>,
 }
 
 impl SimpleClientCertResolver {
-    fn new(cert_chain: Vec<rustls::Certificate>, priv_key_der: Vec<u8>) -> Arc<Self> {
+    fn new(
+        cert_chain: Vec<rustls_pki_types::CertificateDer<'static>>,
+        priv_key_der: Vec<u8>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             cert_chain,
             our_signing_key: Arc::new(OurSigningKey { priv_key_der }),
@@ -181,6 +240,7 @@ impl rustls::client::ResolvesClientCert for SimpleClientCertResolver {
     }
 }
 
+#[derive(Debug)]
 struct OurSigningKey {
     priv_key_der: Vec<u8>,
 }
@@ -199,11 +259,12 @@ impl rustls::sign::SigningKey for OurSigningKey {
             None
         }
     }
-    fn algorithm(&self) -> rustls::internal::msgs::enums::SignatureAlgorithm {
-        rustls::internal::msgs::enums::SignatureAlgorithm::ED25519
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        rustls::SignatureAlgorithm::ED25519
     }
 }
 
+#[derive(Debug)]
 struct OurSigner {
     keypair: Ed25519KeyPair,
 }

@@ -24,7 +24,7 @@ use harddrive_party_shared::ui_messages::{DownloadInfo, DownloadResponse, PeerRe
 use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Endpoint, RecvStream};
-use rustls::Certificate;
+use rustls_pki_types::CertificateDer;
 use std::{
     collections::{hash_map, HashMap},
     num::NonZeroUsize,
@@ -128,7 +128,7 @@ impl Hdp {
         };
 
         // Derive a human-readable name from the public key
-        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
+        let (name, pk_hash) = certificate_to_name(&cert_der);
 
         // Set home dir - this is used in the UI as a placeholder when choosing a directory to
         // share
@@ -245,9 +245,9 @@ impl Hdp {
         conn: quinn::Connection,
         incoming: bool,
         token: Option<SessionToken>,
-        remote_cert: Certificate,
+        remote_cert: CertificateDer<'static>,
     ) {
-        let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
+        let (peer_name, peer_public_key) = certificate_to_name(&remote_cert);
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
@@ -338,8 +338,7 @@ impl Hdp {
                         debug!("Server name {:?}", handshake_data.server_name);
                     }
                 }
-
-                if let Ok(remote_cert) = get_certificate_from_connection(&conn) {
+                if let Ok(remote_cert) = get_certificate_from_connection(conn.peer_identity()) {
                     self.handle_connection(conn, true, None, remote_cert).await;
                 } else {
                     warn!("Peer attempted to connect with bad or missing certificate");
@@ -376,7 +375,7 @@ impl Hdp {
             .await
             .map_err(|_| UiServerError::ConnectionError)?;
 
-        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
+        if let Ok(remote_cert) = get_certificate_from_connection(connection.peer_identity()) {
             self.handle_connection(connection, false, Some(peer.token), remote_cert)
                 .await;
             Ok(())
@@ -1072,10 +1071,10 @@ impl Hdp {
 // TODO the ID should actually just be the public key from the
 // certicate, but i cant figure out how to extract it so for now
 // just hash the whole thing
-fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
+fn certificate_to_name(cert_der: &[u8]) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
     let mut topic_hash = Blake2b::new(32);
-    topic_hash.input(cert.as_ref());
+    topic_hash.input(cert_der);
     topic_hash.result(&mut hash);
     (key_to_animal::key_to_name(&hash), hash)
 }
@@ -1155,6 +1154,8 @@ pub enum RequestError {
     SerializationError,
     #[error(transparent)]
     WriteError(#[from] quinn::WriteError),
+    #[error("QUIC stream closed")]
+    ClosedStream(#[from] quinn::ClosedStream),
 }
 
 /// Error on handling a UI command

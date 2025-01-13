@@ -298,6 +298,8 @@ pub enum RpcError {
     ChannelClosed,
     #[error("Cannot convert to u64")]
     U64ConvertError,
+    #[error("QUIC stream closed")]
+    ClosedStream(#[from] quinn::ClosedStream),
 }
 
 // fn create_error_stream(err: RpcError) -> Box<dyn Stream<Item = response::Response> + Send> {
