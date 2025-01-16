@@ -3,6 +3,7 @@
 use anyhow::anyhow;
 use futures::{ready, Future};
 use log::{debug, info, warn};
+use quinn::{AsyncUdpSocket, UdpPoller};
 use rand::{Rng, SeedableRng};
 use std::{
     io,
@@ -31,21 +32,20 @@ const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
 #[derive(Debug)]
 pub struct PunchingUdpSocket {
     /// The underlying UDP socket
-    socket: Arc<netwatch::UdpSocket>,
-    // quinn_socket_state: quinn_udp::UdpSocketState,
+    socket: Arc<tokio::net::UdpSocket>,
+    quinn_socket_state: quinn_udp::UdpSocketState,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
 }
 
 impl PunchingUdpSocket {
     /// Given a raw UDP socket, return a [PunchingUdpSocket] and a [HolePuncher] which allows us to
     /// send holepunch packets on the socket
-    pub async fn bind(socket_addr: SocketAddr) -> io::Result<(Self, HolePuncher)> {
-        // let socket = socket.into_std()?;
-        //
-        // let quinn_socket_state = quinn_udp::UdpSocketState::new((&socket).into())?;
-        //
-        // let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
-        let socket = Arc::new(netwatch::UdpSocket::bind_full(socket_addr).unwrap());
+    pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
+        let socket = socket.into_std()?;
+
+        let quinn_socket_state = quinn_udp::UdpSocketState::new((&socket).into())?;
+
+        let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
         let (udp_recv_tx, _udp_recv) =
             broadcast::channel::<IncomingHolepunchPacket>(PACKET_CHANNEL_CAPACITY);
@@ -72,7 +72,7 @@ impl PunchingUdpSocket {
         Ok((
             Self {
                 socket,
-                // quinn_socket_state,
+                quinn_socket_state,
                 udp_recv_tx: udp_recv_tx.clone(),
             },
             HolePuncher {
@@ -86,14 +86,19 @@ impl PunchingUdpSocket {
 
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {
     fn create_io_poller(self: Arc<Self>) -> std::pin::Pin<Box<dyn quinn::UdpPoller>> {
-        Box::pin(IoPoller {
-            io: self.socket.clone(),
-        })
+        // Box::pin(IoPoller {
+        //     io: self.socket.clone(),
+        // })
+        // Box::pin(UdpPollHelper::new(move || {
+        //     let socket = self.clone();
+        //     async move { socket.socket.writable().await }
+        // }))
+        Box::pin(self.socket.writable())
     }
 
     fn try_send(&self, transmit: &quinn_udp::Transmit) -> io::Result<()> {
-        // let io = &*self.socket;
-        self.socket.try_send_quinn(transmit)
+        let io = &*self.socket;
+        self.quinn_socket_state.try_send(io.into(), transmit)
     }
 
     fn poll_recv(
@@ -125,17 +130,27 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
     }
 }
 
-/// Poller for when the socket is writable.
-#[derive(Debug)]
-struct IoPoller {
-    io: Arc<netwatch::UdpSocket>,
-}
-
-impl quinn::UdpPoller for IoPoller {
-    fn poll_writable(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        std::pin::pin!(&self.io.writable()).poll(cx)
+pin_project_lite::pin_project! {
+    /// Helper adapting a function `MakeFut` that constructs a single-use future `Fut` into a
+    /// [`UdpPoller`] that may be reused indefinitely
+    struct UdpPollHelper<MakeFut, Fut> {
+        make_fut: MakeFut,
+        #[pin]
+        fut: Option<Fut>,
     }
 }
+
+// /// Poller for when the socket is writable.
+// #[derive(Debug)]
+// struct IoPoller {
+//     io: Arc<netwatch::UdpSocket>,
+// }
+//
+// impl quinn::UdpPoller for IoPoller {
+//     fn poll_writable(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+//         std::pin::pin!(&self.io.writable()).poll(cx)
+//     }
+// }
 
 fn forward_holepunch(
     channel: &broadcast::Sender<IncomingHolepunchPacket>,

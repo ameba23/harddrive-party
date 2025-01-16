@@ -115,8 +115,7 @@ impl PeerDiscovery {
         // error
         let local_connection_details = stun_test(&raw_socket).await?;
 
-        let (socket, hole_puncher) =
-            PunchingUdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
+        let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
         let addr = socket.local_addr()?;
 
