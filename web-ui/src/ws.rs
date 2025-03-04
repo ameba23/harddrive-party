@@ -7,7 +7,7 @@ use futures::{
     channel::mpsc::{channel, Receiver, Sender},
     SinkExt, StreamExt,
 };
-use leptos::*;
+use leptos::prelude::*;
 use log::{debug, error, warn};
 use rand::{rngs::ThreadRng, Rng};
 use reqwasm::websocket::{futures::WebSocket, Message};

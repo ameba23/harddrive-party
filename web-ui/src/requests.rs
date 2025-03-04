@@ -3,7 +3,7 @@ use crate::{
     file::{DownloadingFile, File, FileDisplayContext},
     DownloadStatus, FilesReadSignal, PeerPath, UiDownloadRequest,
 };
-use leptos::*;
+use leptos::prelude::*;
 use std::collections::BTreeMap;
 
 /// For requests (requested or downloaded items)

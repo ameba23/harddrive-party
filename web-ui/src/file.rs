@@ -4,7 +4,7 @@ use crate::{
     ui_messages::{Command, UiDownloadRequest},
     Entry, RequesterSetter, BUTTON_STYLE,
 };
-use leptos::*;
+use leptos::prelude::*;
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]

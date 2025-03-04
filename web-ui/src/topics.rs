@@ -1,9 +1,10 @@
 //! Joining and leaving topics
 use crate::{Command, RequesterSetter, BUTTON_STYLE};
-use leptos::{html::Input, *};
+use leptos::html::Input;
+use leptos::prelude::*;
 
 #[component]
-pub fn Topics(topics: leptos::ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
+pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_ref = create_node_ref::<Input>();
 

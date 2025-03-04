@@ -3,7 +3,7 @@ use crate::{
     file::{File, FileDisplayContext},
     FilesReadSignal, PeerPath,
 };
-use leptos::*;
+use leptos::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
 
@@ -76,7 +76,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 }
 
 #[component]
-pub fn Peers(peers: leptos::ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
+pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
             view! {

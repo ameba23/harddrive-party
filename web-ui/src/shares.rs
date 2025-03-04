@@ -1,5 +1,5 @@
 use super::{peer::Peer, Command, ErrorMessage, RequesterSetter, SuccessMessage, BUTTON_STYLE};
-use leptos::{html::Input, *};
+use leptos::{html::Input, prelude::*};
 
 #[component]
 pub fn Shares(
@@ -47,7 +47,7 @@ pub fn Shares(
                         node_ref=input_ref
                     />
                 </code>
-                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share value="Add"/>
+                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share />
             </div>
         </form>
 
