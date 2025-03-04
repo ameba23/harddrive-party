@@ -27,6 +27,7 @@ use leptos_router::*;
 use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use thaw::*;
 use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage};
 use wasm_bindgen_futures::spawn_local;
 use wire_messages::{Entry, LsResponse};
@@ -663,14 +664,12 @@ fn display_bytes(bytes: u64) -> String {
 #[component]
 pub fn ErrorMessage(message: String) -> impl IntoView {
     view! {
-        <div
-            class="flex p-4 my-4 text-sm text-red-800 border border-red-300 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400 dark:border-red-800"
-            role="alert"
-        >
-            <div>
-                <span class="font-medium">" ⚠ " {message}</span>
-            </div>
-        </div>
+        <MessageBar intent=MessageBarIntent::Error>
+            <MessageBarBody>
+                <MessageBarTitle>"Error"</MessageBarTitle>
+                { message }
+            </MessageBarBody>
+        </MessageBar>
     }
 }
 
