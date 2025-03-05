@@ -1,5 +1,5 @@
 use super::{peer::Peer, Command, ErrorMessage, RequesterSetter, SuccessMessage, BUTTON_STYLE};
-use leptos::{html::Input, prelude::*};
+use leptos::{either::EitherOf3, html::Input, prelude::*};
 
 #[component]
 pub fn Shares(
@@ -55,21 +55,21 @@ pub fn Shares(
         {move || {
             match add_or_remove_share_message.get() {
                 Some(Ok(message)) => {
-                    view! {
+                    EitherOf3::A(view! {
                         <span>
                             <SuccessMessage message/>
                         </span>
-                    }
+                    })
                 }
                 Some(Err(message)) => {
-                    view! {
+                    EitherOf3::B(view! {
                         <span>
                             <ErrorMessage message/>
                         </span>
-                    }
+                    })
                 }
                 None => {
-                    view! { <span></span> }
+                    EitherOf3::C(view! { <span></span> })
                 }
             }
         }}

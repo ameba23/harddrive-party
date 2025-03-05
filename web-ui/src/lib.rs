@@ -22,8 +22,11 @@ use crate::{
     ws::{Requester, WebsocketService},
 };
 use futures::StreamExt;
-use leptos::{html::A, prelude::*};
-use leptos_router::components::{Route, Router, Routes};
+use leptos::prelude::*;
+use leptos_router::{
+    components::{Route, Router, Routes},
+    path,
+};
 use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -360,10 +363,8 @@ pub fn HdpUi() -> impl IntoView {
                                             name: request.path.clone(),
                                             peer_name: request.peer_name.clone(),
                                             size: Some(request.total_size),
-                                            download_status: create_rw_signal(
-                                                download_status.clone(),
-                                            ),
-                                            request: create_rw_signal(Some(request.clone())),
+                                            download_status: RwSignal::new(download_status.clone()),
+                                            request: RwSignal::new(Some(request.clone())),
                                             is_dir: None,
                                         });
 
@@ -390,13 +391,13 @@ pub fn HdpUi() -> impl IntoView {
                         Ok(UiResponse::RequestedFiles(requested_files)) => {
                             if let Some(Command::RequestedFiles(request_id)) = request {
                                 // Now find the request and get peer_name
-                                if let Some(peer_path) = requests.get().get_by_id(request_id) {
+                                if let Some(peer_path) = requests.get().get_by_id(*request_id) {
                                     set_files.update(|files| {
                                         for requested_file in requested_files {
                                             let download_status = if requested_file.downloaded {
-                                                DownloadStatus::Downloaded(request_id)
+                                                DownloadStatus::Downloaded(*request_id)
                                             } else {
-                                                DownloadStatus::Requested(request_id)
+                                                DownloadStatus::Requested(*request_id)
                                             };
                                             files
                                                 .entry(PeerPath {
@@ -593,48 +594,48 @@ pub fn HdpUi() -> impl IntoView {
                                 class="mr-2"
                                 title=move || { format!("{} connected topics", topics.get().len()) }
                             >
-                                <A href="topics" class=ITEM_STYLE>
+                                <a href="topics" class=ITEM_STYLE>
                                     {"🖧 Topics"}
                                     <span class=NUMBER_LABEL>{move || { topics.get().len() }}</span>
-                                </A>
+                                </a>
                             </li>
                             <li class="mr-2">
-                                <A href="shares" class=ITEM_STYLE>
+                                <a href="shares" class=ITEM_STYLE>
                                     "🖤 Shares"
                                     <span class=NUMBER_LABEL>{shared_files_size}</span>
-                                </A>
+                                </a>
                             </li>
                             <li
                                 class="mr-2"
                                 title=move || { format!("{} connected peers", peers.get().len()) }
                             >
-                                <A href="peers" class=ITEM_STYLE>
+                                <a href="peers" class=ITEM_STYLE>
                                     "👾 Peers"
                                     <span class=NUMBER_LABEL>{move || { peers.get().len() }}</span>
-                                </A>
+                                </a>
                             </li>
                             <li class="mr-2">
-                                <A href="transfers" class=ITEM_STYLE>
+                                <a href="transfers" class=ITEM_STYLE>
                                     {"⇅ Transfers"}
-                                </A>
+                                </a>
                             </li>
                         </ul>
                     </div>
                     {error_message_display}
                 </nav>
                 <main>
-                    <Routes>
-                        <Route path="" view=move || view! { <Peers peers/> }/>
-                        <Route path="topics" view=move || view! { <Topics topics/> }/>
+                    <Routes fallback=|| "Not found">
+                        <Route path=path!("") view=move || view! { <Peers peers/> }/>
+                        <Route path=path!("topics") view=move || view! { <Topics topics/> }/>
                         <Route
-                            path="shares"
+                            path=path!("shares")
                             view=move || {
                                 view! { <Shares shares add_or_remove_share_message home_dir/> }
                             }
                         />
-                        <Route path="peers" view=move || view! { <Peers peers/> }/>
+                        <Route path=path!("peers") view=move || view! { <Peers peers/> }/>
                         <Route
-                            path="transfers"
+                            path=path!("transfers")
                             view=move || view! { <Transfers requests files/> }
                         />
                     </Routes>

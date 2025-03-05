@@ -1,7 +1,7 @@
 //! Joining and leaving topics
 use crate::{Command, RequesterSetter, BUTTON_STYLE};
 use leptos::html::Input;
-use leptos::prelude::*;
+use leptos::{either::Either, prelude::*};
 
 #[component]
 pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
@@ -37,7 +37,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                 key=|(topic, _): &(String, bool)| topic.clone()
                 children=move |(topic, connected)| {
                     view! {
-                        <Topic topic=create_rw_signal(Topic {
+                        <Topic topic=RwSignal::new(Topic {
                             name: topic.to_string(),
                             connected,
                         })/>
@@ -58,7 +58,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                 key=|(topic, _): &(String, bool)| topic.clone()
                 children=move |(topic, connected)| {
                     view! {
-                        <Topic topic=create_rw_signal(Topic {
+                        <Topic topic=RwSignal::new(Topic {
                             name: topic.to_string(),
                             connected,
                         })/>
@@ -91,17 +91,17 @@ pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
         };
 
         if topic.get().connected {
-            view! {
+            Either::Left(view! {
                 <button class=BUTTON_STYLE on:click=leave_topic>
                     "Leave"
                 </button>
-            }
+            })
         } else {
-            view! {
+            Either::Right(view! {
                 <button class=BUTTON_STYLE on:click=join_topic>
                     "Join"
                 </button>
-            }
+            })
         }
     };
 

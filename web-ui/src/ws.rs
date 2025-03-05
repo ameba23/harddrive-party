@@ -9,7 +9,7 @@ use futures::{
 };
 use leptos::prelude::*;
 use log::{debug, error, warn};
-use rand::{rngs::ThreadRng, Rng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwasm::websocket::{futures::WebSocket, Message};
 use std::collections::{HashMap, HashSet};
 use wasm_bindgen_futures::spawn_local;
@@ -82,7 +82,7 @@ impl WebsocketService {
 pub struct Requester {
     ws_service: WebsocketService,
     requests: HashMap<u32, Command>,
-    rng: ThreadRng,
+    rng: StdRng,
 }
 
 impl Requester {
@@ -90,7 +90,7 @@ impl Requester {
         Self {
             ws_service,
             requests: HashMap::new(),
-            rng: rand::thread_rng(),
+            rng: StdRng::from_entropy(),
         }
     }
 

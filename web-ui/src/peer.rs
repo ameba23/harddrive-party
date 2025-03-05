@@ -3,7 +3,7 @@ use crate::{
     file::{File, FileDisplayContext},
     FilesReadSignal, PeerPath,
 };
-use leptos::prelude::*;
+use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
 
@@ -28,7 +28,7 @@ impl Peer {
 pub fn Peer(peer: Peer) -> impl IntoView {
     let files = use_context::<FilesReadSignal>().unwrap().0;
     // This signal is used below to provide context to File
-    let (peer_signal, _set_peer) = create_signal((peer.name.clone(), peer.is_self));
+    let (peer_signal, _set_peer) = signal((peer.name.clone(), peer.is_self));
 
     // This should probably be in a closure
     let root_size = display_bytes(
@@ -79,13 +79,13 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
-            view! {
+            Either::Left(view! {
                 <div>
                     <p>"No peers connected"</p>
                 </div>
-            }
+            })
         } else {
-            view! {
+            Either::Right(view! {
                 <div>
                     <ul>
                         <For
@@ -95,7 +95,7 @@ pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
                         />
                     </ul>
                 </div>
-            }
+            })
         }
     };
 
