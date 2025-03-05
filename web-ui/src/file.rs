@@ -4,7 +4,10 @@ use crate::{
     ui_messages::{Command, UiDownloadRequest},
     Entry, RequesterSetter, BUTTON_STYLE,
 };
-use leptos::*;
+use leptos::{
+    either::{Either, EitherOf5},
+    prelude::*,
+};
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]
@@ -27,8 +30,8 @@ impl File {
             peer_name,
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
-            download_status: create_rw_signal(DownloadStatus::Nothing),
-            request: create_rw_signal(None),
+            download_status: RwSignal::new(DownloadStatus::Nothing),
+            request: RwSignal::new(None),
         }
     }
 
@@ -42,8 +45,8 @@ impl File {
             peer_name,
             size: None,
             is_dir: Some(false),
-            download_status: create_rw_signal(download_status),
-            request: create_rw_signal(None),
+            download_status: RwSignal::new(download_status),
+            request: RwSignal::new(None),
         }
     }
 }
@@ -59,7 +62,7 @@ pub enum FileDisplayContext {
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
     // let peer_details = use_context::<PeerName>().unwrap().0;
-    let (file_name, _set_file_name) = create_signal(file.name);
+    let (file_name, _set_file_name) = signal(file.name);
 
     let download_request = move |_| {
         let download = Command::Download {
@@ -123,28 +126,29 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 {move || {
                     match file.download_status.get() {
                         DownloadStatus::Nothing => {
-                            view! { <span></span> }
+                            EitherOf5::A(view! { <span></span> })
                         }
                         DownloadStatus::Downloaded(_) => {
                             if is_dir {
-                                view! { <span> "Downloaded" </span> }
+                                EitherOf5::B(view! { <span> "Downloaded" </span> })
                             } else {
-
+                                let file_path = file_name.get();
+                                EitherOf5::C(
                             view! { <span>
                                 "Downloaded"
-                                        <Preview file_path=&file_name.get() shared=is_shared />
-                                    </span> }
+                                        <Preview file_path=&file_path shared=is_shared />
+                                    </span> })
                             }
                         }
                         DownloadStatus::Requested(_) => {
-                            view! { <span>"Requested"</span> }
+                            EitherOf5::D(view! { <span>"Requested"</span> })
                         }
                         DownloadStatus::Downloading{ bytes_read, .. } => {
-                            view! {
+                            EitherOf5::E(view! {
                                 <span>
                                     <DownloadingFile bytes_read size=file.size/>
                                 </span>
-                            }
+                            })
                         }
                     }
                 }}
@@ -200,7 +204,7 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
             let protocol = location.protocol().unwrap_or("http:".to_string());
             let host = location.host().unwrap_or("localhost:3030".to_string());
             let escaped_path = urlencoding::encode(&file_path);
-            view! {
+            Either::Left(view! {
                 <span>
                     <button class=BUTTON_STYLE>
                         <a
@@ -211,10 +215,8 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
                         </a>
                     </button>
                 </span>
-            }
+            })
         }
-        None => {
-            view! { <span>"Cannot get URL"</span> }
-        }
+        None => Either::Right(view! { <span>"Cannot get URL"</span> }),
     }
 }
