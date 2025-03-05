@@ -3,7 +3,7 @@ use crate::{
     requests::{Request, Requests},
     PeerPath,
 };
-use leptos::*;
+use leptos::prelude::*;
 use std::collections::BTreeMap;
 
 #[component]

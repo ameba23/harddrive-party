@@ -3,7 +3,10 @@ use crate::{
     file::{DownloadingFile, File, FileDisplayContext},
     DownloadStatus, FilesReadSignal, PeerPath, UiDownloadRequest,
 };
-use leptos::*;
+use leptos::{
+    either::{Either, EitherOf3},
+    prelude::*,
+};
 use std::collections::BTreeMap;
 
 /// For requests (requested or downloaded items)
@@ -66,24 +69,24 @@ pub fn Request(file: File) -> impl IntoView {
                     .collect::<Vec<File>>()
             };
             let is_dir = file.is_dir == Some(true);
-            view! {
+            Either::Left(view! {
                 <li>
                     {request.peer_name} " "
                     {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
                             DownloadStatus::Downloading{ bytes_read, request_id: _} => {
-                                view! {
+                                EitherOf3::A(view! {
                                     <span>
                                         <DownloadingFile bytes_read size=file.size/>
                                     </span>
-                                }
+                                })
                             }
                             DownloadStatus::Downloaded(_) => {
-                                    view! { <span> "✅"</span>}
+                                    EitherOf3::B(view! { <span> "✅"</span>})
                             }
                             _ => {
-                                view! { <span></span> }
+                                EitherOf3::C(view! { <span></span> })
                             }
                         }
                     }}
@@ -96,10 +99,8 @@ pub fn Request(file: File) -> impl IntoView {
                 />
             </table>
                 </li>
-            }
+            })
         }
-        None => {
-            view! { <li>"Never happens"</li> }
-        }
+        None => Either::Right(view! { <li>"Never happens"</li> }),
     }
 }
