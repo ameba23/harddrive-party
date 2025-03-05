@@ -12,7 +12,7 @@ pub fn Shares(
         None => Vec::new(),
     };
 
-    let input_ref = create_node_ref::<Input>();
+    let input_ref: NodeRef<Input> = NodeRef::new();
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
 
     let home_dir_if_exists = move || {

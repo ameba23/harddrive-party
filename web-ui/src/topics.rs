@@ -6,7 +6,7 @@ use leptos::{either::Either, prelude::*};
 #[component]
 pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    let input_ref = create_node_ref::<Input>();
+    let input_ref: NodeRef<Input> = NodeRef::new();
 
     // When joining a new topic
     let join_topic = move |_| {
