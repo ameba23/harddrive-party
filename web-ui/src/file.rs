@@ -1,8 +1,7 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
-    display_bytes,
+    hdp::{display_bytes, Entry, RequesterSetter},
     ui_messages::{Command, UiDownloadRequest},
-    Entry, RequesterSetter, BUTTON_STYLE,
 };
 use leptos::{
     either::{Either, EitherOf5},
@@ -115,45 +114,43 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             <td>{file_name_and_indentation}</td>
             <td>
                 " " {display_bytes(file.size.unwrap_or_default())} " "
-                <button
-                    class=BUTTON_STYLE
-                    style=download_button_style
-                    on:click=download_request
-                    title="Download"
-                >
+                <button style=download_button_style on:click=download_request title="Download">
                     "🠫"
                 </button>
                 {move || {
                     match file.download_status.get() {
-                        DownloadStatus::Nothing => {
-                            EitherOf5::A(view! { <span></span> })
-                        }
+                        DownloadStatus::Nothing => EitherOf5::A(view! { <span></span> }),
                         DownloadStatus::Downloaded(_) => {
                             if is_dir {
-                                EitherOf5::B(view! { <span> "Downloaded" </span> })
+                                EitherOf5::B(view! { <span>"Downloaded"</span> })
                             } else {
                                 let file_path = file_name.get();
                                 EitherOf5::C(
-                            view! { <span>
-                                "Downloaded"
-                                        <Preview file_path=&file_path shared=is_shared />
-                                    </span> })
+                                    view! {
+                                        <span>
+                                            "Downloaded"
+                                            <Preview file_path=&file_path shared=is_shared/>
+                                        </span>
+                                    },
+                                )
                             }
                         }
                         DownloadStatus::Requested(_) => {
                             EitherOf5::D(view! { <span>"Requested"</span> })
                         }
-                        DownloadStatus::Downloading{ bytes_read, .. } => {
-                            EitherOf5::E(view! {
-                                <span>
-                                    <DownloadingFile bytes_read size=file.size/>
-                                </span>
-                            })
+                        DownloadStatus::Downloading { bytes_read, .. } => {
+                            EitherOf5::E(
+                                view! {
+                                    <span>
+                                        <DownloadingFile bytes_read size=file.size/>
+                                    </span>
+                                },
+                            )
                         }
                     }
                 }}
-                {// TODO fix this
-                move || {
+                // TODO fix this
+                {move || {
                     if is_shared {
                         view! {
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
@@ -161,6 +158,16 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         }
                     } else {
                         view! {
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
                             <span></span>
                         }
@@ -190,7 +197,9 @@ pub enum DownloadStatus {
 pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
     // This will be a progress bar
     view! {
-        <span>{format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}</span>
+        <span>
+            {format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}
+        </span>
     }
 }
 
@@ -206,7 +215,7 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
             let escaped_path = urlencoding::encode(&file_path);
             Either::Left(view! {
                 <span>
-                    <button class=BUTTON_STYLE>
+                    <button>
                         <a
                             href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
                             target="_blank"
