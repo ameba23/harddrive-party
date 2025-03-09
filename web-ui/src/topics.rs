@@ -1,5 +1,5 @@
 //! Joining and leaving topics
-use crate::{Command, RequesterSetter, BUTTON_STYLE};
+use crate::{ui_messages::Command, RequesterSetter};
 use leptos::html::Input;
 use leptos::{either::Either, prelude::*};
 
@@ -25,7 +25,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
         <h2 class="text-xl">"Connected topics"</h2>
         <form action="javascript:void(0);">
             <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name"/>
-            <input type="submit" value="Join" class=BUTTON_STYLE on:click=join_topic/>
+            <input type="submit" value="Join" on:click=join_topic/>
         </form>
         <h2>"Connected"</h2>
         <ul>
@@ -44,6 +44,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                     }
                 }
             />
+
         </ul>
         <h2>"Not connected"</h2>
         <ul>
@@ -55,6 +56,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                         .filter(|(_, connected)| !*connected)
                         .collect::<Vec<_>>()
                 }
+
                 key=|(topic, _): &(String, bool)| topic.clone()
                 children=move |(topic, connected)| {
                     view! {
@@ -65,6 +67,7 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                     }
                 }
             />
+
         </ul>
     }
 }
@@ -91,17 +94,9 @@ pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
         };
 
         if topic.get().connected {
-            Either::Left(view! {
-                <button class=BUTTON_STYLE on:click=leave_topic>
-                    "Leave"
-                </button>
-            })
+            Either::Left(view! { <button on:click=leave_topic>"Leave"</button> })
         } else {
-            Either::Right(view! {
-                <button class=BUTTON_STYLE on:click=join_topic>
-                    "Join"
-                </button>
-            })
+            Either::Right(view! { <button on:click=join_topic>"Join"</button> })
         }
     };
 
