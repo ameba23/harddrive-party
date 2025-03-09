@@ -1,7 +1,8 @@
 use crate::{
     display_bytes,
-    file::{DownloadingFile, File, FileDisplayContext},
-    DownloadStatus, FilesReadSignal, PeerPath, UiDownloadRequest,
+    file::{DownloadStatus, DownloadingFile, File, FileDisplayContext},
+    ui_messages::UiDownloadRequest,
+    FilesReadSignal, PeerPath,
 };
 use leptos::{
     either::{Either, EitherOf3},
@@ -71,33 +72,40 @@ pub fn Request(file: File) -> impl IntoView {
             let is_dir = file.is_dir == Some(true);
             Either::Left(view! {
                 <li>
-                    {request.peer_name} " "
-                    {display_bytes(request.total_size)} " "
+                    {request.peer_name} " " {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
-                            DownloadStatus::Downloading{ bytes_read, request_id: _} => {
-                                EitherOf3::A(view! {
-                                    <span>
-                                        <DownloadingFile bytes_read size=file.size/>
-                                    </span>
-                                })
+                            DownloadStatus::Downloading { bytes_read, request_id: _ } => {
+                                EitherOf3::A(
+                                    view! {
+                                        <span>
+                                            <DownloadingFile bytes_read size=file.size/>
+                                        </span>
+                                    },
+                                )
                             }
                             DownloadStatus::Downloaded(_) => {
-                                    EitherOf3::B(view! { <span> "✅"</span>})
+                                EitherOf3::B(view! { <span>"✅"</span> })
                             }
-                            _ => {
-                                EitherOf3::C(view! { <span></span> })
-                            }
+                            _ => EitherOf3::C(view! { <span></span> }),
                         }
                     }}
+                    <table>
+                        <For
+                            each=child_files
+                            key=|file| format!("{}{:?}", file.name, file.size)
+                            children=move |file: File| {
+                                view! {
+                                    <File
+                                        file
+                                        is_shared=false
+                                        context=FileDisplayContext::Transfer
+                                    />
+                                }
+                            }
+                        />
 
-               <table>
-                <For
-                    each=child_files
-                    key=|file| format!("{}{:?}", file.name, file.size)
-                    children=move |file: File| view! { <File file is_shared=false context=FileDisplayContext::Transfer /> }
-                />
-            </table>
+                    </table>
                 </li>
             })
         }

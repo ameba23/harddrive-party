@@ -1,4 +1,4 @@
-use super::{peer::Peer, Command, ErrorMessage, RequesterSetter, SuccessMessage, BUTTON_STYLE};
+use crate::{peer::Peer, ui_messages::Command, ErrorMessage, RequesterSetter, SuccessMessage};
 use leptos::{either::EitherOf3, html::Input, prelude::*};
 
 #[component]
@@ -47,7 +47,7 @@ pub fn Shares(
                         node_ref=input_ref
                     />
                 </code>
-                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share />
+                <input type="submit" value="Add" on:click=add_share/>
             </div>
         </form>
 
@@ -55,22 +55,24 @@ pub fn Shares(
         {move || {
             match add_or_remove_share_message.get() {
                 Some(Ok(message)) => {
-                    EitherOf3::A(view! {
-                        <span>
-                            <SuccessMessage message/>
-                        </span>
-                    })
+                    EitherOf3::A(
+                        view! {
+                            <span>
+                                <SuccessMessage message/>
+                            </span>
+                        },
+                    )
                 }
                 Some(Err(message)) => {
-                    EitherOf3::B(view! {
-                        <span>
-                            <ErrorMessage message/>
-                        </span>
-                    })
+                    EitherOf3::B(
+                        view! {
+                            <span>
+                                <ErrorMessage message/>
+                            </span>
+                        },
+                    )
                 }
-                None => {
-                    EitherOf3::C(view! { <span></span> })
-                }
+                None => EitherOf3::C(view! { <span></span> }),
             }
         }}
 

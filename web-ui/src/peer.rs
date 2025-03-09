@@ -68,8 +68,13 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                 <For
                     each=files_iter
                     key=|file| file.name.clone()
-                    children=move |file: File| view! { <File file is_shared=peer.is_self context=FileDisplayContext::Peer /> }
+                    children=move |file: File| {
+                        view! {
+                            <File file is_shared=peer.is_self context=FileDisplayContext::Peer/>
+                        }
+                    }
                 />
+
             </table>
         </li>
     }
