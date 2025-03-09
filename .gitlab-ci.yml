@@ -12,8 +12,6 @@ test-code:
   stage: test
   script:
     - cargo test
-    - cargo install cargo-tarpaulin
-    - cargo tarpaulin --ignore-tests
     - rustup component add clippy
     - cargo clippy -- -D warnings
     - rustup component add rustfmt
@@ -23,6 +21,8 @@ test-code:
   only:
     - main
 
+# - cargo install cargo-tarpaulin
+# - cargo tarpaulin --ignore-tests
 # lint-code:
 #   stage: test
 #   script:
