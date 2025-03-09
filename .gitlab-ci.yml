@@ -1,4 +1,4 @@
-image: "rust:bullseye"
+image: "rust:latest"
 
 default:
   before_script:
@@ -21,7 +21,7 @@ test-code:
     - cargo install cargo-audit
     - cargo audit
   only:
-    - prod
+    - main
 
 # lint-code:
 #   stage: test
