@@ -22,8 +22,11 @@ use crate::{
     ws::{Requester, WebsocketService},
 };
 use futures::StreamExt;
-use leptos::*;
-use leptos_router::*;
+use leptos::prelude::*;
+use leptos_router::{
+    components::{Route, Router, Routes},
+    path,
+};
 use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -60,23 +63,23 @@ pub fn HdpUi() -> impl IntoView {
     };
     info!("location {}", location);
 
-    let (error_message, set_error_message) = create_signal(HashSet::<AppError>::new());
+    let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
     let ws_url = format!("ws://{}:4001", location);
     let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url, set_error_message).unwrap();
 
     // Setup signals
-    let (requester, set_requester) = create_signal(Requester::new(ws_service));
-    let (peers, set_peers) = create_signal(HashMap::<String, Peer>::new());
-    let (shares, set_shares) = create_signal(Option::<Peer>::None);
+    let (requester, set_requester) = signal(Requester::new(ws_service));
+    let (peers, set_peers) = signal(HashMap::<String, Peer>::new());
+    let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
-        create_signal(Option::<Result<String, String>>::None);
-    let (topics, set_topics) = create_signal(Vec::<(String, bool)>::new());
+        signal(Option::<Result<String, String>>::None);
+    let (topics, set_topics) = signal(Vec::<(String, bool)>::new());
 
-    let (requests, set_requests) = create_signal(Requests::new());
+    let (requests, set_requests) = signal(Requests::new());
 
-    let (files, set_files) = create_signal(BTreeMap::<PeerPath, File>::new());
-    let (home_dir, set_home_dir) = create_signal(Option::<String>::None);
+    let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
+    let (home_dir, set_home_dir) = signal(Option::<String>::None);
 
     provide_context(RequesterSetter(set_requester));
     // provide_context(Requested(requested));
@@ -176,10 +179,10 @@ pub fn HdpUi() -> impl IntoView {
                                                 name: request.path.clone(),
                                                 peer_name: request.peer_name.clone(),
                                                 size: None,
-                                                download_status: create_rw_signal(
+                                                download_status: RwSignal::new(
                                                     DownloadStatus::Requested(id),
                                                 ),
-                                                request: create_rw_signal(Some(request.clone())),
+                                                request: RwSignal::new(Some(request.clone())),
                                                 is_dir: None,
                                             });
                                         // Mark all files below this one in the dir heirarchy as
@@ -360,10 +363,8 @@ pub fn HdpUi() -> impl IntoView {
                                             name: request.path.clone(),
                                             peer_name: request.peer_name.clone(),
                                             size: Some(request.total_size),
-                                            download_status: create_rw_signal(
-                                                download_status.clone(),
-                                            ),
-                                            request: create_rw_signal(Some(request.clone())),
+                                            download_status: RwSignal::new(download_status.clone()),
+                                            request: RwSignal::new(Some(request.clone())),
                                             is_dir: None,
                                         });
 
@@ -414,10 +415,8 @@ pub fn HdpUi() -> impl IntoView {
                                                     name: requested_file.path,
                                                     peer_name: peer_path.peer_name.clone(),
                                                     size: Some(requested_file.size),
-                                                    download_status: create_rw_signal(
-                                                        download_status,
-                                                    ),
-                                                    request: create_rw_signal(None),
+                                                    download_status: RwSignal::new(download_status),
+                                                    request: RwSignal::new(None),
                                                     is_dir: Some(false),
                                                 });
                                         }
@@ -595,48 +594,48 @@ pub fn HdpUi() -> impl IntoView {
                                 class="mr-2"
                                 title=move || { format!("{} connected topics", topics.get().len()) }
                             >
-                                <A href="topics" class=ITEM_STYLE>
+                                <a href="topics" class=ITEM_STYLE>
                                     {"🖧 Topics"}
                                     <span class=NUMBER_LABEL>{move || { topics.get().len() }}</span>
-                                </A>
+                                </a>
                             </li>
                             <li class="mr-2">
-                                <A href="shares" class=ITEM_STYLE>
+                                <a href="shares" class=ITEM_STYLE>
                                     "🖤 Shares"
                                     <span class=NUMBER_LABEL>{shared_files_size}</span>
-                                </A>
+                                </a>
                             </li>
                             <li
                                 class="mr-2"
                                 title=move || { format!("{} connected peers", peers.get().len()) }
                             >
-                                <A href="peers" class=ITEM_STYLE>
+                                <a href="peers" class=ITEM_STYLE>
                                     "👾 Peers"
                                     <span class=NUMBER_LABEL>{move || { peers.get().len() }}</span>
-                                </A>
+                                </a>
                             </li>
                             <li class="mr-2">
-                                <A href="transfers" class=ITEM_STYLE>
+                                <a href="transfers" class=ITEM_STYLE>
                                     {"⇅ Transfers"}
-                                </A>
+                                </a>
                             </li>
                         </ul>
                     </div>
                     {error_message_display}
                 </nav>
                 <main>
-                    <Routes>
-                        <Route path="" view=move || view! { <Peers peers/> }/>
-                        <Route path="topics" view=move || view! { <Topics topics/> }/>
+                    <Routes fallback=|| "Not found">
+                        <Route path=path!("") view=move || view! { <Peers peers/> }/>
+                        <Route path=path!("topics") view=move || view! { <Topics topics/> }/>
                         <Route
-                            path="shares"
+                            path=path!("shares")
                             view=move || {
                                 view! { <Shares shares add_or_remove_share_message home_dir/> }
                             }
                         />
-                        <Route path="peers" view=move || view! { <Peers peers/> }/>
+                        <Route path=path!("peers") view=move || view! { <Peers peers/> }/>
                         <Route
-                            path="transfers"
+                            path=path!("transfers")
                             view=move || view! { <Transfers requests files/> }
                         />
                     </Routes>

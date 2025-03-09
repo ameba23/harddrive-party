@@ -1,5 +1,5 @@
 use super::{peer::Peer, Command, ErrorMessage, RequesterSetter, SuccessMessage, BUTTON_STYLE};
-use leptos::{html::Input, *};
+use leptos::{either::EitherOf3, html::Input, prelude::*};
 
 #[component]
 pub fn Shares(
@@ -12,7 +12,7 @@ pub fn Shares(
         None => Vec::new(),
     };
 
-    let input_ref = create_node_ref::<Input>();
+    let input_ref: NodeRef<Input> = NodeRef::new();
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
 
     let home_dir_if_exists = move || {
@@ -47,7 +47,7 @@ pub fn Shares(
                         node_ref=input_ref
                     />
                 </code>
-                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share value="Add"/>
+                <input type="submit" value="Add" class=BUTTON_STYLE on:click=add_share />
             </div>
         </form>
 
@@ -55,21 +55,21 @@ pub fn Shares(
         {move || {
             match add_or_remove_share_message.get() {
                 Some(Ok(message)) => {
-                    view! {
+                    EitherOf3::A(view! {
                         <span>
                             <SuccessMessage message/>
                         </span>
-                    }
+                    })
                 }
                 Some(Err(message)) => {
-                    view! {
+                    EitherOf3::B(view! {
                         <span>
                             <ErrorMessage message/>
                         </span>
-                    }
+                    })
                 }
                 None => {
-                    view! { <span></span> }
+                    EitherOf3::C(view! { <span></span> })
                 }
             }
         }}
