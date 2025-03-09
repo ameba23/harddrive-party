@@ -40,7 +40,7 @@ pub async fn stun_test(socket: &UdpSocket) -> anyhow::Result<PeerConnectionDetai
 async fn multipe_attempt_stun_query(
     socket: &UdpSocket,
 ) -> anyhow::Result<(SocketAddr, SocketAddr)> {
-    let mut stun_servers = STUN_SERVERS.clone();
+    let mut stun_servers = STUN_SERVERS;
     let (selected_stun_servers, _) =
         stun_servers.partial_shuffle(&mut rand::thread_rng(), MAX_STUN_SERVER_ATTEMPTS);
     let mut first_test = None;
