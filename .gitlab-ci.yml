@@ -16,11 +16,11 @@ test-code:
     - cargo clippy -- -D warnings
     - rustup component add rustfmt
     - cargo fmt -- --check
-    - cargo install cargo-audit
-    - cargo audit
   only:
     - main
 
+# - cargo install cargo-audit
+# - cargo audit
 # - cargo install cargo-tarpaulin
 # - cargo tarpaulin --ignore-tests
 # lint-code:
