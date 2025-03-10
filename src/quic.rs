@@ -31,7 +31,7 @@ pub async fn make_server_endpoint(
         Default::default(),
         Some(server_config),
         socket,
-        quinn::TokioRuntime,
+        Arc::new(quinn::TokioRuntime),
     )?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
@@ -48,7 +48,7 @@ pub async fn make_server_endpoint_basic_socket(
         Default::default(),
         Some(server_config),
         socket.into_std()?,
-        quinn::TokioRuntime,
+        Arc::new(quinn::TokioRuntime),
     )?;
     endpoint.set_default_client_config(client_config);
     Ok(endpoint)
@@ -131,8 +131,8 @@ impl SkipClientVerification {
 }
 
 impl rustls::server::ClientCertVerifier for SkipClientVerification {
-    fn client_auth_root_subjects(&self) -> Option<rustls::DistinguishedNames> {
-        Some(Vec::new())
+    fn client_auth_root_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
     }
 
     fn verify_client_cert(
@@ -195,8 +195,8 @@ impl rustls::sign::SigningKey for OurSigningKey {
             None
         }
     }
-    fn algorithm(&self) -> rustls::internal::msgs::enums::SignatureAlgorithm {
-        rustls::internal::msgs::enums::SignatureAlgorithm::ED25519
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        rustls::SignatureAlgorithm::ED25519
     }
 }
 

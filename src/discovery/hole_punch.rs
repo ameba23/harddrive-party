@@ -31,7 +31,7 @@ const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
 pub struct PunchingUdpSocket {
     /// The underlying UDP socket
     socket: Arc<tokio::net::UdpSocket>,
-    quinn_socket_state: quinn_udp::UdpSocketState,
+    quinn_socket_state: Arc<quinn_udp::UdpSocketState>,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
 }
 
@@ -70,7 +70,7 @@ impl PunchingUdpSocket {
         Ok((
             Self {
                 socket,
-                quinn_socket_state: quinn_udp::UdpSocketState::new(),
+                quinn_socket_state: Arc::new(quinn_udp::UdpSocketState::new()),
                 udp_recv_tx: udp_recv_tx.clone(),
             },
             HolePuncher {
@@ -84,12 +84,12 @@ impl PunchingUdpSocket {
 
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {
     fn poll_send(
-        &mut self,
+        &self,
         state: &quinn_udp::UdpState,
         cx: &mut Context,
-        transmits: &[quinn::Transmit],
+        transmits: &[quinn_udp::Transmit],
     ) -> Poll<io::Result<usize>> {
-        let quinn_socket_state = &mut self.quinn_socket_state;
+        let quinn_socket_state = &*self.quinn_socket_state;
         let io = &*self.socket;
         loop {
             ready!(io.poll_send_ready(cx))?;

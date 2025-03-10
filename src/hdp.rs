@@ -1129,7 +1129,7 @@ async fn handle_session_token(
         send.write_all(&thier_token).await?;
         send.finish().await?;
     } else {
-        let (_send, recv) = conn.accept_bi().await?;
+        let (_send, mut recv) = conn.accept_bi().await?;
         let buf = recv.read_to_end(TOKEN_LENGTH).await?;
         ensure!(buf == our_token, "Rejected remote peer's token");
     }
@@ -1139,7 +1139,7 @@ async fn handle_session_token(
 async fn accept_incoming_request(
     conn: &quinn::Connection,
 ) -> anyhow::Result<(quinn::SendStream, Vec<u8>)> {
-    let (send, recv) = conn.accept_bi().await?;
+    let (send, mut recv) = conn.accept_bi().await?;
     let buf = recv.read_to_end(MAX_REQUEST_SIZE).await?;
     Ok((send, buf))
 }
