@@ -150,7 +150,6 @@ impl PeerDiscovery {
         let mqtt_client = if discovery_methods.use_mqtt() {
             Some(
                 MqttClient::new(
-                    id,
                     AnnounceAddress {
                         connection_details: local_connection_details.clone(),
                         token: session_token,
