@@ -78,13 +78,14 @@ impl MqttClient {
     ) -> anyhow::Result<()> {
         let mqtt_server = self.mqtt_server.clone();
 
-        info!("Using MQTT server: {:?}", mqtt_server);
+        // TODO move this into the spawned task
+        // Don't bail, but inform UI of the error
+        // Make several attempts (with backoff)
+        info!("Using MQTT server: {}", mqtt_server);
         let mut server_addr = mqtt_server
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
-            .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
-
-        info!("MQTT Client identifier {:?}", self.client_id);
+            .ok_or_else(|| anyhow!("Failed to get IP of MQTT server {mqtt_server}"))?;
 
         let mut stream = connect(&server_addr, self.client_id.clone()).await?;
 
