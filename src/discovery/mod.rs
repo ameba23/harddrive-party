@@ -62,7 +62,6 @@ impl PeerConnectionDetails {
 /// Details of a peer found through one of the discovery methods
 #[derive(Debug)]
 pub struct DiscoveredPeer {
-    // pub connection_details: PeerConnectionDetails,
     pub socket_address: SocketAddr,
     pub socket_option: Option<UdpSocket>,
     pub token: SessionToken,
