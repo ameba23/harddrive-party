@@ -1035,6 +1035,12 @@ impl Hdp {
                     }
                 }
             }
+            Command::ConnectDirect(remote_peer) => {
+                self.peer_discovery
+                    .connect_direct_to_peer(&remote_peer)
+                    .await
+                    .unwrap();
+            }
         };
         Ok(())
     }

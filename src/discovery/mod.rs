@@ -7,8 +7,10 @@ use self::{
     topic::Topic,
 };
 use anyhow::anyhow;
+use bincode::deserialize;
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
+use log::{debug, error};
 use quinn::AsyncUdpSocket;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -19,7 +21,7 @@ use std::{
 use tokio::{
     net::UdpSocket,
     sync::{
-        mpsc::{channel, Receiver},
+        mpsc::{channel, Receiver, Sender},
         oneshot,
     },
 };
@@ -72,11 +74,13 @@ pub struct DiscoveredPeer {
 
 /// Handles the different peer discovery methods
 pub struct PeerDiscovery {
+    peers_tx: Sender<DiscoveredPeer>,
     pub peers_rx: Receiver<DiscoveredPeer>,
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
     pub topics_db: sled::Tree,
+    hole_puncher: Option<HolePuncher>,
 }
 
 impl PeerDiscovery {
@@ -117,6 +121,12 @@ impl PeerDiscovery {
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
+        // Only use the hole_puncher if we are not behind symmetric nat
+        let hole_puncher = match local_connection_details {
+            PeerConnectionDetails::Symmetric(_) => None,
+            _ => Some(hole_puncher.clone()),
+        };
+
         let addr = socket.local_addr()?;
 
         // Id is used as an identifier for mdns services
@@ -155,12 +165,8 @@ impl PeerDiscovery {
                         connection_details: local_connection_details.clone(),
                         token: session_token,
                     },
-                    peers_tx,
-                    // Only pass the hole_puncher if we are not behind symmetric nat
-                    match local_connection_details {
-                        PeerConnectionDetails::Symmetric(_) => None,
-                        _ => Some(hole_puncher),
-                    },
+                    peers_tx.clone(),
+                    hole_puncher.clone(),
                     mqtt_server,
                 )
                 .await?,
@@ -170,11 +176,13 @@ impl PeerDiscovery {
         };
 
         let mut peer_discovery = Self {
+            peers_tx,
             peers_rx,
             session_token,
             mdns_server,
             mqtt_client,
             topics_db,
+            hole_puncher,
         };
 
         for topic in topics_to_join {
@@ -215,6 +223,43 @@ impl PeerDiscovery {
     /// Get topic names, and whether or not we are currently connected
     pub fn get_topic_names(&self) -> Vec<(String, bool)> {
         get_topic_names(&self.topics_db)
+    }
+
+    pub async fn connect_direct_to_peer(&self, announce_payload: &[u8]) -> anyhow::Result<()> {
+        let topics: Vec<Topic> = self
+            .get_topic_names()
+            .into_iter()
+            // This will get all known topics, even if we are not currently joined
+            .map(|(name, _)| Topic::new(name))
+            .collect();
+        for topic in topics.iter() {
+            if let Some(announce_address) = decrypt_using_topic(announce_payload, topic) {
+                // TODO check it is not ourself
+                debug!("Remote peer {:?}", announce_address);
+                let connection_details = announce_address.connection_details.clone();
+                return match handle_peer(
+                    self.hole_puncher.clone(),
+                    connection_details,
+                    announce_address,
+                )
+                .await
+                {
+                    Ok(Some(discovered_peer)) => {
+                        debug!("Connect to {:?}", discovered_peer);
+                        if self.peers_tx.send(discovered_peer).await.is_err() {
+                            error!("Cannot write to channel");
+                        }
+                        Ok(())
+                    }
+                    Ok(None) => {
+                        debug!("Successfully handled peer - awaiting connection from their side");
+                        Ok(())
+                    }
+                    Err(error) => Err(anyhow!("Error when handling discovered peer {:?}", error)),
+                };
+            }
+        }
+        Err(anyhow!("Could not decrypt accounce message"))
     }
 }
 
@@ -377,4 +422,15 @@ impl DiscoveryMethods {
     fn use_mqtt(&self) -> bool {
         self != &DiscoveryMethods::MdnsOnly
     }
+}
+
+pub fn decrypt_using_topic(payload: &[u8], topic: &Topic) -> Option<AnnounceAddress> {
+    if let Some(announce_message_bytes) = topic.decrypt(payload) {
+        let announce_address_result: Result<AnnounceAddress, Box<bincode::ErrorKind>> =
+            deserialize(&announce_message_bytes);
+        if let Ok(announce_address) = announce_address_result {
+            return Some(announce_address);
+        }
+    }
+    None
 }

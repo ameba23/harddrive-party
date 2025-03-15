@@ -1,10 +1,10 @@
 //! Peer discovery by publishing ip address (encrypted with topic name) to an MQTT server
 use super::{
-    handle_peer, hole_punch::HolePuncher, topic::Topic, AnnounceAddress, DiscoveredPeer,
-    JoinOrLeaveEvent,
+    decrypt_using_topic, handle_peer, hole_punch::HolePuncher, topic::Topic, AnnounceAddress,
+    DiscoveredPeer, JoinOrLeaveEvent,
 };
 use anyhow::anyhow;
-use bincode::{deserialize, serialize};
+use bincode::serialize;
 use log::{debug, error, info, trace, warn};
 use mqtt::{
     control::variable_header::ConnectReturnCode,
@@ -358,18 +358,6 @@ impl MqttClient {
             Err(anyhow!("Failed to add topic"))
         }
     }
-}
-
-// Attempt to decrypt an announce message from another peer
-fn decrypt_using_topic(payload: &[u8], topic: &Topic) -> Option<AnnounceAddress> {
-    if let Some(announce_message_bytes) = topic.decrypt(payload) {
-        let announce_address_result: Result<AnnounceAddress, Box<bincode::ErrorKind>> =
-            deserialize(&announce_message_bytes);
-        if let Ok(announce_address) = announce_address_result {
-            return Some(announce_address);
-        }
-    }
-    None
 }
 
 #[derive(Hash, Eq, PartialEq)]

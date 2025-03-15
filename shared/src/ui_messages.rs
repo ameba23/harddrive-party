@@ -39,6 +39,8 @@ pub enum Command {
     /// Get files associated with a particular request
     RequestedFiles(u32),
     RemoveRequest(u32),
+    /// Connect to the given peer
+    ConnectDirect(Vec<u8>),
     /// Shutdown gracefully
     Close,
 }
