@@ -14,6 +14,7 @@ use mqtt::{
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
+use rand::{thread_rng, Rng};
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, ToSocketAddrs},
@@ -31,7 +32,9 @@ use tokio::{
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
-const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
+// const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
+// const DEFAULT_MQTT_SERVER: &str = "public.mqtthq.com:1883";
+const DEFAULT_MQTT_SERVER: &str = "test.mosquitto.org:1883";
 
 pub struct MqttClient {
     // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
@@ -74,11 +77,12 @@ impl MqttClient {
         mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         let mqtt_server = self.mqtt_server.clone();
+
+        info!("Using MQTT server: {:?}", mqtt_server);
         let mut server_addr = mqtt_server
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
             .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
-        // TODO - An alternative: public.mqtthq.com:1883
 
         info!("MQTT Client identifier {:?}", self.client_id);
 
@@ -412,7 +416,9 @@ fn create_publish_packet(
 }
 
 /// Connect to the MQTT server and send a connect packet
-async fn connect(server_addr: &SocketAddr, client_id: String) -> anyhow::Result<TcpStream> {
+async fn connect(server_addr: &SocketAddr, _client_id: String) -> anyhow::Result<TcpStream> {
+    let client_id: [u8; 4] = thread_rng().gen();
+    let client_id = hex::encode(client_id);
     info!("Connecting to MQTT broker {:?} ... ", server_addr);
     let mut stream = tokio::time::timeout(TCP_TIMEOUT, TcpStream::connect(server_addr)).await??;
 
