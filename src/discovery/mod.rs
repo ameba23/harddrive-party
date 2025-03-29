@@ -7,7 +7,7 @@ use self::{
     topic::Topic,
 };
 use anyhow::anyhow;
-use bincode::deserialize;
+use bincode::{deserialize, serialize};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
 use log::{debug, error};
@@ -81,6 +81,7 @@ pub struct PeerDiscovery {
     mqtt_client: Option<MqttClient>,
     pub topics_db: sled::Tree,
     hole_puncher: Option<HolePuncher>,
+    announce_address: AnnounceAddress,
 }
 
 impl PeerDiscovery {
@@ -157,14 +158,17 @@ impl PeerDiscovery {
             PeerConnectionDetails::Symmetric(_) => None,
             _ => Some(socket),
         };
+
+        let announce_address = AnnounceAddress {
+            connection_details: local_connection_details.clone(),
+            token: session_token,
+        };
+
         let mqtt_client = if discovery_methods.use_mqtt() {
             Some(
                 MqttClient::new(
                     id,
-                    AnnounceAddress {
-                        connection_details: local_connection_details.clone(),
-                        token: session_token,
-                    },
+                    announce_address.clone(),
                     peers_tx.clone(),
                     hole_puncher.clone(),
                     mqtt_server,
@@ -183,6 +187,7 @@ impl PeerDiscovery {
             mqtt_client,
             topics_db,
             hole_puncher,
+            announce_address,
         };
 
         for topic in topics_to_join {
@@ -193,7 +198,7 @@ impl PeerDiscovery {
     }
 
     /// Join the given topic
-    pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
+    pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<Vec<u8>> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.add_topic(topic.clone()).await?;
         }
@@ -202,8 +207,12 @@ impl PeerDiscovery {
             mqtt_client.add_topic(topic.clone()).await?;
         }
 
+        //TODO encrypt self.announce_address with this topic
+        let announce_address = serialize(&self.announce_address)?;
+        let announce_payload = topic.encrypt(&announce_address);
+
         self.topics_db.insert(&topic.name, &JOINED)?;
-        Ok(())
+        Ok(announce_payload)
     }
 
     /// Leave the given topic
