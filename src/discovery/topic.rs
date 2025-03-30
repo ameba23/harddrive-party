@@ -1,5 +1,7 @@
 //! Topic name for connecting peers
 
+use std::collections::HashMap;
+
 use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
 use rand::{thread_rng, Rng};
 
@@ -11,6 +13,10 @@ const CONTEXT: [u8; 32] = [
     201, 150, 87, 104, 91, 62, 47, 60, 2, 5, 31, 221, 42, 53, 91, 14, 115, 133, 124, 79, 115, 180,
     210, 81, 113, 98, 32, 171, 11, 228, 240, 2,
 ];
+
+/// Database values for recording whether we are connected to a topic
+const JOINED: [u8; 1] = [1];
+const LEFT: [u8; 1] = [0];
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct Topic {
@@ -82,6 +88,61 @@ impl Topic {
         } else {
             None
         }
+    }
+}
+
+pub struct TopicsDb {
+    names_to_connected: sled::Tree,
+    announce_addresses: HashMap<String, Vec<u8>>,
+}
+
+impl TopicsDb {
+    pub fn new(db: sled::Tree) -> Self {
+        Self {
+            names_to_connected: db,
+            announce_addresses: HashMap::new(),
+        }
+    }
+
+    pub fn join(&mut self, topic: &Topic, announce_address: Vec<u8>) -> anyhow::Result<()> {
+        self.names_to_connected.insert(&topic.name, &JOINED)?;
+        self.announce_addresses
+            .insert(topic.name.clone(), announce_address);
+        Ok(())
+    }
+
+    pub fn leave(&self, topic: &Topic) -> anyhow::Result<()> {
+        self.names_to_connected.insert(&topic.name, &LEFT)?;
+        Ok(())
+    }
+
+    pub fn get_topics(&self) -> Vec<(String, bool, Option<Vec<u8>>)> {
+        self.names_to_connected
+            .iter()
+            .filter_map(|kv_result| {
+                if let Ok((topic_name_buf, joined_buf)) = kv_result {
+                    // join or leave
+                    if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf) {
+                        let announce_address =
+                            self.announce_addresses.get(topic_name).map(|a| a.clone());
+
+                        match joined_buf.to_vec().first() {
+                            Some(1) => {
+                                Some((topic_name.to_string(), true, announce_address.clone()))
+                            }
+                            Some(0) => {
+                                Some((topic_name.to_string(), false, announce_address.clone()))
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

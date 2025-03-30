@@ -1,6 +1,22 @@
-<!doctype html><title>harddrive party</title><script type=module>
-import init, * as bindings from '/harddrive-party-web-ui-80affc2324e92ab0f935d52f21003c883615ddcbb0e5af9f4478277b339fe6a289915a2ebdda3f2171458d7f8168e190.js';
-init('/harddrive-party-web-ui-80affc2324e92ab0f935d52f21003c883615ddcbb0e5af9f4478277b339fe6a289915a2ebdda3f2171458d7f8168e190_bg.wasm');
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>harddrive party</title>
+		
+<script type="module">
+import init, * as bindings from '/harddrive-party-web-ui-47b52f2190dab246.js';
+const wasm = await init({ module_or_path: '/harddrive-party-web-ui-47b52f2190dab246_bg.wasm' });
+
+
 window.wasmBindings = bindings;
 
-</script><link href=/favicon-e9cbd8f50cc65bf2.ico integrity=sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi-qSXEpwp-yM4BW rel=icon><link href=/output-e9040dd91ff4d137.css integrity=sha384-DHhI1SzZMzKXMlNy_1RaHA1Gh31E1oAY0q7UzIift04HDq5Yuh3lLYCidHYzpVjt rel=stylesheet><link as=fetch crossorigin href=/harddrive-party-web-ui-80affc2324e92ab0f935d52f21003c883615ddcbb0e5af9f4478277b339fe6a289915a2ebdda3f2171458d7f8168e190_bg.wasm integrity=sha384-gK_8IyTpKrD5NdUvIQA8iDYV3cuw5a-fRHgnezOf5qKJkVouvdo_IXFFjX-BaOGQ rel=preload type=application/wasm><link crossorigin href=/harddrive-party-web-ui-80affc2324e92ab0f935d52f21003c883615ddcbb0e5af9f4478277b339fe6a289915a2ebdda3f2171458d7f8168e190.js integrity=sha384-lVQ16updjHmMk_EoG_O6NxTGhgqK1YMUBUvIEcLd8HGVcL3ZH5cIi_-YGLlhj0On rel=modulepreload></head><body><stylesheet href=/pkg/tailwind.css id=leptos> </stylesheet></body></html>
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+		<link rel="icon" href="/favicon-e9cbd8f50cc65bf2.ico" integrity="sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi+qSXEpwp+yM4BW"/>
+		
+	<link rel="modulepreload" href="/harddrive-party-web-ui-47b52f2190dab246.js" crossorigin="anonymous" integrity="sha384-CrhmhzPtcCPFwnmdRBywL3WFYZw9ehOW+zB2oEyEB1+Dhnb/Lx9uaLa05gHDwtm7"><link rel="preload" href="/harddrive-party-web-ui-47b52f2190dab246_bg.wasm" crossorigin="anonymous" integrity="sha384-pNCj1TKvZfJI6IUG8KRwHRKx6Lv5uqSGo7wdxgahAsSd9xKZ6NhNViwltklXN1E9" as="fetch" type="application/wasm"></head>
+	<body>
+	</body>
+</html>

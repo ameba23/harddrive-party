@@ -7,7 +7,7 @@ use thaw::*;
 
 #[component]
 pub fn HdpHeader(
-    topics: ReadSignal<Vec<(String, bool)>>,
+    topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>,
     peers: ReadSignal<HashMap<String, Peer>>,
     shares: ReadSignal<Option<Peer>>,
 ) -> impl IntoView {

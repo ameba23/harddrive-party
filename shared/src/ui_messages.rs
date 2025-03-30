@@ -72,7 +72,8 @@ pub enum UiEvent {
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
     /// The topics connected to has changed
-    Topics(Vec<(String, bool)>),
+    /// Topic name, connected?, announce address
+    Topics(Vec<(String, bool, Option<Vec<u8>>)>),
     // /// The requested or downloaded files have changed
     // Wishlist {
     //     requested: Vec<UiDownloadRequest>,

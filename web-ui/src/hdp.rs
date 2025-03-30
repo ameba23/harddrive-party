@@ -65,7 +65,7 @@ pub fn HdpUi() -> impl IntoView {
     let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
-    let (topics, set_topics) = signal(Vec::<(String, bool)>::new());
+    let (topics, set_topics) = signal(Vec::<(String, bool, Option<Vec<u8>>)>::new());
 
     let (requests, set_requests) = signal(Requests::new());
 

@@ -4,7 +4,7 @@ use leptos::html::Input;
 use leptos::{either::Either, prelude::*};
 
 #[component]
-pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
+pub fn Topics(topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_ref: NodeRef<Input> = NodeRef::new();
 
@@ -31,11 +31,11 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
         <ul>
             <For
                 each=move || {
-                    topics.get().into_iter().filter(|(_, connected)| *connected).collect::<Vec<_>>()
+                    topics.get().into_iter().filter(|(_, connected, _)| *connected).collect::<Vec<_>>()
                 }
 
-                key=|(topic, _): &(String, bool)| topic.clone()
-                children=move |(topic, connected)| {
+                key=|(topic, _, _): &(String, bool, Option<Vec<u8>>)| topic.clone()
+                children=move |(topic, connected, _announce_payload)| {
                     view! {
                         <Topic topic=RwSignal::new(Topic {
                             name: topic.to_string(),
@@ -53,12 +53,12 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool)>>) -> impl IntoView {
                     topics
                         .get()
                         .into_iter()
-                        .filter(|(_, connected)| !*connected)
+                        .filter(|(_, connected, _)| !*connected)
                         .collect::<Vec<_>>()
                 }
 
-                key=|(topic, _): &(String, bool)| topic.clone()
-                children=move |(topic, connected)| {
+                key=|(topic, _, _): &(String, bool, Option<Vec<u8>>)| topic.clone()
+                children=move |(topic, connected, _)| {
                     view! {
                         <Topic topic=RwSignal::new(Topic {
                             name: topic.to_string(),

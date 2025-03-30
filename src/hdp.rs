@@ -395,7 +395,7 @@ impl Hdp {
             Command::Join(topic_name) => {
                 let topic = Topic::new(topic_name.clone());
                 match self.peer_discovery.join_topic(topic).await {
-                    Ok(announce_payload) => {
+                    Ok(()) => {
                         if self
                             .response_tx
                             .send(UiServerMessage::Response {

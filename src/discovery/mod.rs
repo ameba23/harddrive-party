@@ -25,6 +25,7 @@ use tokio::{
         oneshot,
     },
 };
+use topic::TopicsDb;
 
 pub mod capability;
 pub mod hole_punch;
@@ -37,10 +38,6 @@ pub mod topic;
 pub const TOKEN_LENGTH: usize = 32;
 /// A session token used in capability verification (proof of knowledge of topic name)
 pub type SessionToken = [u8; 32];
-
-/// Database values for recording whether we are connected to a topic
-const JOINED: [u8; 1] = [1];
-const LEFT: [u8; 1] = [0];
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -79,7 +76,7 @@ pub struct PeerDiscovery {
     pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
     mqtt_client: Option<MqttClient>,
-    pub topics_db: sled::Tree,
+    pub topics_db: TopicsDb,
     hole_puncher: Option<HolePuncher>,
     announce_address: AnnounceAddress,
 }
@@ -93,10 +90,12 @@ impl PeerDiscovery {
         topics_db: sled::Tree,
         mqtt_server: Option<String>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
+        let topics_db = TopicsDb::new(topics_db);
         // Join topics given as arguments, as well as from db
-        let mut topics_to_join: HashSet<Topic> = get_topic_names(&topics_db)
+        let mut topics_to_join: HashSet<Topic> = topics_db
+            .get_topics()
             .iter()
-            .filter_map(|(name, join)| {
+            .filter_map(|(name, join, _annouce_address)| {
                 if *join {
                     Some(Topic::new(name.clone()))
                 } else {
@@ -198,7 +197,7 @@ impl PeerDiscovery {
     }
 
     /// Join the given topic
-    pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<Vec<u8>> {
+    pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.add_topic(topic.clone()).await?;
         }
@@ -211,8 +210,8 @@ impl PeerDiscovery {
         let announce_address = serialize(&self.announce_address)?;
         let announce_payload = topic.encrypt(&announce_address);
 
-        self.topics_db.insert(&topic.name, &JOINED)?;
-        Ok(announce_payload)
+        self.topics_db.join(&topic, announce_payload)?;
+        Ok(())
     }
 
     /// Leave the given topic
@@ -225,13 +224,13 @@ impl PeerDiscovery {
             mqtt_client.remove_topic(topic.clone()).await?;
         }
 
-        self.topics_db.insert(&topic.name, &LEFT)?;
+        self.topics_db.leave(&topic)?;
         Ok(())
     }
 
     /// Get topic names, and whether or not we are currently connected
-    pub fn get_topic_names(&self) -> Vec<(String, bool)> {
-        get_topic_names(&self.topics_db)
+    pub fn get_topic_names(&self) -> Vec<(String, bool, Option<Vec<u8>>)> {
+        self.topics_db.get_topics()
     }
 
     pub async fn connect_direct_to_peer(&self, announce_payload: &[u8]) -> anyhow::Result<()> {
@@ -239,7 +238,7 @@ impl PeerDiscovery {
             .get_topic_names()
             .into_iter()
             // This will get all known topics, even if we are not currently joined
-            .map(|(name, _)| Topic::new(name))
+            .map(|(name, _, _)| Topic::new(name))
             .collect();
         for topic in topics.iter() {
             if let Some(announce_address) = decrypt_using_topic(announce_payload, topic) {
@@ -296,28 +295,6 @@ pub enum JoinOrLeaveEvent {
 pub struct AnnounceAddress {
     connection_details: PeerConnectionDetails,
     token: SessionToken,
-}
-
-fn get_topic_names(topics_db: &sled::Tree) -> Vec<(String, bool)> {
-    topics_db
-        .iter()
-        .filter_map(|kv_result| {
-            if let Ok((topic_name_buf, joined_buf)) = kv_result {
-                // join or leave
-                if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf) {
-                    match joined_buf.to_vec().first() {
-                        Some(1) => Some((topic_name.to_string(), true)),
-                        Some(0) => Some((topic_name.to_string(), false)),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect()
 }
 
 pub async fn handle_peer(
