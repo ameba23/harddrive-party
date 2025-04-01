@@ -14,6 +14,7 @@ use mqtt::{
     },
     Encodable, QualityOfService, TopicFilter, TopicName,
 };
+use rand::{thread_rng, Rng};
 use std::{
     collections::{HashMap, HashSet},
     net::{SocketAddr, ToSocketAddrs},
@@ -31,19 +32,22 @@ use tokio::{
 // Keep alive timeout in seconds
 const KEEP_ALIVE: u16 = 30;
 const TCP_TIMEOUT: Duration = Duration::from_secs(120);
-const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
+// const DEFAULT_MQTT_SERVER: &str = "broker.hivemq.com:1883";
+// const DEFAULT_MQTT_SERVER: &str = "public.mqtthq.com:1883";
+const DEFAULT_MQTT_SERVER: &str = "test.mosquitto.org:1883";
 
+/// An MQTT client for peer discovery
 pub struct MqttClient {
-    // topics: Arc<Mutex<HashMap<Topic, MqttTopic>>>,
-    client_id: String,
+    /// Our IP address and other details
     announce_address: AnnounceAddress,
+    /// Tracks joining or leaving topics
     topic_events_tx: Sender<JoinOrLeaveEvent>,
+    /// Hostname and port of MQTT server to be used
     mqtt_server: String,
 }
 
 impl MqttClient {
     pub async fn new(
-        client_id: String,
         announce_address: AnnounceAddress,
         peers_tx: Sender<DiscoveredPeer>,
         hole_puncher: Option<HolePuncher>,
@@ -55,7 +59,6 @@ impl MqttClient {
 
         let mqtt_client = Self {
             announce_address: announce_address_clone,
-            client_id,
             topic_events_tx,
             mqtt_server: mqtt_server.unwrap_or_else(|| DEFAULT_MQTT_SERVER.to_string()),
         };
@@ -74,19 +77,20 @@ impl MqttClient {
         mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
     ) -> anyhow::Result<()> {
         let mqtt_server = self.mqtt_server.clone();
+
+        // TODO move this into the spawned task
+        // Don't bail, but inform UI of the error
+        // Make several attempts (with backoff)
+        info!("Using MQTT server: {}", mqtt_server);
         let mut server_addr = mqtt_server
             .to_socket_addrs()?
             .find(|x| x.is_ipv4())
-            .ok_or_else(|| anyhow!("Failed to get IP of MQTT server"))?;
-        // TODO - An alternative: public.mqtthq.com:1883
+            .ok_or_else(|| anyhow!("Failed to get IP of MQTT server {mqtt_server}"))?;
 
-        info!("MQTT Client identifier {:?}", self.client_id);
-
-        let mut stream = connect(&server_addr, self.client_id.clone()).await?;
+        let mut stream = connect(&server_addr).await?;
 
         // Start a loop processing messages as a separate task
         let announce_address = self.announce_address.clone();
-        let client_id = self.client_id.clone();
         tokio::spawn(async move {
             let mut topics = HashMap::<Topic, MqttTopic>::new();
 
@@ -289,7 +293,7 @@ impl MqttClient {
                     }
                     tokio::time::sleep(Duration::from_secs(2)).await;
                     let reconnect_success = loop {
-                        if let Ok(new_stream) = connect(&server_addr, client_id.clone()).await {
+                        if let Ok(new_stream) = connect(&server_addr).await {
                             stream = new_stream;
                             break true;
                         } else {
@@ -412,7 +416,9 @@ fn create_publish_packet(
 }
 
 /// Connect to the MQTT server and send a connect packet
-async fn connect(server_addr: &SocketAddr, client_id: String) -> anyhow::Result<TcpStream> {
+async fn connect(server_addr: &SocketAddr) -> anyhow::Result<TcpStream> {
+    let client_id: [u8; 4] = thread_rng().gen();
+    let client_id = hex::encode(client_id);
     info!("Connecting to MQTT broker {:?} ... ", server_addr);
     let mut stream = tokio::time::timeout(TCP_TIMEOUT, TcpStream::connect(server_addr)).await??;
 

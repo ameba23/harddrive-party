@@ -24,10 +24,7 @@ pub enum Command {
     /// Read a portion a of a file, from the given connect peer name
     Read(ReadQuery, String),
     /// Download a file or dir
-    Download {
-        path: String,
-        peer_name: String,
-    },
+    Download { path: String, peer_name: String },
     /// Query our own shares
     Shares(IndexQuery),
     /// Add or update a directory to share
@@ -38,6 +35,7 @@ pub enum Command {
     Requests,
     /// Get files associated with a particular request
     RequestedFiles(u32),
+    /// Cancel a particular request
     RemoveRequest(u32),
     /// Shutdown gracefully
     Close,
