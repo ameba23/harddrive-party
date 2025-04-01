@@ -62,7 +62,6 @@ impl PeerConnectionDetails {
 /// Details of a peer found through one of the discovery methods
 #[derive(Debug)]
 pub struct DiscoveredPeer {
-    // pub connection_details: PeerConnectionDetails,
     pub socket_address: SocketAddr,
     pub socket_option: Option<UdpSocket>,
     pub token: SessionToken,
@@ -167,7 +166,6 @@ impl PeerDiscovery {
         let mqtt_client = if discovery_methods.use_mqtt() {
             Some(
                 MqttClient::new(
-                    id,
                     announce_address.clone(),
                     peers_tx.clone(),
                     hole_puncher.clone(),
