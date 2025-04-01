@@ -8,6 +8,7 @@ use self::{
 };
 use anyhow::anyhow;
 use bincode::{deserialize, serialize};
+use harddrive_party_shared::ui_messages::UiTopic;
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
 use log::{debug, error};
@@ -95,9 +96,9 @@ impl PeerDiscovery {
         let mut topics_to_join: HashSet<Topic> = topics_db
             .get_topics()
             .iter()
-            .filter_map(|(name, join, _annouce_address)| {
-                if *join {
-                    Some(Topic::new(name.clone()))
+            .filter_map(|ui_topic| {
+                if ui_topic.connected {
+                    Some(Topic::new(ui_topic.name.clone()))
                 } else {
                     None
                 }
@@ -229,7 +230,7 @@ impl PeerDiscovery {
     }
 
     /// Get topic names, and whether or not we are currently connected
-    pub fn get_topic_names(&self) -> Vec<(String, bool, Option<Vec<u8>>)> {
+    pub fn get_topic_names(&self) -> Vec<UiTopic> {
         self.topics_db.get_topics()
     }
 
@@ -238,7 +239,7 @@ impl PeerDiscovery {
             .get_topic_names()
             .into_iter()
             // This will get all known topics, even if we are not currently joined
-            .map(|(name, _, _)| Topic::new(name))
+            .map(|ui_topic| Topic::new(ui_topic.name))
             .collect();
         for topic in topics.iter() {
             if let Some(announce_address) = decrypt_using_topic(announce_payload, topic) {

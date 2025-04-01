@@ -222,9 +222,9 @@ async fn read_responses(
                             println!("Connected to remote peer: {}", name);
                         }
                         UiEvent::Topics(topics) => {
-                            for (topic, connected, _announce_payload) in topics {
-                                if connected {
-                                    println!("Connected to {}", topic);
+                            for ui_topic in topics {
+                                if ui_topic.connected {
+                                    println!("Connected to {}", ui_topic.name);
                                 }
                             }
                         }

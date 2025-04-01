@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
+use harddrive_party_shared::ui_messages::UiTopic;
 use rand::{thread_rng, Rng};
 
 const AAD: [u8; 0] = [];
@@ -116,7 +117,7 @@ impl TopicsDb {
         Ok(())
     }
 
-    pub fn get_topics(&self) -> Vec<(String, bool, Option<Vec<u8>>)> {
+    pub fn get_topics(&self) -> Vec<UiTopic> {
         self.names_to_connected
             .iter()
             .filter_map(|kv_result| {
@@ -127,12 +128,16 @@ impl TopicsDb {
                             self.announce_addresses.get(topic_name).map(|a| a.clone());
 
                         match joined_buf.to_vec().first() {
-                            Some(1) => {
-                                Some((topic_name.to_string(), true, announce_address.clone()))
-                            }
-                            Some(0) => {
-                                Some((topic_name.to_string(), false, announce_address.clone()))
-                            }
+                            Some(1) => Some(UiTopic {
+                                name: topic_name.to_string(),
+                                connected: true,
+                                announce_payload: announce_address.clone(),
+                            }),
+                            Some(0) => Some(UiTopic {
+                                name: topic_name.to_string(),
+                                connected: false,
+                                announce_payload: announce_address.clone(),
+                            }),
                             _ => None,
                         }
                     } else {

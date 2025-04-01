@@ -1,10 +1,13 @@
 //! Joining and leaving topics
-use crate::{ui_messages::Command, RequesterSetter};
+use crate::{
+    ui_messages::{Command, UiTopic},
+    RequesterSetter,
+};
 use leptos::html::Input;
 use leptos::{either::Either, prelude::*};
 
 #[component]
-pub fn Topics(topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>) -> impl IntoView {
+pub fn Topics(topics: ReadSignal<Vec<UiTopic>>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_ref: NodeRef<Input> = NodeRef::new();
 
@@ -31,16 +34,13 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>) -> impl 
         <ul>
             <For
                 each=move || {
-                    topics.get().into_iter().filter(|(_, connected, _)| *connected).collect::<Vec<_>>()
+                    topics.get().into_iter().filter(|topic| topic.connected).collect::<Vec<_>>()
                 }
 
-                key=|(topic, _, _): &(String, bool, Option<Vec<u8>>)| topic.clone()
-                children=move |(topic, connected, _announce_payload)| {
+                key=|topic: &UiTopic| topic.name.clone()
+                children=move |topic| {
                     view! {
-                        <Topic topic=RwSignal::new(Topic {
-                            name: topic.to_string(),
-                            connected,
-                        })/>
+                        <Topic topic=RwSignal::new(topic) />
                     }
                 }
             />
@@ -53,33 +53,23 @@ pub fn Topics(topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>) -> impl 
                     topics
                         .get()
                         .into_iter()
-                        .filter(|(_, connected, _)| !*connected)
+                        .filter(|topic| !topic.connected)
                         .collect::<Vec<_>>()
                 }
 
-                key=|(topic, _, _): &(String, bool, Option<Vec<u8>>)| topic.clone()
-                children=move |(topic, connected, _)| {
+                key=|topic: &UiTopic| topic.name.clone()
+                children=move |topic| {
                     view! {
-                        <Topic topic=RwSignal::new(Topic {
-                            name: topic.to_string(),
-                            connected,
-                        })/>
+                        <Topic topic=RwSignal::new(topic) />
                     }
                 }
             />
-
         </ul>
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Topic {
-    name: String,
-    connected: bool,
-}
-
 #[component]
-pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
+pub fn Topic(topic: RwSignal<UiTopic>) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
 
     let join_or_leave_button = move || {
@@ -100,10 +90,19 @@ pub fn Topic(topic: RwSignal<Topic>) -> impl IntoView {
         }
     };
 
+    let announce_payload = move || {
+        view! {
+            <code>
+            hex::encode(topic.get().announce_payload.unwrap_or_default())
+            </code>
+        }
+    };
+
     view! {
         <li>
             <code>{topic.get().name}</code>
             {join_or_leave_button}
+            {announce_payload}
         </li>
     }
 }

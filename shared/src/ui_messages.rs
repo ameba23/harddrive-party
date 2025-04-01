@@ -72,13 +72,23 @@ pub enum UiEvent {
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
     /// The topics connected to has changed
-    /// Topic name, connected?, announce address
-    Topics(Vec<(String, bool, Option<Vec<u8>>)>),
+    Topics(Vec<UiTopic>),
     // /// The requested or downloaded files have changed
     // Wishlist {
     //     requested: Vec<UiDownloadRequest>,
     //     downloaded: Vec<UiDownloadRequest>,
     // },
+}
+
+/// A known topic
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
+pub struct UiTopic {
+    /// The topic name
+    pub name: String,
+    /// Whether we are currently connected
+    pub connected: bool,
+    /// Our announce address encrypted to this topic (used for direct connections)
+    pub announce_payload: Option<Vec<u8>>,
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a

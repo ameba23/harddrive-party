@@ -1,4 +1,4 @@
-use crate::{display_bytes, peer::Peer, FilesReadSignal, PeerPath};
+use crate::{display_bytes, peer::Peer, ui_messages::UiTopic, FilesReadSignal, PeerPath};
 use leptos::prelude::*;
 use leptos_meta::Style;
 use leptos_router::hooks::use_navigate;
@@ -7,7 +7,7 @@ use thaw::*;
 
 #[component]
 pub fn HdpHeader(
-    topics: ReadSignal<Vec<(String, bool, Option<Vec<u8>>)>>,
+    topics: ReadSignal<Vec<UiTopic>>,
     peers: ReadSignal<HashMap<String, Peer>>,
     shares: ReadSignal<Option<Peer>>,
 ) -> impl IntoView {

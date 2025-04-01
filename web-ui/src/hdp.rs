@@ -26,7 +26,7 @@ use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thaw::*;
-use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage};
+use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage, UiTopic};
 use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
 
@@ -65,7 +65,7 @@ pub fn HdpUi() -> impl IntoView {
     let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
-    let (topics, set_topics) = signal(Vec::<(String, bool, Option<Vec<u8>>)>::new());
+    let (topics, set_topics) = signal(Vec::<UiTopic>::new());
 
     let (requests, set_requests) = signal(Requests::new());
 
