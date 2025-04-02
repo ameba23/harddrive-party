@@ -38,7 +38,7 @@ pub mod topic;
 /// Length of a SessionToken
 pub const TOKEN_LENGTH: usize = 32;
 /// A session token used in capability verification (proof of knowledge of topic name)
-pub type SessionToken = [u8; 32];
+pub type SessionToken = [u8; TOKEN_LENGTH];
 
 #[repr(u8)]
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

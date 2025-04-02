@@ -93,7 +93,7 @@ pub fn Topic(topic: RwSignal<UiTopic>) -> impl IntoView {
     let announce_payload = move || {
         view! {
             <code>
-            hex::encode(topic.get().announce_payload.unwrap_or_default())
+            {hex::encode(topic.get().announce_payload.unwrap_or_default())}
             </code>
         }
     };
