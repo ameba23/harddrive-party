@@ -56,6 +56,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                     path: "".to_string(), // TODO
                 }),
             ))
+            .filter(|(_, file)| file.is_expanded.get())
             .map(|(_, file)| file.clone()) // TODO ideally dont clone
             .collect::<Vec<File>>()
     };

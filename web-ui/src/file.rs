@@ -18,6 +18,7 @@ pub struct File {
     /// Size, if known
     pub size: Option<u64>,
     pub is_dir: Option<bool>,
+    pub is_expanded: RwSignal<bool>,
     pub download_status: RwSignal<DownloadStatus>,
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
@@ -29,6 +30,7 @@ impl File {
             peer_name,
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
+            is_expanded: RwSignal::new(false),
             download_status: RwSignal::new(DownloadStatus::Nothing),
             request: RwSignal::new(None),
         }
@@ -44,6 +46,7 @@ impl File {
             peer_name,
             size: None,
             is_dir: Some(false),
+            is_expanded: RwSignal::new(false),
             download_status: RwSignal::new(download_status),
             request: RwSignal::new(None),
         }
@@ -158,16 +161,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         }
                     } else {
                         view! {
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
                             <span></span>
                         }

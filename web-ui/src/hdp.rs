@@ -175,6 +175,7 @@ pub fn HdpUi() -> impl IntoView {
                                                 ),
                                                 request: RwSignal::new(Some(request.clone())),
                                                 is_dir: None,
+                                                is_expanded: RwSignal::new(true),
                                             });
                                         // Mark all files below this one in the dir heirarchy as
                                         // requested
@@ -357,6 +358,7 @@ pub fn HdpUi() -> impl IntoView {
                                             download_status: RwSignal::new(download_status.clone()),
                                             request: RwSignal::new(Some(request.clone())),
                                             is_dir: None,
+                                            is_expanded: RwSignal::new(true),
                                         });
 
                                     let mut upper_bound = peer_path.path.clone();
@@ -409,6 +411,7 @@ pub fn HdpUi() -> impl IntoView {
                                                     download_status: RwSignal::new(download_status),
                                                     request: RwSignal::new(None),
                                                     is_dir: Some(false),
+                                                    is_expanded: RwSignal::new(true),
                                                 });
                                         }
                                     });
@@ -443,14 +446,14 @@ pub fn HdpUi() -> impl IntoView {
                         Command::Shares(IndexQuery {
                             path: Default::default(),
                             searchterm: None,
-                            recursive: true,
+                            recursive: false,
                         })
                     } else {
                         Command::Ls(
                             IndexQuery {
                                 path: Default::default(),
                                 searchterm: None,
-                                recursive: true,
+                                recursive: false,
                             },
                             Default::default(),
                         )
