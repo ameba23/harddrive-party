@@ -5,9 +5,10 @@ use crate::{
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
-    either::{Either, EitherOf5},
+    either::{Either, EitherOf3, EitherOf5},
     prelude::*,
 };
+use thaw::*;
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]
@@ -111,10 +112,13 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
 
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
-        let icon = match file.is_dir {
-            Some(true) => "🗀 ",
-            Some(false) => "🗎 ",
-            None => " ",
+        let icon = move || match file.is_dir {
+            Some(true) => {
+                EitherOf3::A(view! { <Icon on:click=expand_dir icon=icondata::AiFolderOutlined/> })
+            }
+
+            Some(false) => EitherOf3::B(view! { <Icon icon=icondata::AiFileOutlined/> }),
+            None => EitherOf3::C(view! {}),
         };
         let (name, indentation) = match file_name.rsplit_once('/') {
             Some((path, name)) => {
@@ -124,20 +128,15 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             }
             None => (file_name, Default::default()),
         };
-        view! {
-            <pre>
-                {indentation} <strong on:click=expand_dir>{icon}</strong>
-                <span class="text-sm font-medium">{name}</span>
-            </pre>
-        }
+        view! { <pre>{indentation} {icon} " " <span class="text-sm font-medium">{name}</span></pre> }
     };
 
     let is_dir = file.is_dir == Some(true);
 
     view! {
-        <tr class="hover:bg-gray-200">
-            <td>{file_name_and_indentation}</td>
-            <td>
+        <TableRow>
+            <TableCell>{file_name_and_indentation}</TableCell>
+            <TableCell>
                 " " {display_bytes(file.size.unwrap_or_default())} " "
                 <button style=download_button_style on:click=download_request title="Download">
                     "🠫"
@@ -184,13 +183,15 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     } else {
                         view! {
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
                             <span></span>
                         }
                     }
                 }}
 
-            </td>
-        </tr>
+            </TableCell>
+        </TableRow>
     }
 }
 

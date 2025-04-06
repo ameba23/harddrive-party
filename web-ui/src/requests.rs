@@ -9,6 +9,7 @@ use leptos::{
     prelude::*,
 };
 use std::collections::BTreeMap;
+use thaw::*;
 
 /// For requests (requested or downloaded items)
 /// Map timestamp, request id to peer name and path
@@ -71,7 +72,7 @@ pub fn Request(file: File) -> impl IntoView {
             };
             let is_dir = file.is_dir == Some(true);
             Either::Left(view! {
-                <li>
+                <div>
                     {request.peer_name} " " {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
@@ -90,23 +91,25 @@ pub fn Request(file: File) -> impl IntoView {
                             _ => EitherOf3::C(view! { <span></span> }),
                         }
                     }}
-                    <table>
-                        <For
-                            each=child_files
-                            key=|file| format!("{}{:?}", file.name, file.size)
-                            children=move |file: File| {
-                                view! {
-                                    <File
-                                        file
-                                        is_shared=false
-                                        context=FileDisplayContext::Transfer
-                                    />
+                    <Table>
+                        <TableBody>
+                            <For
+                                each=child_files
+                                key=|file| format!("{}{:?}", file.name, file.size)
+                                children=move |file: File| {
+                                    view! {
+                                        <File
+                                            file
+                                            is_shared=false
+                                            context=FileDisplayContext::Transfer
+                                        />
+                                    }
                                 }
-                            }
-                        />
+                            />
 
-                    </table>
-                </li>
+                        </TableBody>
+                    </Table>
+                </div>
             })
         }
         None => Either::Right(view! { <li>"Never happens"</li> }),

@@ -6,6 +6,7 @@ use crate::{
 use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
+use thaw::*;
 
 #[derive(Clone, Debug)]
 pub struct Peer {
@@ -62,21 +63,35 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 
     // provide_context(PeerName(peer_signal));
     view! {
-        <li>
-            {peer_signal.get().0} " " {root_size} " shared" <table>
+        <div>
+            <Flex vertical=true>
+                <div>
+                    <Icon icon=icondata::AiUserOutlined/>
+                    {peer_signal.get().0}
+                    " "
+                    {root_size}
+                    " shared"
+                </div>
+                <Table>
+                    <TableBody>
+                        <For
+                            each=files_iter
+                            key=|file| file.name.clone()
+                            children=move |file: File| {
+                                view! {
+                                    <File
+                                        file
+                                        is_shared=peer.is_self
+                                        context=FileDisplayContext::Peer
+                                    />
+                                }
+                            }
+                        />
 
-                <For
-                    each=files_iter
-                    key=|file| file.name.clone()
-                    children=move |file: File| {
-                        view! {
-                            <File file is_shared=peer.is_self context=FileDisplayContext::Peer/>
-                        }
-                    }
-                />
-
-            </table>
-        </li>
+                    </TableBody>
+                </Table>
+            </Flex>
+        </div>
     }
 }
 
@@ -92,13 +107,11 @@ pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
         } else {
             Either::Right(view! {
                 <div>
-                    <ul>
-                        <For
-                            each=move || peers.get()
-                            key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                            children=move |(_peer_name, peer)| view! { <Peer peer/> }
-                        />
-                    </ul>
+                    <For
+                        each=move || peers.get()
+                        key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
+                        children=move |(_peer_name, peer)| view! { <Peer peer/> }
+                    />
                 </div>
             })
         }

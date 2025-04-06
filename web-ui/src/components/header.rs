@@ -92,7 +92,8 @@ pub fn HdpHeader(
                         }
                     >
 
-                        {"🖧 Topics"}
+                        <Icon icon=icondata::FaNetworkWiredSolid/>
+                        {" Topics"}
                         <Badge>{move || { topics.get().len() }}</Badge>
                     </Tab>
                     <Tab
@@ -102,7 +103,8 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "🖤 Shares"
+                        <Icon icon=icondata::AiHeartFilled/>
+                        " Shares"
                         <Badge>{shared_files_size}</Badge>
                     </Tab>
                     <Tab
@@ -112,7 +114,8 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "👾 Peers"
+                        <Icon icon=icondata::FaUsersSolid/>
+                        " Peers"
                         <Badge>{move || { peers.get().len() }}</Badge>
                     </Tab>
                     <Tab
@@ -122,7 +125,8 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "⇅ Transfers"
+                        <Icon icon=icondata::LuArrowUpDown/>
+                        " Transfers"
                     </Tab>
                 </TabList>
             </Space>
