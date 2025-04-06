@@ -3,6 +3,7 @@ use crate::{
     hdp::{display_bytes, Entry, RequesterSetter},
     ui_messages::{Command, UiDownloadRequest},
 };
+use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
     either::{Either, EitherOf5},
     prelude::*,
@@ -87,6 +88,27 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         }
     };
 
+    let expand_dir = move |_| {
+        if file.is_dir.unwrap_or_default() {
+            if file.is_expanded.get() {
+                // Collapse dir by either setting all children to insible - or removing all
+                // children from the map (simpler but less efficient)
+                log::info!("Collapse dir");
+            } else {
+                // If this is ourselve Command::Shares otherwise Command::Ls(query, peer_name)
+                let ls = Command::Shares(IndexQuery {
+                    path: Some(file_name.get()),
+                    searchterm: None,
+                    recursive: false,
+                });
+                set_requester.update(|requester| requester.make_request(ls));
+                // Issue here is that if this is repeatedly clicked before file is loaded we lose
+                // state
+                file.is_expanded.set(true);
+            }
+        }
+    };
+
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
         let icon = match file.is_dir {
@@ -104,7 +126,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         };
         view! {
             <pre>
-                {indentation} <strong>{icon}</strong>
+                {indentation} <strong on:click=expand_dir>{icon}</strong>
                 <span class="text-sm font-medium">{name}</span>
             </pre>
         }
