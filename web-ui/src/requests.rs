@@ -2,7 +2,7 @@ use crate::{
     display_bytes,
     file::{DownloadStatus, DownloadingFile, File, FileDisplayContext},
     ui_messages::UiDownloadRequest,
-    FilesReadSignal, PeerPath,
+    FilesSignal, PeerPath,
 };
 use leptos::{
     either::{Either, EitherOf3},
@@ -48,7 +48,7 @@ pub fn Request(file: File) -> impl IntoView {
     let request_option = file.request.get();
     match request_option {
         Some(request) => {
-            let files = use_context::<FilesReadSignal>().unwrap().0;
+            let files = use_context::<FilesSignal>().unwrap().0;
             let peer_path = PeerPath {
                 peer_name: request.peer_name.clone(),
                 path: request.path.clone(),

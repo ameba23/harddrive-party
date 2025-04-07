@@ -1,7 +1,7 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    FilesReadSignal, PeerPath,
+    FilesSignal, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
@@ -27,7 +27,7 @@ impl Peer {
 
 #[component]
 pub fn Peer(peer: Peer) -> impl IntoView {
-    let files = use_context::<FilesReadSignal>().unwrap().0;
+    let files = use_context::<FilesSignal>().unwrap().0;
     // This signal is used below to provide context to File
     let (peer_signal, _set_peer) = signal((peer.name.clone(), peer.is_self));
 
@@ -57,6 +57,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                     path: "".to_string(), // TODO
                 }),
             ))
+            .filter(|(_, file)| file.is_visible.get())
             .map(|(_, file)| file.clone()) // TODO ideally dont clone
             .collect::<Vec<File>>()
     };

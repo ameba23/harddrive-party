@@ -2,12 +2,14 @@
 use crate::{
     hdp::{display_bytes, Entry, RequesterSetter},
     ui_messages::{Command, UiDownloadRequest},
+    FilesSignal, PeerPath,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
     either::{Either, EitherOf3, EitherOf5},
     prelude::*,
 };
+use std::ops::Bound::Excluded;
 use thaw::*;
 
 /// Ui representation of a file
@@ -21,6 +23,8 @@ pub struct File {
     pub size: Option<u64>,
     pub is_dir: Option<bool>,
     pub is_expanded: RwSignal<bool>,
+    /// Is this item in an expanded directory - only relevant to peers context
+    pub is_visible: RwSignal<bool>,
     pub download_status: RwSignal<DownloadStatus>,
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
@@ -33,6 +37,7 @@ impl File {
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
             is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Nothing),
             request: RwSignal::new(None),
         }
@@ -49,29 +54,35 @@ impl File {
             size: None,
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(download_status),
             request: RwSignal::new(None),
         }
     }
 }
 
+/// The context in which we are displaying this file
 #[derive(Eq, PartialEq)]
 pub enum FileDisplayContext {
+    /// List of a peer's files
     Peer,
+    /// List of downloading / uploading files
     Transfer,
+    /// List of files matching a searchterm
     SearchResult,
 }
 
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    // let peer_details = use_context::<PeerName>().unwrap().0;
+    let set_files = use_context::<FilesSignal>().unwrap().1;
     let (file_name, _set_file_name) = signal(file.name);
+    let peer_name = file.peer_name.clone();
 
     let download_request = move |_| {
         let download = Command::Download {
             path: file_name.get().to_string(),
-            peer_name: file.peer_name.clone(),
+            peer_name: peer_name.clone(),
         };
         set_requester.update(|requester| requester.make_request(download));
     };
@@ -92,9 +103,27 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let expand_dir = move |_| {
         if file.is_dir.unwrap_or_default() {
             if file.is_expanded.get() {
-                // Collapse dir by either setting all children to insible - or removing all
-                // children from the map (simpler but less efficient)
+                // Collapse dir by either setting all children to insible
                 log::info!("Collapse dir");
+                let peer_name = file.peer_name.clone();
+                set_files.update(|files| {
+                    let mut upper_bound = file_name.get();
+                    upper_bound.push_str("~");
+                    for (_, file) in files.range_mut((
+                        Excluded(PeerPath {
+                            peer_name: peer_name.clone(),
+                            path: file_name.get(),
+                        }),
+                        Excluded(PeerPath {
+                            peer_name: file.peer_name.clone(),
+                            path: upper_bound,
+                        }),
+                    )) {
+                        log::info!("{}", file.name);
+                        file.is_visible.set(false);
+                    }
+                });
+                file.is_expanded.set(false);
             } else {
                 // If this is ourselve Command::Shares otherwise Command::Ls(query, peer_name)
                 let ls = Command::Shares(IndexQuery {
@@ -106,6 +135,25 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
                 // state
                 file.is_expanded.set(true);
+
+                let peer_name = file.peer_name.clone();
+                set_files.update(|files| {
+                    let mut upper_bound = file_name.get();
+                    upper_bound.push_str("~");
+                    for (_, file) in files.range_mut((
+                        Excluded(PeerPath {
+                            peer_name: peer_name.clone(),
+                            path: file_name.get(),
+                        }),
+                        Excluded(PeerPath {
+                            peer_name: file.peer_name.clone(),
+                            path: upper_bound,
+                        }),
+                    )) {
+                        log::info!("{}", file.name);
+                        file.is_visible.set(true);
+                    }
+                })
             }
         }
     };
@@ -113,9 +161,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
         let icon = move || match file.is_dir {
-            Some(true) => {
-                EitherOf3::A(view! { <Icon on:click=expand_dir icon=icondata::AiFolderOutlined/> })
-            }
+            Some(true) => EitherOf3::A(view! { <Icon icon=icondata::AiFolderOutlined/> }),
 
             Some(false) => EitherOf3::B(view! { <Icon icon=icondata::AiFileOutlined/> }),
             None => EitherOf3::C(view! {}),
@@ -134,7 +180,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let is_dir = file.is_dir == Some(true);
 
     view! {
-        <TableRow>
+        <TableRow on:click=expand_dir>
             <TableCell>{file_name_and_indentation}</TableCell>
             <TableCell>
                 " " {display_bytes(file.size.unwrap_or_default())} " "
@@ -182,6 +228,8 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         }
                     } else {
                         view! {
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
 
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
