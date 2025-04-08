@@ -92,9 +92,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        <Icon icon=icondata::FaNetworkWiredSolid/>
-                        {" Topics"}
-                        <Badge>{move || { topics.get().len() }}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::FaNetworkWiredSolid/>
+                            {" Topics"}
+                            <Badge>{move || { topics.get().len() }}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="shares"
@@ -103,9 +105,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        <Icon icon=icondata::AiHeartFilled/>
-                        " Shares"
-                        <Badge>{shared_files_size}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::AiHeartFilled/>
+                            " Shares"
+                            <Badge>{shared_files_size}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="peers"
@@ -114,9 +118,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        <Icon icon=icondata::FaUsersSolid/>
-                        " Peers"
-                        <Badge>{move || { peers.get().len() }}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::FaUsersSolid/>
+                            " Peers"
+                            <Badge>{move || { peers.get().len() }}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="transfers"
@@ -125,8 +131,10 @@ pub fn HdpHeader(
                         }
                     >
 
-                        <Icon icon=icondata::LuArrowUpDown/>
-                        " Transfers"
+                        <Flex>
+                            <Icon icon=icondata::LuArrowUpDown/>
+                            " Transfers"
+                        </Flex>
                     </Tab>
                 </TabList>
             </Space>

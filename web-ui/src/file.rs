@@ -6,7 +6,7 @@ use crate::{
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
-    either::{Either, EitherOf3, EitherOf5},
+    either::{Either, EitherOf4, EitherOf5},
     prelude::*,
 };
 use std::ops::Bound::Excluded;
@@ -161,10 +161,16 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
         let icon = move || match file.is_dir {
-            Some(true) => EitherOf3::A(view! { <Icon icon=icondata::AiFolderOutlined/> }),
+            Some(true) => {
+                if file.is_expanded.get() {
+                    EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined/> })
+                } else {
+                    EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined/> })
+                }
+            }
 
-            Some(false) => EitherOf3::B(view! { <Icon icon=icondata::AiFileOutlined/> }),
-            None => EitherOf3::C(view! {}),
+            Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined/> }),
+            None => EitherOf4::D(view! {}),
         };
         let (name, indentation) = match file_name.rsplit_once('/') {
             Some((path, name)) => {
@@ -228,6 +234,8 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         }
                     } else {
                         view! {
+                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
 
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
