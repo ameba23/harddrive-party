@@ -5,7 +5,7 @@ use crate::{
     ui_messages::{UiEvent, UiServerMessage, UploadInfo},
 };
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{IndexQuery, ReadQuery, Request};
+use harddrive_party_shared::wire_messages::{AnnouncePeer, IndexQuery, ReadQuery, Request};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
@@ -71,6 +71,12 @@ impl Rpc {
                     Request::Read(ReadQuery { path, start, end }) => {
                         if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
                         // TODO else
+                    }
+                    Request::AnnouncePeer(AnnouncePeer { connection_details }) => {
+                        // TODO Handle this peer connection
+                        log::info!(
+                            "Discovered peer through existing peer connection {connection_details:?}"
+                        );
                     }
                 }
             }

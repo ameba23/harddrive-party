@@ -1,9 +1,7 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{
-        topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, SessionToken, TOKEN_LENGTH,
-    },
+    discovery::{topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, TOKEN_LENGTH},
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -12,7 +10,7 @@ use crate::{
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
-    wire_messages::{Entry, IndexQuery, LsResponse, Request},
+    wire_messages::{AnnouncePeer, Entry, IndexQuery, LsResponse, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::ensure;
@@ -77,6 +75,8 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
+    /// Public key (from certificate)
+    public_key: [u8; 32],
     /// Maintains lists of requested/downloaded files
     wishlist: WishList,
 }
@@ -95,7 +95,6 @@ impl Hdp {
         share_dirs: Vec<String>,
         initial_topic_names: Vec<String>,
         download_dir: PathBuf,
-        mqtt_server: Option<String>,
         discovery_methods: DiscoveryMethods,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
@@ -138,16 +137,6 @@ impl Hdp {
             None => None,
         };
 
-        // Notify the UI of our own details
-        send_event(
-            response_tx.clone(),
-            UiEvent::PeerConnected {
-                name: name.clone(),
-                peer_type: PeerRemoteOrSelf::Me { os_home_dir },
-            },
-        )
-        .await;
-
         // Setup initial topics
         let topics = initial_topic_names
             .iter()
@@ -158,7 +147,7 @@ impl Hdp {
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db, mqtt_server).await?;
+            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -176,6 +165,19 @@ impl Hdp {
             }
         };
 
+        // Notify the UI of our own details
+        send_event(
+            response_tx.clone(),
+            UiEvent::PeerConnected {
+                name: name.clone(),
+                peer_type: PeerRemoteOrSelf::Me {
+                    os_home_dir,
+                    announce_address: peer_discovery.get_ui_announce_address()?,
+                },
+            },
+        )
+        .await;
+
         // Setup db for downloads/requests
         let wishlist = WishList::new(&db)?;
 
@@ -190,6 +192,7 @@ impl Hdp {
                 peer_discovery,
                 download_dir,
                 name,
+                public_key: pk_hash,
                 ls_cache: Default::default(),
                 wishlist,
             },
@@ -244,21 +247,26 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        token: Option<SessionToken>,
+        their_public_key: Option<[u8; 32]>,
         remote_cert: Certificate,
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
+        let connection_details = self
+            .peer_discovery
+            .get_pending_peer(&conn.remote_address())
+            .unwrap()
+            .clone();
         let peers_clone = self.peers.clone();
-        let our_token = self.peer_discovery.session_token;
+        let our_public_key = self.public_key;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_session_token(&conn, token, our_token).await {
-                warn!("Failed to handle connecting peer's token {}", error);
+            if let Err(error) = initial_handshake(&conn, their_public_key, our_public_key).await {
+                warn!("Failed to handle initial handshake {}", error);
                 return;
             }
 
@@ -274,6 +282,17 @@ impl Hdp {
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
                 let mut peers = peers_clone.lock().await;
+
+                let announce_peer = AnnouncePeer {
+                    connection_details: connection_details.clone(),
+                };
+
+                // Send their annouce details to other peers who we are connected to
+                for peer in peers.values() {
+                    let request = Request::AnnouncePeer(announce_peer.clone());
+                    Self::request_peer(request, peer).await.unwrap();
+                }
+
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
@@ -290,6 +309,7 @@ impl Hdp {
                 },
             )
             .await;
+
             loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
@@ -377,7 +397,7 @@ impl Hdp {
             .map_err(|_| UiServerError::ConnectionError)?;
 
         if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-            self.handle_connection(connection, false, Some(peer.token), remote_cert)
+            self.handle_connection(connection, false, Some(peer.public_key), remote_cert)
                 .await;
             Ok(())
         } else {
@@ -1049,6 +1069,10 @@ impl Hdp {
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
         let peers = self.peers.lock().await;
         let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        Self::request_peer(request, peer).await
+    }
+
+    async fn request_peer(request: Request, peer: &Peer) -> Result<RecvStream, RequestError> {
         let (mut send, recv) = peer.connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
@@ -1123,21 +1147,24 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
     Ok(stream.boxed())
 }
 
-/// If we have a token for the other party, send it to them.
-/// Otherwise, wait for them to send us their token
-async fn handle_session_token(
+/// If we have a public key for the other party, send it to them.
+/// Otherwise, wait for them to send us our public key
+async fn initial_handshake(
     conn: &quinn::Connection,
-    token: Option<SessionToken>,
-    our_token: SessionToken,
+    their_public_key: Option<[u8; 32]>,
+    our_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
-    if let Some(thier_token) = token {
+    if let Some(public_key) = their_public_key {
         let (mut send, _recv) = conn.open_bi().await?;
-        send.write_all(&thier_token).await?;
+        send.write_all(&public_key).await?;
         send.finish().await?;
     } else {
         let (_send, mut recv) = conn.accept_bi().await?;
         let buf = recv.read_to_end(TOKEN_LENGTH).await?;
-        ensure!(buf == our_token, "Rejected remote peer's token");
+        ensure!(
+            buf == our_public_key,
+            "Rejected remote peer's initial handshake"
+        );
     }
     Ok(())
 }
@@ -1226,7 +1253,6 @@ mod tests {
             share_dirs,
             vec!["foo".to_string()],
             downloads,
-            None,
             DiscoveryMethods::MdnsOnly,
         )
         .await

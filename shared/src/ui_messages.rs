@@ -38,7 +38,7 @@ pub enum Command {
     /// Cancel a particular request
     RemoveRequest(u32),
     /// Connect to the given peer
-    ConnectDirect(Vec<u8>),
+    ConnectDirect(String),
     /// Shutdown gracefully
     Close,
 }
@@ -96,7 +96,10 @@ pub enum PeerRemoteOrSelf {
     /// A remote peer
     Remote,
     /// Ourself, with the path of our home directory
-    Me { os_home_dir: Option<String> },
+    Me {
+        os_home_dir: Option<String>,
+        announce_address: String,
+    },
 }
 
 /// A request to download a file from a particular peer

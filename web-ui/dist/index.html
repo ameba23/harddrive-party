@@ -1,29 +1,25 @@
-<!DOCTYPE html>
-<html>
-	<head>
+<!DOCTYPE html><html><head>
 		<title>harddrive party</title>
 		
 <script type="module">
-import init, * as bindings from '/harddrive-party-web-ui-a839e652a8711f86.js';
-const wasm = await init({ module_or_path: '/harddrive-party-web-ui-a839e652a8711f86_bg.wasm' });
-
-
+import init, * as bindings from '/harddrive-party-web-ui-ae29780778a44abcb5dfa91ffa823ebc7bebaf2c468f96b20bef8517800ccaab51a2ea4e45eee262086c5faae68baa2b.js';
+init('/harddrive-party-web-ui-ae29780778a44abcb5dfa91ffa823ebc7bebaf2c468f96b20bef8517800ccaab51a2ea4e45eee262086c5faae68baa2b_bg.wasm');
 window.wasmBindings = bindings;
 
-
-dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
-
 </script>
-		<link rel="icon" href="/favicon-e9cbd8f50cc65bf2.ico" integrity="sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi+qSXEpwp+yM4BW"/>
+		<link rel="icon" href="/favicon-e9cbd8f50cc65bf2.ico" integrity="sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi-qSXEpwp-yM4BW">
 		
-	<link rel="modulepreload" href="/harddrive-party-web-ui-a839e652a8711f86.js" crossorigin="anonymous" integrity="sha384-0Vuh8CIpTT6Ig5u/Id0sj5afUC57vFR9l2VoMRS1tSCn7ah29tNgpI3xoJet28qR"><link rel="preload" href="/harddrive-party-web-ui-a839e652a8711f86_bg.wasm" crossorigin="anonymous" integrity="sha384-GKF+47wD7Cn7kLZ8bdXEsofJr1wa6dwiA1CthvCHhpYeRAQc4cjzq4GNasLYbf83" as="fetch" type="application/wasm"></head>
+	
+<link rel="preload" href="/harddrive-party-web-ui-ae29780778a44abcb5dfa91ffa823ebc7bebaf2c468f96b20bef8517800ccaab51a2ea4e45eee262086c5faae68baa2b_bg.wasm" as="fetch" type="application/wasm" crossorigin="anonymous" integrity="sha384-ril4B3ikSry136kf-oI-vHvrryxGj5ayC--FF4AMyqtRoupORe7iYghsX6rmi6or">
+<link rel="modulepreload" href="/harddrive-party-web-ui-ae29780778a44abcb5dfa91ffa823ebc7bebaf2c468f96b20bef8517800ccaab51a2ea4e45eee262086c5faae68baa2b.js" crossorigin="anonymous" integrity="sha384-d0Fg-iwKXuYhI5oLiob9jMeUnq4JzJhYO4ZxyD4edOG8jAjvy7EcPLpZXGzTVDmZ"></head>
 	<body>
-	<script>"use strict";
+	
+
+<script>"use strict";
 
 (function () {
 
     const address = '{{__TRUNK_ADDRESS__}}';
-    const base = '{{__TRUNK_WS_BASE__}}';
     let protocol = '';
     protocol =
         protocol
@@ -31,7 +27,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
             : window.location.protocol === 'https:'
                 ? 'wss'
                 : 'ws';
-    const url = protocol + '://' + address + base + '.well-known/trunk/ws';
+    const url = protocol + '://' + address + '/_trunk/ws';
 
     class Overlay {
         constructor() {
@@ -110,7 +106,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
                         break;
                 }
             };
-            ws.onclose = () => this.onclose();
+            ws.onclose = this.onclose;
         }
 
         onclose() {
@@ -122,7 +118,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
                     // rebuilt on restart)
                     const ws = new WebSocket(this.url);
                     ws.onopen = () => window.location.reload();
-                    ws.onclose = () => this.onclose();
+                    ws.onclose = this.onclose;
                 },
                 this.poll_interval);
         }
@@ -147,5 +143,4 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
     new Client(url).start();
 
 })()
-</script></body>
-</html>
+</script></body></html>

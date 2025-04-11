@@ -1,7 +1,6 @@
 //! Public address / NAT type discovery using STUN
-
-use super::PeerConnectionDetails;
 use anyhow::anyhow;
+use harddrive_party_shared::wire_messages::PeerConnectionDetails;
 use log::debug;
 use rand::seq::SliceRandom;
 use std::net::{SocketAddr, ToSocketAddrs};

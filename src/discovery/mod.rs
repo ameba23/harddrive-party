@@ -2,21 +2,20 @@
 use self::{
     hole_punch::{birthday_hard_side, PunchingUdpSocket},
     mdns::MdnsServer,
-    mqtt::MqttClient,
     stun::stun_test,
     topic::Topic,
 };
 use anyhow::anyhow;
+use base64::prelude::{Engine as _, BASE64_STANDARD_NO_PAD};
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::ui_messages::UiTopic;
+use harddrive_party_shared::{ui_messages::UiTopic, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
 use log::{debug, error};
 use quinn::AsyncUdpSocket;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
 };
 use tokio::{
@@ -31,7 +30,6 @@ use topic::TopicsDb;
 pub mod capability;
 pub mod hole_punch;
 pub mod mdns;
-pub mod mqtt;
 pub mod stun;
 pub mod topic;
 
@@ -40,31 +38,12 @@ pub const TOKEN_LENGTH: usize = 32;
 /// A session token used in capability verification (proof of knowledge of topic name)
 pub type SessionToken = [u8; TOKEN_LENGTH];
 
-#[repr(u8)]
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum PeerConnectionDetails {
-    NoNat(SocketAddr) = 1,
-    Asymmetric(SocketAddr) = 2,
-    Symmetric(IpAddr) = 3,
-}
-
-impl PeerConnectionDetails {
-    /// Gets the IP address
-    pub fn ip(&self) -> IpAddr {
-        match self {
-            PeerConnectionDetails::NoNat(addr) => addr.ip(),
-            PeerConnectionDetails::Asymmetric(addr) => addr.ip(),
-            PeerConnectionDetails::Symmetric(ip) => *ip,
-        }
-    }
-}
-
 /// Details of a peer found through one of the discovery methods
 #[derive(Debug)]
 pub struct DiscoveredPeer {
     pub socket_address: SocketAddr,
     pub socket_option: Option<UdpSocket>,
-    pub token: SessionToken,
+    pub public_key: [u8; 32],
     pub topic: Option<Topic>,
     // pub discovery_method,
 }
@@ -73,12 +52,11 @@ pub struct DiscoveredPeer {
 pub struct PeerDiscovery {
     peers_tx: Sender<DiscoveredPeer>,
     pub peers_rx: Receiver<DiscoveredPeer>,
-    pub session_token: SessionToken,
     mdns_server: Option<MdnsServer>,
-    mqtt_client: Option<MqttClient>,
     pub topics_db: TopicsDb,
     hole_puncher: Option<HolePuncher>,
     announce_address: AnnounceAddress,
+    pending_peer_connections: HashMap<SocketAddr, PeerConnectionDetails>,
 }
 
 impl PeerDiscovery {
@@ -88,7 +66,6 @@ impl PeerDiscovery {
         discovery_methods: DiscoveryMethods,
         public_key: [u8; 32],
         topics_db: sled::Tree,
-        mqtt_server: Option<String>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         let topics_db = TopicsDb::new(topics_db);
         // Join topics given as arguments, as well as from db
@@ -133,9 +110,6 @@ impl PeerDiscovery {
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
 
-        let mut rng = rand::thread_rng();
-        let session_token: [u8; 32] = rng.gen();
-
         // Only use mdns if we are on a local network
         let mdns_server = if discovery_methods.use_mdns() && is_private(my_local_ip) {
             Some(
@@ -143,8 +117,8 @@ impl PeerDiscovery {
                     &id,
                     addr,
                     peers_tx.clone(),
-                    session_token,
                     topics_to_join.clone(),
+                    public_key,
                 )
                 .await?,
             )
@@ -160,32 +134,17 @@ impl PeerDiscovery {
 
         let announce_address = AnnounceAddress {
             connection_details: local_connection_details.clone(),
-            token: session_token,
-        };
-
-        let mqtt_client = if discovery_methods.use_mqtt() {
-            Some(
-                MqttClient::new(
-                    announce_address.clone(),
-                    peers_tx.clone(),
-                    hole_puncher.clone(),
-                    mqtt_server,
-                )
-                .await?,
-            )
-        } else {
-            None
+            public_key,
         };
 
         let mut peer_discovery = Self {
             peers_tx,
             peers_rx,
-            session_token,
             mdns_server,
-            mqtt_client,
             topics_db,
             hole_puncher,
             announce_address,
+            pending_peer_connections: Default::default(),
         };
 
         for topic in topics_to_join {
@@ -199,10 +158,6 @@ impl PeerDiscovery {
     pub async fn join_topic(&mut self, topic: Topic) -> anyhow::Result<()> {
         if let Some(mdns_server) = &self.mdns_server {
             mdns_server.add_topic(topic.clone()).await?;
-        }
-
-        if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.add_topic(topic.clone()).await?;
         }
 
         //TODO encrypt self.announce_address with this topic
@@ -219,10 +174,6 @@ impl PeerDiscovery {
             mdns_server.remove_topic(topic.clone()).await?;
         }
 
-        if let Some(mqtt_client) = &self.mqtt_client {
-            mqtt_client.remove_topic(topic.clone()).await?;
-        }
-
         self.topics_db.leave(&topic)?;
         Ok(())
     }
@@ -232,41 +183,49 @@ impl PeerDiscovery {
         self.topics_db.get_topics()
     }
 
-    pub async fn connect_direct_to_peer(&self, announce_payload: &[u8]) -> anyhow::Result<()> {
-        let topics: Vec<Topic> = self
-            .get_topic_names()
-            .into_iter()
-            // This will get all known topics, even if we are not currently joined
-            .map(|ui_topic| Topic::new(ui_topic.name))
-            .collect();
-        for topic in topics.iter() {
-            if let Some(announce_address) = decrypt_using_topic(announce_payload, topic) {
-                // TODO check it is not ourself
-                debug!("Remote peer {:?}", announce_address);
-                let connection_details = announce_address.connection_details.clone();
-                return match handle_peer(
-                    self.hole_puncher.clone(),
-                    connection_details,
-                    announce_address,
-                )
-                .await
-                {
-                    Ok(Some(discovered_peer)) => {
-                        debug!("Connect to {:?}", discovered_peer);
-                        if self.peers_tx.send(discovered_peer).await.is_err() {
-                            error!("Cannot write to channel");
-                        }
-                        Ok(())
-                    }
-                    Ok(None) => {
-                        debug!("Successfully handled peer - awaiting connection from their side");
-                        Ok(())
-                    }
-                    Err(error) => Err(anyhow!("Error when handling discovered peer {:?}", error)),
-                };
+    pub async fn connect_direct_to_peer(&mut self, announce_payload: &str) -> anyhow::Result<()> {
+        let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload)?;
+        let announce_address: AnnounceAddress = deserialize(&announce_address_bytes)?;
+        // TODO check it is not ourself
+        debug!("Remote peer {:?}", announce_address);
+        let connection_details = announce_address.connection_details.clone();
+        return match handle_peer(
+            self.hole_puncher.clone(),
+            connection_details,
+            announce_address.clone(),
+        )
+        .await
+        {
+            Ok((Some(discovered_peer), _)) => {
+                debug!("Connect to {:?}", discovered_peer);
+                if self.peers_tx.send(discovered_peer).await.is_err() {
+                    error!("Cannot write to channel");
+                }
+                Ok(())
             }
-        }
-        Err(anyhow!("Could not decrypt accounce message"))
+            Ok((None, socket_address)) => {
+                debug!("Successfully handled peer - awaiting connection from their side");
+                // TODO here we need the full socket address to compare it with an incoming
+                // connection
+                self.add_pending_peer(socket_address, announce_address);
+                Ok(())
+            }
+            Err(error) => Err(anyhow!("Error when handling discovered peer {:?}", error)),
+        };
+    }
+
+    fn add_pending_peer(&mut self, socket_address: SocketAddr, announce_address: AnnounceAddress) {
+        self.pending_peer_connections
+            .insert(socket_address, announce_address.connection_details);
+    }
+
+    pub fn get_pending_peer(&self, socket_address: &SocketAddr) -> Option<&PeerConnectionDetails> {
+        self.pending_peer_connections.get(socket_address)
+    }
+
+    pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
+        let announce_address = serialize(&self.announce_address)?;
+        Ok(BASE64_STANDARD_NO_PAD.encode(&announce_address))
     }
 }
 
@@ -293,14 +252,14 @@ pub enum JoinOrLeaveEvent {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct AnnounceAddress {
     connection_details: PeerConnectionDetails,
-    token: SessionToken,
+    public_key: [u8; 32],
 }
 
 pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
     local: PeerConnectionDetails,
     remote: AnnounceAddress,
-) -> anyhow::Result<Option<DiscoveredPeer>> {
+) -> anyhow::Result<(Option<DiscoveredPeer>, SocketAddr)> {
     match remote.connection_details {
         PeerConnectionDetails::Symmetric(remote_ip) => match local {
             PeerConnectionDetails::Symmetric(_) => {
@@ -308,16 +267,16 @@ pub async fn handle_peer(
             }
             PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
                 Some(mut puncher) => {
-                    let _socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
+                    let socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
                     // Wait for them to connect to us
-                    Ok(None)
+                    Ok((None, socket_address))
                 }
                 None => Err(anyhow!("We have asymmetric nat but no local socket")),
             },
-            PeerConnectionDetails::NoNat(_) => {
+            PeerConnectionDetails::NoNat(socket_address) => {
                 // They are symmetric (hard), we have no nat
                 // Wait for them to connect
-                Ok(None)
+                Ok((None, socket_address))
             }
         },
         PeerConnectionDetails::Asymmetric(socket_address) => {
@@ -328,31 +287,37 @@ pub async fn handle_peer(
                         // Decide whether to connect or let them connect, by lexicographically
                         // comparing socket addresses
                         Ok(if our_socket_address > socket_address {
-                            Some(DiscoveredPeer {
+                            (
+                                Some(DiscoveredPeer {
+                                    socket_address,
+                                    socket_option: None,
+                                    public_key: remote.public_key,
+                                    topic: None,
+                                }),
                                 socket_address,
-                                socket_option: None,
-                                token: remote.token,
-                                topic: None,
-                            })
+                            )
                         } else {
-                            None
+                            (None, socket_address)
                         })
                     }
                     None => Err(anyhow!("We have asymmetric nat but no local socket")),
                 },
                 PeerConnectionDetails::Symmetric(_) => {
                     let (socket, socket_address) = birthday_hard_side(socket_address).await?;
-                    Ok(Some(DiscoveredPeer {
+                    Ok((
+                        Some(DiscoveredPeer {
+                            socket_address,
+                            socket_option: Some(socket),
+                            public_key: remote.public_key,
+                            topic: None,
+                        }),
                         socket_address,
-                        socket_option: Some(socket),
-                        token: remote.token,
-                        topic: None,
-                    }))
+                    ))
                 }
-                PeerConnectionDetails::NoNat(_) => {
-                    // they are Asymmetric (easy), we have no nat
+                PeerConnectionDetails::NoNat(socket_address) => {
+                    // They are Asymmetric (easy), we have no nat
                     // just wait for them to connect
-                    Ok(None)
+                    Ok((None, socket_address))
                 }
             }
         }
@@ -362,31 +327,40 @@ pub async fn handle_peer(
                 PeerConnectionDetails::NoNat(our_socket_address) => {
                     // Need to decide whether to connect
                     Ok(if our_socket_address > socket_address {
-                        Some(DiscoveredPeer {
+                        (
+                            Some(DiscoveredPeer {
+                                socket_address,
+                                socket_option: None,
+                                public_key: remote.public_key,
+                                topic: None,
+                            }),
                             socket_address,
-                            socket_option: None,
-                            token: remote.token,
-                            topic: None,
-                        })
+                        )
                     } else {
-                        None
+                        (None, socket_address)
                     })
                 }
                 PeerConnectionDetails::Symmetric(_) => {
                     let socket = UdpSocket::bind("0.0.0.0:0").await?;
-                    Ok(Some(DiscoveredPeer {
+                    Ok((
+                        Some(DiscoveredPeer {
+                            socket_address,
+                            socket_option: Some(socket),
+                            public_key: remote.public_key,
+                            topic: None,
+                        }),
                         socket_address,
-                        socket_option: Some(socket),
-                        token: remote.token,
-                        topic: None,
-                    }))
+                    ))
                 }
-                _ => Ok(Some(DiscoveredPeer {
+                _ => Ok((
+                    Some(DiscoveredPeer {
+                        socket_address,
+                        socket_option: None,
+                        public_key: remote.public_key,
+                        topic: None,
+                    }),
                     socket_address,
-                    socket_option: None,
-                    token: remote.token,
-                    topic: None,
-                })),
+                )),
             }
         }
     }
@@ -402,10 +376,6 @@ pub enum DiscoveryMethods {
 impl DiscoveryMethods {
     fn use_mdns(&self) -> bool {
         self != &DiscoveryMethods::MqttOnly
-    }
-
-    fn use_mqtt(&self) -> bool {
-        self != &DiscoveryMethods::MdnsOnly
     }
 }
 

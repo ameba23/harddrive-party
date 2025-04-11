@@ -5,8 +5,6 @@ use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::D
 use rand::Rng;
 use std::net::SocketAddr;
 
-use super::SessionToken;
-
 const BLAKE2B_LENGTH: usize = 32;
 const NONCE_LENGTH: usize = 8;
 const TAG_LENGTH: usize = 16;
@@ -19,7 +17,7 @@ const AAD: [u8; 0] = [];
 pub fn handshake_request(
     topic: &Topic,
     addr: &SocketAddr,
-    token: &SessionToken,
+    public_key: &[u8; 32],
 ) -> HandshakeRequest {
     let key = keyed_hash(addr.to_string().as_bytes(), &topic.hash);
     let mut rng = rand::thread_rng();
@@ -32,7 +30,7 @@ pub fn handshake_request(
     let mut cipher = ChaCha20Poly1305::new(&key, &nonce, &AAD);
 
     // Encrypt the msg and append the tag at the end
-    cipher.encrypt(token, &mut out[0..BLAKE2B_LENGTH], &mut tag);
+    cipher.encrypt(public_key, &mut out[0..BLAKE2B_LENGTH], &mut tag);
     out[BLAKE2B_LENGTH..BLAKE2B_LENGTH + TAG_LENGTH].copy_from_slice(&tag);
     out[BLAKE2B_LENGTH + TAG_LENGTH..].copy_from_slice(&nonce);
     out
@@ -43,7 +41,7 @@ pub fn handshake_response(
     handshake_request: HandshakeRequest,
     topic: &Topic,
     addr: SocketAddr,
-) -> anyhow::Result<SessionToken> {
+) -> anyhow::Result<[u8; 32]> {
     let key = keyed_hash(addr.to_string().as_bytes(), &topic.hash);
     let mut decrypt_msg: [u8; BLAKE2B_LENGTH] = [0u8; BLAKE2B_LENGTH];
 

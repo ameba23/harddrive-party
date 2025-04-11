@@ -2,7 +2,7 @@
 use crate::discovery::{
     capability::{handshake_request, handshake_response, HandshakeRequest},
     topic::Topic,
-    DiscoveredPeer, JoinOrLeaveEvent, SessionToken,
+    DiscoveredPeer, JoinOrLeaveEvent,
 };
 use anyhow::anyhow;
 use log::{debug, error, warn};
@@ -34,13 +34,20 @@ impl MdnsServer {
         id: &str,
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
-        token: SessionToken,
         initial_topics: HashSet<Topic>,
+        public_key: [u8; 32],
     ) -> anyhow::Result<Self> {
         let (topic_events_tx, topic_events_rx) = channel(1024);
         let mdns_server = Self { topic_events_tx };
 
-        mdns_server.run(id, addr, token, peers_tx, topic_events_rx, initial_topics)?;
+        mdns_server.run(
+            id,
+            addr,
+            peers_tx,
+            topic_events_rx,
+            initial_topics,
+            public_key,
+        )?;
         Ok(mdns_server)
     }
 
@@ -48,10 +55,10 @@ impl MdnsServer {
         &self,
         id: &str,
         addr: SocketAddr,
-        token: SessionToken,
         peers_tx: Sender<DiscoveredPeer>,
         mut topic_events_rx: Receiver<JoinOrLeaveEvent>,
         initial_topics: HashSet<Topic>,
+        public_key: [u8; 32],
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
 
@@ -78,7 +85,7 @@ impl MdnsServer {
                             }
                         };
 
-                        if let Ok(service) = create_service_info(&topics, &id_clone, &addr, &token) {
+                        if let Ok(service) = create_service_info(&topics, &id_clone, &addr, &public_key) {
                             if let Some(existing_service_name) = existing_service {
                                 if let Ok(receiver) = mdns.unregister(&existing_service_name) {
                                     debug!("Unregistering service");
@@ -125,7 +132,7 @@ impl MdnsServer {
                                     Ok((their_addr, capabilities)) => {
                                         if their_addr == addr {
                                             debug!("Found ourself on mdns");
-                                        } else if let Some(their_token) =
+                                        } else if let Some(their_public_key) =
                                         try_topics(&topics, capabilities, their_addr)
                                         {
                                             // Only connect if our address is lexicographicaly greater than
@@ -137,8 +144,8 @@ impl MdnsServer {
                                                 .send(DiscoveredPeer {
                                                     socket_address: their_addr,
                                                     socket_option: None,
-                                                    token: their_token,
                                                     topic: None,
+                                                    public_key: their_public_key,
                                                 }).await
                                                 .is_err()
                                             {
@@ -197,11 +204,11 @@ fn create_service_info(
     topics: &HashSet<Topic>,
     id: &str,
     addr: &SocketAddr,
-    token: &SessionToken,
+    public_key: &[u8; 32],
 ) -> anyhow::Result<ServiceInfo> {
     let capabilities: Vec<HandshakeRequest> = topics
         .iter()
-        .map(|topic| handshake_request(topic, addr, token))
+        .map(|topic| handshake_request(topic, addr, public_key))
         .collect();
 
     // Create a service info.
@@ -266,11 +273,11 @@ fn try_topics(
     topics: &HashSet<Topic>,
     capabilities: Vec<HandshakeRequest>,
     their_addr: SocketAddr,
-) -> Option<SessionToken> {
+) -> Option<[u8; 32]> {
     for capability in capabilities {
         for topic in topics {
-            if let Ok(their_token) = handshake_response(capability, topic, their_addr) {
-                return Some(their_token);
+            if let Ok(their_public_key) = handshake_response(capability, topic, their_addr) {
+                return Some(their_public_key);
             }
         }
     }
@@ -284,11 +291,11 @@ mod tests {
     async fn create_test_server(
         name: &str,
         socket_address: SocketAddr,
-        token: SessionToken,
+        public_key: [u8; 32],
     ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
         let (peers_tx, peers_rx) = channel(1024);
         let initial_topics = HashSet::new();
-        let server = MdnsServer::new(name, socket_address, peers_tx, token, initial_topics)
+        let server = MdnsServer::new(name, socket_address, peers_tx, initial_topics, public_key)
             .await
             .unwrap();
         (server, peers_rx)
@@ -309,6 +316,6 @@ mod tests {
         bob.add_topic(Topic::new("foo".into())).await.unwrap();
         let discovered_peer = bob_peers_rx.recv().await.unwrap();
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
-        assert_eq!(discovered_peer.token, [0; 32]);
+        assert_eq!(discovered_peer.public_key, [0; 32]);
     }
 }

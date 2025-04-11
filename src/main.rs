@@ -46,9 +46,6 @@ enum CliCommand {
         /// Directory to store downloads. Defaults to ~/Downloads
         #[arg(short, long)]
         download_dir: Option<String>,
-        /// Mqtt server to use for peer discovery. Defaults to broker.hivemq.com:1883
-        #[arg(short, long)]
-        mqtt_server: Option<String>,
     },
     /// Join a given topic name
     Join { topic: String },
@@ -117,7 +114,6 @@ async fn main() -> anyhow::Result<()> {
             ui_address,
             topic,
             download_dir,
-            mqtt_server,
         } => {
             let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
 
@@ -148,8 +144,7 @@ async fn main() -> anyhow::Result<()> {
                 initial_share_dirs,
                 initial_topics,
                 download_dir,
-                mqtt_server,
-                DiscoveryMethods::MqttAndMdns,
+                DiscoveryMethods::MdnsOnly,
             )
             .await?;
             println!(
