@@ -160,11 +160,7 @@ impl PeerDiscovery {
             mdns_server.add_topic(topic.clone()).await?;
         }
 
-        //TODO encrypt self.announce_address with this topic
-        let announce_address = serialize(&self.announce_address)?;
-        let announce_payload = topic.encrypt(&announce_address);
-
-        self.topics_db.join(&topic, announce_payload)?;
+        self.topics_db.join(&topic)?;
         Ok(())
     }
 

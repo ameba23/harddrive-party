@@ -71,6 +71,7 @@ pub fn HdpUi() -> impl IntoView {
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
+    let (announce_address, set_announce_address) = signal(Option::<String>::None);
 
     provide_context(RequesterSetter(set_requester));
     // provide_context(Requested(requested));
@@ -434,12 +435,17 @@ pub fn HdpUi() -> impl IntoView {
                     // If a new peer connects check their files
                     // or check our own files
                     debug!("Connected to {}", name);
-                    let request = if let PeerRemoteOrSelf::Me { os_home_dir } = peer_type {
+                    let request = if let PeerRemoteOrSelf::Me {
+                        os_home_dir,
+                        announce_address,
+                    } = peer_type
+                    {
                         set_shares.update(|shares| match shares {
                             Some(_) => {}
                             None => *shares = Some(Peer::new(name, true)),
                         });
                         set_home_dir.update(|home_dir| *home_dir = os_home_dir);
+                        set_announce_address.update(|address| *address = Some(announce_address));
                         Command::Shares(IndexQuery {
                             path: Default::default(),
                             searchterm: None,

@@ -85,8 +85,6 @@ pub struct UiTopic {
     pub name: String,
     /// Whether we are currently connected
     pub connected: bool,
-    /// Our announce address encrypted to this topic (used for direct connections)
-    pub announce_payload: Option<Vec<u8>>,
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
