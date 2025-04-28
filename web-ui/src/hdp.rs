@@ -8,7 +8,6 @@ use crate::{
     peer::{Peer, Peers},
     requests::Requests,
     shares::Shares,
-    topics::Topics,
     transfers::Transfers,
     ui_messages::{Command, DownloadInfo, UiEvent},
     wire_messages::IndexQuery,
@@ -26,7 +25,7 @@ use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thaw::*;
-use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage, UiTopic};
+use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage};
 use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
 
@@ -65,7 +64,6 @@ pub fn HdpUi() -> impl IntoView {
     let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
-    let (topics, set_topics) = signal(Vec::<UiTopic>::new());
 
     let (requests, set_requests) = signal(Requests::new());
 
@@ -471,15 +469,6 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiServerMessage::Event(UiEvent::Uploaded(upload_info)) => {
                     debug!("Uploading {:?}", upload_info);
-                }
-                UiServerMessage::Event(UiEvent::Topics(topics)) => {
-                    debug!("Connected topics {:?}", topics);
-                    set_topics.update(|existing_topics| {
-                        existing_topics.clear();
-                        for topic in topics {
-                            existing_topics.push(topic);
-                        }
-                    });
                 } // UiServerMessage::Event(UiEvent::Wishlist {
                   //     requested,
                   //     downloaded,
@@ -607,14 +596,13 @@ pub fn HdpUi() -> impl IntoView {
         <Layout>
             <div id="root" class="main">
                 <nav>
-                    <HdpHeader topics peers shares/>
+                    <HdpHeader peers shares/>
                     {error_message_display}
                 </nav>
                 <main>
                     <Layout>
                         <Routes fallback=|| "Not found">
-                            <Route path=path!("") view=move || view! { <Peers peers/> }/>
-                            <Route path=path!("topics") view=move || view! { <Topics topics/> }/>
+                            <Route path=path!("") view=move || view! { <Peers peers announce_address /> }/>
                             <Route
                                 path=path!("shares")
                                 view=move || {
@@ -622,7 +610,7 @@ pub fn HdpUi() -> impl IntoView {
                                 }
                             />
 
-                            <Route path=path!("peers") view=move || view! { <Peers peers/> }/>
+                            <Route path=path!("peers") view=move || view! { <Peers peers announce_address /> }/>
                             <Route
                                 path=path!("transfers")
                                 view=move || view! { <Transfers requests files/> }

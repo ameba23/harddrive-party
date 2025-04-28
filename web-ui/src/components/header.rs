@@ -1,4 +1,4 @@
-use crate::{display_bytes, peer::Peer, ui_messages::UiTopic, FilesReadSignal, PeerPath};
+use crate::{display_bytes, peer::Peer, FilesReadSignal, PeerPath};
 use leptos::prelude::*;
 use leptos_meta::Style;
 use leptos_router::hooks::use_navigate;
@@ -7,7 +7,6 @@ use thaw::*;
 
 #[component]
 pub fn HdpHeader(
-    topics: ReadSignal<Vec<UiTopic>>,
     peers: ReadSignal<HashMap<String, Peer>>,
     shares: ReadSignal<Option<Peer>>,
 ) -> impl IntoView {
@@ -85,16 +84,6 @@ pub fn HdpHeader(
                     title="harddrive-party"
                 />
                 <TabList selected_value>
-                    <Tab
-                        value="topics"
-                        on:click=move |_| {
-                            navigate1("/topics", Default::default());
-                        }
-                    >
-
-                        {"🖧 Topics"}
-                        <Badge>{move || { topics.get().len() }}</Badge>
-                    </Tab>
                     <Tab
                         value="shares"
                         on:click=move |_| {
