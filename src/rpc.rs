@@ -103,6 +103,7 @@ impl Rpc {
         recursive: bool,
         mut output: quinn::SendStream,
     ) -> Result<(), RpcError> {
+        println!("Responding to ls query");
         match self.shares.query(path, searchterm, recursive) {
             Ok(response_iterator) => {
                 for res in response_iterator {

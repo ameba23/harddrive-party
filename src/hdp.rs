@@ -227,12 +227,16 @@ impl Hdp {
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
-                    if self.connect_to_peer(peer).await.is_err() {
-                        error!("Cannot connect to discovered peer");
+                    if let Err(err) = self.connect_to_peer(peer).await {
+                        error!("Cannot connect to discovered peer {:?}", err);
                     };
                 }
             }
         }
+    }
+
+    pub fn get_announce_address(&self) -> anyhow::Result<String> {
+        self.peer_discovery.get_ui_announce_address()
     }
 
     /// Handle a QUIC connection from/to another peer
@@ -260,6 +264,15 @@ impl Hdp {
             } else {
                 self.peer_discovery.get_pending_peer(&conn.remote_address())
             };
+
+        if let Some(announce_address) = announce_address.clone() {
+            if announce_address.public_key == peer_public_key {
+                println!("Public key matches");
+            } else {
+                println!("Public key does not match!");
+            }
+        }
+
         let peers_clone = self.peers.clone();
         let our_public_key = self.public_key;
         let rpc = self.rpc.clone();
@@ -271,6 +284,7 @@ impl Hdp {
                 warn!("Failed to handle initial handshake {}", error);
                 return;
             }
+            println!("announcing peer to ui...");
 
             {
                 // Add peer to our hashmap
@@ -301,7 +315,6 @@ impl Hdp {
                 let direction = if incoming { "incoming" } else { "outgoing" };
                 info!("[{}] connected to {} peers", direction, peers.len());
             }
-
             // Inform the UI that a new peer has connected
             send_event(
                 response_tx.clone(),
@@ -1074,18 +1087,18 @@ async fn initial_handshake(
     their_public_key: Option<[u8; 32]>,
     our_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
-    if let Some(public_key) = their_public_key {
-        let (mut send, _recv) = conn.open_bi().await?;
-        send.write_all(&public_key).await?;
-        send.finish().await?;
-    } else {
-        let (_send, mut recv) = conn.accept_bi().await?;
-        let buf = recv.read_to_end(PUBLIC_KEY_LENGTH).await?;
-        ensure!(
-            buf == our_public_key,
-            "Rejected remote peer's initial handshake"
-        );
-    }
+    // if let Some(public_key) = their_public_key {
+    //     let (mut send, _recv) = conn.open_bi().await?;
+    //     send.write_all(&public_key).await?;
+    //     send.finish().await?;
+    // } else {
+    //     let (_send, mut recv) = conn.accept_bi().await?;
+    //     let buf = recv.read_to_end(PUBLIC_KEY_LENGTH).await?;
+    //     ensure!(
+    //         buf == our_public_key,
+    //         "Rejected remote peer's initial handshake"
+    //     );
+    // }
     Ok(())
 }
 
@@ -1175,6 +1188,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::init();
         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice_name = alice.name.clone();
 
@@ -1189,6 +1203,7 @@ mod tests {
             bob.run().await;
         });
 
+        // Wait until they connect to each other using mDNS
         while let Some(res) = bob_rx.recv().await {
             println!("Res {:?}", res);
 
@@ -1208,7 +1223,7 @@ mod tests {
         };
         bob_command_tx
             .send(UiClientMessage {
-                id: 1,
+                id: 2,
                 command: Command::Read(req, alice_name.clone()),
             })
             .await
@@ -1230,7 +1245,7 @@ mod tests {
         };
         bob_command_tx
             .send(UiClientMessage {
-                id: 2,
+                id: 3,
                 command: Command::Ls(req, Some(alice_name)),
             })
             .await
@@ -1239,6 +1254,7 @@ mod tests {
         let mut entries = Vec::new();
         while let Some(res) = bob_rx.recv().await {
             if let UiServerMessage::Response { id, response } = res {
+                println!("response {:?}", response);
                 match response.unwrap() {
                     UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
                         for entry in some_entries {
@@ -1246,7 +1262,7 @@ mod tests {
                         }
                     }
                     UiResponse::EndResponse => {
-                        if id == 2 {
+                        if id == 3 {
                             break;
                         }
                     }

@@ -155,6 +155,11 @@ async fn main() -> anyhow::Result<()> {
                 http_server(ui_address, download_dir).await;
             });
 
+            println!(
+                "Announce address {}",
+                hdp.get_announce_address().unwrap_or_default()
+            );
+
             hdp.run().await;
         }
         CliCommand::Ls {
