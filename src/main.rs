@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use harddrive_party::{
-    discovery::DiscoveryMethods,
     hdp::Hdp,
     http::http_server,
     ui_messages::{Command, UiResponse},
@@ -33,9 +32,6 @@ enum CliCommand {
         /// Directories to share (may be given multiple times)
         #[arg(short, long)]
         share_dir: Vec<String>,
-        /// Initial topics to join (may be given multiple times)
-        #[arg(short, long)]
-        topic: Vec<String>,
         /// IP and port to host UI - defaults to 127.0.0.1:4001
         #[arg(short, long)]
         ui_address: Option<SocketAddr>,
@@ -46,11 +42,10 @@ enum CliCommand {
         /// Directory to store downloads. Defaults to ~/Downloads
         #[arg(short, long)]
         download_dir: Option<String>,
+        /// If set, will not use mdns
+        #[arg(long)]
+        no_mdns: bool,
     },
-    /// Join a given topic name
-    Join { topic: String },
-    /// Leave a given topic name
-    Leave { topic: String },
     /// Download a file or dir
     Download {
         /// Peername and path - given as "peername/path"
@@ -112,8 +107,8 @@ async fn main() -> anyhow::Result<()> {
             storage,
             share_dir,
             ui_address,
-            topic,
             download_dir,
+            no_mdns,
         } => {
             let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
 
@@ -126,7 +121,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            let initial_topics = topic;
             let initial_share_dirs = share_dir;
 
             let download_dir = match download_dir {
@@ -139,14 +133,8 @@ async fn main() -> anyhow::Result<()> {
             };
             create_dir_all(&download_dir).await?;
 
-            let (mut hdp, recv) = Hdp::new(
-                storage,
-                initial_share_dirs,
-                initial_topics,
-                download_dir,
-                DiscoveryMethods::MdnsOnly,
-            )
-            .await?;
+            let (mut hdp, recv) =
+                Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.name.green(),
@@ -168,46 +156,6 @@ async fn main() -> anyhow::Result<()> {
             });
 
             hdp.run().await;
-        }
-        CliCommand::Join { topic } => {
-            let mut responses =
-                harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic.clone()))
-                    .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::EndResponse) => {
-                        println!("Successfully joined topic {}", topic);
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error when joining topic {:?}", e);
-                        break;
-                    }
-                }
-            }
-        }
-        CliCommand::Leave { topic } => {
-            let mut responses =
-                harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic.clone()))
-                    .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::EndResponse) => {
-                        println!("Successfully left topic {}", topic);
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error when leaving topic {:?}", e);
-                        break;
-                    }
-                }
-            }
         }
         CliCommand::Ls {
             path,

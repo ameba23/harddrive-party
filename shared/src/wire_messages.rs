@@ -66,10 +66,17 @@ pub enum LsResponseError {
     PathNotFound,
 }
 
+/// Details of an announced peer
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
+pub struct AnnounceAddress {
+    pub connection_details: PeerConnectionDetails,
+    pub public_key: [u8; 32],
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
 pub struct AnnouncePeer {
-    pub connection_details: PeerConnectionDetails,
-    // signature
+    pub announce_address: AnnounceAddress,
+    // TODO signature
 }
 
 #[repr(u8)]

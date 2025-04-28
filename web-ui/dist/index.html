@@ -1,6 +1,22 @@
-<!doctype html><title>harddrive party</title><script type=module>
-import init, * as bindings from '/harddrive-party-web-ui-8c5addf4709ffb2a6d7dfb3e778720a51afec46924681e94d0f02cd9a7f7c88647837635c6e7692b2eb8735bb3a0ef7c.js';
-init('/harddrive-party-web-ui-8c5addf4709ffb2a6d7dfb3e778720a51afec46924681e94d0f02cd9a7f7c88647837635c6e7692b2eb8735bb3a0ef7c_bg.wasm');
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>harddrive party</title>
+		
+<script type="module">
+import init, * as bindings from '/harddrive-party-web-ui-efc25a90bbdf92fe.js';
+const wasm = await init({ module_or_path: '/harddrive-party-web-ui-efc25a90bbdf92fe_bg.wasm' });
+
+
 window.wasmBindings = bindings;
 
-</script><link href=/favicon-e9cbd8f50cc65bf2.ico integrity=sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi-qSXEpwp-yM4BW rel=icon><link as=fetch crossorigin href=/harddrive-party-web-ui-8c5addf4709ffb2a6d7dfb3e778720a51afec46924681e94d0f02cd9a7f7c88647837635c6e7692b2eb8735bb3a0ef7c_bg.wasm integrity=sha384-jFrd9HCf-yptffs-d4cgpRr-xGkkaB6U0PAs2af3yIZHg3Y1xudpKy64c1uzoO98 rel=preload type=application/wasm><link crossorigin href=/harddrive-party-web-ui-8c5addf4709ffb2a6d7dfb3e778720a51afec46924681e94d0f02cd9a7f7c88647837635c6e7692b2eb8735bb3a0ef7c.js integrity=sha384-89xmUc6F760-BhpxLo1xcv5e28m4lEY8zhsfFwaTeF1jo6xCBbfvcetO9YQ2ffqO rel=modulepreload></head><body></body></html>
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+		<link rel="icon" href="/favicon-e9cbd8f50cc65bf2.ico" integrity="sha384-YobgLXwtz0GhXVUTHml49p32guapVFlEG8UpQdDVN3kekOqkQi+qSXEpwp+yM4BW"/>
+		
+	<link rel="modulepreload" href="/harddrive-party-web-ui-efc25a90bbdf92fe.js" crossorigin="anonymous" integrity="sha384-0Cc0gLmTPNSOXgsmHEiHbO7P6wyfylzi2l/AFnzNcQzbgtei2PUQ/hMfUtHl5lwS"><link rel="preload" href="/harddrive-party-web-ui-efc25a90bbdf92fe_bg.wasm" crossorigin="anonymous" integrity="sha384-+IdXFRUHSmh/ic3vJ9/cLKufeWZs4/dx/7BeILbctn9TyChR21YsxQxR9CeDXmCh" as="fetch" type="application/wasm"></head>
+	<body>
+	</body>
+</html>

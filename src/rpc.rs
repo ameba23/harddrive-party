@@ -34,10 +34,15 @@ pub struct Rpc {
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
     // upload_rx: UnboundedReceiver<ReadRequest>,
+    peer_announce_tx: Sender<AnnouncePeer>,
 }
 
 impl Rpc {
-    pub fn new(shares: Shares, event_tx: Sender<UiServerMessage>) -> Rpc {
+    pub fn new(
+        shares: Shares,
+        event_tx: Sender<UiServerMessage>,
+        peer_announce_tx: Sender<AnnouncePeer>,
+    ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
 
@@ -50,7 +55,11 @@ impl Rpc {
             uploader.run().await;
         });
 
-        Rpc { shares, upload_tx }
+        Rpc {
+            shares,
+            upload_tx,
+            peer_announce_tx,
+        }
     }
 
     /// Handle a request
@@ -72,11 +81,11 @@ impl Rpc {
                         if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
                         // TODO else
                     }
-                    Request::AnnouncePeer(AnnouncePeer { connection_details }) => {
-                        // TODO Handle this peer connection
+                    Request::AnnouncePeer(announce_peer) => {
                         log::info!(
-                            "Discovered peer through existing peer connection {connection_details:?}"
+                            "Discovered peer through existing peer connection {announce_peer:?}"
                         );
+                        self.peer_announce_tx.send(announce_peer).await.unwrap();
                     }
                 }
             }

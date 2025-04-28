@@ -1,7 +1,7 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, TOKEN_LENGTH},
+    discovery::{DiscoveredPeer, DiscoveryMethod, PeerDiscovery},
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -42,10 +42,10 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CACHE_SIZE: usize = 256;
+const PUBLIC_KEY_LENGTH: usize = 32;
 
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
-const TOPIC: &[u8; 1] = b"t";
 pub const REQUESTS: &[u8; 1] = b"r";
 pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
 pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
@@ -86,16 +86,14 @@ impl Hdp {
     /// Takes:
     /// - The directory to store the database
     /// - Initial directories to share, if any
-    /// - Initial topic names to join, if any
     /// - The path to store downloaded files
     /// - An optional MQTT server to use for peer discovery if you do not want to use the default
     /// - [DiscoveryMethods]
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
-        initial_topic_names: Vec<String>,
         download_dir: PathBuf,
-        discovery_methods: DiscoveryMethods,
+        use_mdns: bool,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
@@ -137,17 +135,11 @@ impl Hdp {
             None => None,
         };
 
-        // Setup initial topics
-        let topics = initial_topic_names
-            .iter()
-            .map(|name| Topic::new(name.to_string()))
-            .collect();
-
-        let topics_db = db.open_tree(TOPIC)?;
+        let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db).await?;
+            PeerDiscovery::new(use_mdns, pk_hash, peers.clone()).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -183,8 +175,12 @@ impl Hdp {
 
         Ok((
             Self {
-                peers: Default::default(),
-                rpc: Rpc::new(shares, response_tx.clone()),
+                peers,
+                rpc: Rpc::new(
+                    shares,
+                    response_tx.clone(),
+                    peer_discovery.peer_announce_tx.clone(),
+                ),
                 server_connection,
                 command_tx,
                 command_rx,
@@ -202,9 +198,6 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
-        // Inform the UI of initial state of topics
-        self.topics_updated().await;
-
         let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
@@ -247,23 +240,32 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        their_public_key: Option<[u8; 32]>,
+        discovery_method: Option<DiscoveryMethod>,
         remote_cert: Certificate,
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
-        let connection_details = self
-            .peer_discovery
-            .get_pending_peer(&conn.remote_address())
-            .unwrap()
-            .clone();
+        let their_public_key =
+            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method.clone() {
+                Some(announce_address.public_key)
+            } else {
+                None
+            };
+
+        let announce_address =
+            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method {
+                Some(announce_address)
+            } else {
+                self.peer_discovery.get_pending_peer(&conn.remote_address())
+            };
         let peers_clone = self.peers.clone();
         let our_public_key = self.public_key;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
+
         tokio::spawn(async move {
             if let Err(error) = initial_handshake(&conn, their_public_key, our_public_key).await {
                 warn!("Failed to handle initial handshake {}", error);
@@ -283,14 +285,14 @@ impl Hdp {
                 // peer
                 let mut peers = peers_clone.lock().await;
 
-                let announce_peer = AnnouncePeer {
-                    connection_details: connection_details.clone(),
-                };
+                if let Some(announce_address) = announce_address {
+                    let announce_peer = AnnouncePeer { announce_address };
 
-                // Send their annouce details to other peers who we are connected to
-                for peer in peers.values() {
-                    let request = Request::AnnouncePeer(announce_peer.clone());
-                    Self::request_peer(request, peer).await.unwrap();
+                    // Send their annouce details to other peers who we are connected to
+                    for peer in peers.values() {
+                        let request = Request::AnnouncePeer(announce_peer.clone());
+                        Self::request_peer(request, peer).await.unwrap(); // TODO
+                    }
                 }
 
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
@@ -397,7 +399,7 @@ impl Hdp {
             .map_err(|_| UiServerError::ConnectionError)?;
 
         if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-            self.handle_connection(connection, false, Some(peer.public_key), remote_cert)
+            self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
                 .await;
             Ok(())
         } else {
@@ -412,74 +414,6 @@ impl Hdp {
     ) -> Result<(), HandleUiCommandError> {
         let id = ui_client_message.id;
         match ui_client_message.command {
-            Command::Join(topic_name) => {
-                let topic = Topic::new(topic_name.clone());
-                match self.peer_discovery.join_topic(topic).await {
-                    Ok(()) => {
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                        self.topics_updated().await;
-                    }
-                    Err(error) => {
-                        warn!("Error when joining topic {}", error);
-                        // Respond with an error
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::JoinOrLeaveError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
-            Command::Leave(topic_name) => {
-                let topic = Topic::new(topic_name.clone());
-                match self.peer_discovery.leave_topic(topic).await {
-                    Ok(()) => {
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                        self.topics_updated().await;
-                    }
-                    Err(error) => {
-                        warn!("Error when leaving topic {}", error);
-                        // Respond with an error
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::JoinOrLeaveError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
             Command::Close => {
                 // TODO tidy up peer discovery / active transfers
                 if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
@@ -1081,20 +1015,6 @@ impl Hdp {
         debug!("message sent");
         Ok(recv)
     }
-
-    /// Called whenever the list of topics changes (user joins or leaves a topic) to inform the UI
-    async fn topics_updated(&self) {
-        if self
-            .response_tx
-            .send(UiServerMessage::Event(UiEvent::Topics(
-                self.peer_discovery.get_topic_names(),
-            )))
-            .await
-            .is_err()
-        {
-            warn!("UI response channel closed");
-        }
-    }
 }
 
 /// Given a TLS certificate, get a 32 byte ID and a human-readable
@@ -1104,9 +1024,9 @@ impl Hdp {
 // just hash the whole thing
 fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
-    let mut topic_hash = Blake2b::new(32);
-    topic_hash.input(cert.as_ref());
-    topic_hash.result(&mut hash);
+    let mut hasher = Blake2b::new(32);
+    hasher.input(cert.as_ref());
+    hasher.result(&mut hash);
     (key_to_animal::key_to_name(&hash), hash)
 }
 
@@ -1160,7 +1080,7 @@ async fn initial_handshake(
         send.finish().await?;
     } else {
         let (_send, mut recv) = conn.accept_bi().await?;
-        let buf = recv.read_to_end(TOKEN_LENGTH).await?;
+        let buf = recv.read_to_end(PUBLIC_KEY_LENGTH).await?;
         ensure!(
             buf == our_public_key,
             "Rejected remote peer's initial handshake"
@@ -1248,15 +1168,9 @@ mod tests {
     async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, Receiver<UiServerMessage>) {
         let storage = TempDir::new().unwrap();
         let downloads = storage.path().to_path_buf();
-        Hdp::new(
-            storage,
-            share_dirs,
-            vec!["foo".to_string()],
-            downloads,
-            DiscoveryMethods::MdnsOnly,
-        )
-        .await
-        .unwrap()
+        Hdp::new(storage, share_dirs, downloads, true)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

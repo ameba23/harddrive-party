@@ -15,10 +15,6 @@ pub struct UiClientMessage {
 /// A command from the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
-    /// Join a given topic name
-    Join(String),
-    /// Leave a given topic name
-    Leave(String),
     /// Query peers' files. If no peer name is given, query all connected peers
     Ls(IndexQuery, Option<String>),
     /// Read a portion a of a file, from the given connect peer name
@@ -69,22 +65,11 @@ pub enum UiEvent {
     PeerDisconnected { name: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
-    /// The topics connected to has changed
-    Topics(Vec<UiTopic>),
     // /// The requested or downloaded files have changed
     // Wishlist {
     //     requested: Vec<UiDownloadRequest>,
     //     downloaded: Vec<UiDownloadRequest>,
     // },
-}
-
-/// A known topic
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
-pub struct UiTopic {
-    /// The topic name
-    pub name: String,
-    /// Whether we are currently connected
-    pub connected: bool,
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
