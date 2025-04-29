@@ -2,11 +2,15 @@
 use crate::{
     hdp::{display_bytes, Entry, RequesterSetter},
     ui_messages::{Command, UiDownloadRequest},
+    FilesSignal, PeerPath,
 };
+use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
-    either::{Either, EitherOf5},
+    either::{Either, EitherOf4, EitherOf5},
     prelude::*,
 };
+use std::ops::Bound::Excluded;
+use thaw::*;
 
 /// Ui representation of a file
 #[derive(Clone, Debug)]
@@ -18,6 +22,9 @@ pub struct File {
     /// Size, if known
     pub size: Option<u64>,
     pub is_dir: Option<bool>,
+    pub is_expanded: RwSignal<bool>,
+    /// Is this item in an expanded directory - only relevant to peers context
+    pub is_visible: RwSignal<bool>,
     pub download_status: RwSignal<DownloadStatus>,
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
@@ -29,6 +36,8 @@ impl File {
             peer_name,
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
+            is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Nothing),
             request: RwSignal::new(None),
         }
@@ -44,29 +53,36 @@ impl File {
             peer_name,
             size: None,
             is_dir: Some(false),
+            is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(download_status),
             request: RwSignal::new(None),
         }
     }
 }
 
+/// The context in which we are displaying this file
 #[derive(Eq, PartialEq)]
 pub enum FileDisplayContext {
+    /// List of a peer's files
     Peer,
+    /// List of downloading / uploading files
     Transfer,
+    /// List of files matching a searchterm
     SearchResult,
 }
 
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    // let peer_details = use_context::<PeerName>().unwrap().0;
+    let set_files = use_context::<FilesSignal>().unwrap().1;
     let (file_name, _set_file_name) = signal(file.name);
+    let peer_name = file.peer_name.clone();
 
     let download_request = move |_| {
         let download = Command::Download {
             path: file_name.get().to_string(),
-            peer_name: file.peer_name.clone(),
+            peer_name: peer_name.clone(),
         };
         set_requester.update(|requester| requester.make_request(download));
     };
@@ -84,12 +100,77 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         }
     };
 
+    let expand_dir = move |_| {
+        if file.is_dir.unwrap_or_default() {
+            if file.is_expanded.get() {
+                // Collapse dir by either setting all children to insible
+                log::info!("Collapse dir");
+                let peer_name = file.peer_name.clone();
+                set_files.update(|files| {
+                    let mut upper_bound = file_name.get();
+                    upper_bound.push_str("~");
+                    for (_, file) in files.range_mut((
+                        Excluded(PeerPath {
+                            peer_name: peer_name.clone(),
+                            path: file_name.get(),
+                        }),
+                        Excluded(PeerPath {
+                            peer_name: file.peer_name.clone(),
+                            path: upper_bound,
+                        }),
+                    )) {
+                        log::info!("{}", file.name);
+                        file.is_visible.set(false);
+                    }
+                });
+                file.is_expanded.set(false);
+            } else {
+                // If this is ourselve Command::Shares otherwise Command::Ls(query, peer_name)
+                let ls = Command::Shares(IndexQuery {
+                    path: Some(file_name.get()),
+                    searchterm: None,
+                    recursive: false,
+                });
+                set_requester.update(|requester| requester.make_request(ls));
+                // Issue here is that if this is repeatedly clicked before file is loaded we lose
+                // state
+                file.is_expanded.set(true);
+
+                let peer_name = file.peer_name.clone();
+                set_files.update(|files| {
+                    let mut upper_bound = file_name.get();
+                    upper_bound.push_str("~");
+                    for (_, file) in files.range_mut((
+                        Excluded(PeerPath {
+                            peer_name: peer_name.clone(),
+                            path: file_name.get(),
+                        }),
+                        Excluded(PeerPath {
+                            peer_name: file.peer_name.clone(),
+                            path: upper_bound,
+                        }),
+                    )) {
+                        log::info!("{}", file.name);
+                        file.is_visible.set(true);
+                    }
+                })
+            }
+        }
+    };
+
     let file_name_and_indentation = move || {
         let file_name = file_name.get();
-        let icon = match file.is_dir {
-            Some(true) => "🗀 ",
-            Some(false) => "🗎 ",
-            None => " ",
+        let icon = move || match file.is_dir {
+            Some(true) => {
+                if file.is_expanded.get() {
+                    EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined/> })
+                } else {
+                    EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined/> })
+                }
+            }
+
+            Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined/> }),
+            None => EitherOf4::D(view! {}),
         };
         let (name, indentation) = match file_name.rsplit_once('/') {
             Some((path, name)) => {
@@ -99,20 +180,15 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             }
             None => (file_name, Default::default()),
         };
-        view! {
-            <pre>
-                {indentation} <strong>{icon}</strong>
-                <span class="text-sm font-medium">{name}</span>
-            </pre>
-        }
+        view! { <pre>{indentation} {icon} " " <span class="text-sm font-medium">{name}</span></pre> }
     };
 
     let is_dir = file.is_dir == Some(true);
 
     view! {
-        <tr class="hover:bg-gray-200">
-            <td>{file_name_and_indentation}</td>
-            <td>
+        <TableRow on:click=expand_dir>
+            <TableCell>{file_name_and_indentation}</TableCell>
+            <TableCell>
                 " " {display_bytes(file.size.unwrap_or_default())} " "
                 <button style=download_button_style on:click=download_request title="Download">
                     "🠫"
@@ -165,17 +241,13 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
 
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
                             <span></span>
                         }
                     }
                 }}
 
-            </td>
-        </tr>
+            </TableCell>
+        </TableRow>
     }
 }
 
