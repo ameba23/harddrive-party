@@ -1,5 +1,6 @@
 use crate::{peer::Peer, ui_messages::Command, ErrorMessage, RequesterSetter, SuccessMessage};
 use leptos::{either::EitherOf3, html::Input, prelude::*};
+use thaw::*;
 
 #[component]
 pub fn Shares(
@@ -36,52 +37,53 @@ pub fn Shares(
 
     view! {
         <h2 class="text-xl">"Shared files"</h2>
-        <form action="javascript:void(0);">
-            <label for="add-share">"Add a directory to share"</label>
-            <div>
-                <code>
-                    <input
-                        value=home_dir_if_exists
-                        class="border-2 mx-1"
-                        name="add-share"
-                        node_ref=input_ref
-                    />
-                </code>
-                <input type="submit" value="Add" on:click=add_share/>
-            </div>
-        </form>
+        <Flex vertical=true>
+            <form action="javascript:void(0);">
+                <Icon icon=icondata::AiFolderAddOutlined/>
+                <label for="add-share">"Add a directory to share"</label>
+                <div>
+                    <code>
+                        <input
+                            value=home_dir_if_exists
+                            class="border-2 mx-1"
+                            name="add-share"
+                            node_ref=input_ref
+                        />
+                    </code>
+                    <input type="submit" value="Add" on:click=add_share/>
+                </div>
+            </form>
 
-        // TODO could use <Show> here
-        {move || {
-            match add_or_remove_share_message.get() {
-                Some(Ok(message)) => {
-                    EitherOf3::A(
-                        view! {
-                            <span>
-                                <SuccessMessage message/>
-                            </span>
-                        },
-                    )
+            // TODO could use <Show> here
+            {move || {
+                match add_or_remove_share_message.get() {
+                    Some(Ok(message)) => {
+                        EitherOf3::A(
+                            view! {
+                                <span>
+                                    <SuccessMessage message/>
+                                </span>
+                            },
+                        )
+                    }
+                    Some(Err(message)) => {
+                        EitherOf3::B(
+                            view! {
+                                <span>
+                                    <ErrorMessage message/>
+                                </span>
+                            },
+                        )
+                    }
+                    None => EitherOf3::C(view! { <span></span> }),
                 }
-                Some(Err(message)) => {
-                    EitherOf3::B(
-                        view! {
-                            <span>
-                                <ErrorMessage message/>
-                            </span>
-                        },
-                    )
-                }
-                None => EitherOf3::C(view! { <span></span> }),
-            }
-        }}
+            }}
 
-        <ul class="list-disc list-inside">
             <For
                 each=selves
                 key=|peer| format!("{}{}", peer.name, peer.files.len())
                 children=move |peer| view! { <Peer peer/> }
             />
-        </ul>
+        </Flex>
     }
 }

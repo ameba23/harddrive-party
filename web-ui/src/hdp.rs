@@ -34,7 +34,10 @@ pub use wire_messages::{Entry, LsResponse};
 pub struct RequesterSetter(pub WriteSignal<Requester>);
 
 #[derive(Clone)]
-pub struct FilesReadSignal(pub ReadSignal<BTreeMap<PeerPath, File>>);
+pub struct FilesSignal(
+    pub ReadSignal<BTreeMap<PeerPath, File>>,
+    pub WriteSignal<BTreeMap<PeerPath, File>>,
+);
 
 /// Represents a remote file
 #[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,7 +77,7 @@ pub fn HdpUi() -> impl IntoView {
 
     provide_context(RequesterSetter(set_requester));
     // provide_context(Requested(requested));
-    provide_context(FilesReadSignal(files));
+    provide_context(FilesSignal(files, set_files));
 
     spawn_local(async move {
         let remove_request = |id: &u32| {
@@ -175,6 +178,8 @@ pub fn HdpUi() -> impl IntoView {
                                                 ),
                                                 request: RwSignal::new(Some(request.clone())),
                                                 is_dir: None,
+                                                is_expanded: RwSignal::new(true),
+                                                is_visible: RwSignal::new(true),
                                             });
                                         // Mark all files below this one in the dir heirarchy as
                                         // requested
@@ -357,6 +362,8 @@ pub fn HdpUi() -> impl IntoView {
                                             download_status: RwSignal::new(download_status.clone()),
                                             request: RwSignal::new(Some(request.clone())),
                                             is_dir: None,
+                                            is_expanded: RwSignal::new(true),
+                                            is_visible: RwSignal::new(true),
                                         });
 
                                     let mut upper_bound = peer_path.path.clone();
@@ -409,6 +416,8 @@ pub fn HdpUi() -> impl IntoView {
                                                     download_status: RwSignal::new(download_status),
                                                     request: RwSignal::new(None),
                                                     is_dir: Some(false),
+                                                    is_expanded: RwSignal::new(true),
+                                                    is_visible: RwSignal::new(true),
                                                 });
                                         }
                                     });
@@ -443,14 +452,14 @@ pub fn HdpUi() -> impl IntoView {
                         Command::Shares(IndexQuery {
                             path: Default::default(),
                             searchterm: None,
-                            recursive: true,
+                            recursive: false,
                         })
                     } else {
                         Command::Ls(
                             IndexQuery {
                                 path: Default::default(),
                                 searchterm: None,
-                                recursive: true,
+                                recursive: false,
                             },
                             Default::default(),
                         )
