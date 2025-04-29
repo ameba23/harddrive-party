@@ -1,9 +1,10 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    FilesReadSignal, PeerPath,
+    ui_messages::Command,
+    FilesReadSignal, PeerPath, RequesterSetter,
 };
-use leptos::{either::Either, prelude::*};
+use leptos::{either::Either, html::Input, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
 
@@ -81,7 +82,10 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 }
 
 #[component]
-pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
+pub fn Peers(
+    peers: ReadSignal<HashMap<String, Peer>>,
+    announce_address: ReadSignal<Option<String>>,
+) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
             Either::Left(view! {
@@ -104,7 +108,33 @@ pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
         }
     };
 
+    let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    let input_ref: NodeRef<Input> = NodeRef::new();
+    let add_peer = move |_| {
+        let input = input_ref.get().unwrap();
+        let announce_payload = input.value();
+        let announce_payload = announce_payload.trim();
+        if !announce_payload.is_empty() {
+            let add = Command::ConnectDirect(announce_payload.to_string());
+            set_requester.update(|requester| requester.make_request(add));
+        }
+
+        input.set_value("");
+    };
+
+    let announce = move || {
+        announce_address
+            .get()
+            .unwrap_or("No announce address".to_string())
+    };
+
     view! {
+        <p>Announce address<code>{announce}</code>
+        </p>
+        <form action="javascript:void(0);">
+            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter an announce address"/>
+            <input type="submit" value="Add peer" on:click=add_peer/>
+        </form>
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
     }

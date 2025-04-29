@@ -15,10 +15,6 @@ pub struct UiClientMessage {
 /// A command from the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
-    /// Join a given topic name
-    Join(String),
-    /// Leave a given topic name
-    Leave(String),
     /// Query peers' files. If no peer name is given, query all connected peers
     Ls(IndexQuery, Option<String>),
     /// Read a portion a of a file, from the given connect peer name
@@ -38,7 +34,7 @@ pub enum Command {
     /// Cancel a particular request
     RemoveRequest(u32),
     /// Connect to the given peer
-    ConnectDirect(Vec<u8>),
+    ConnectDirect(String),
     /// Shutdown gracefully
     Close,
 }
@@ -69,24 +65,11 @@ pub enum UiEvent {
     PeerDisconnected { name: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
-    /// The topics connected to has changed
-    Topics(Vec<UiTopic>),
     // /// The requested or downloaded files have changed
     // Wishlist {
     //     requested: Vec<UiDownloadRequest>,
     //     downloaded: Vec<UiDownloadRequest>,
     // },
-}
-
-/// A known topic
-#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
-pub struct UiTopic {
-    /// The topic name
-    pub name: String,
-    /// Whether we are currently connected
-    pub connected: bool,
-    /// Our announce address encrypted to this topic (used for direct connections)
-    pub announce_payload: Option<Vec<u8>>,
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
@@ -96,7 +79,10 @@ pub enum PeerRemoteOrSelf {
     /// A remote peer
     Remote,
     /// Ourself, with the path of our home directory
-    Me { os_home_dir: Option<String> },
+    Me {
+        os_home_dir: Option<String>,
+        announce_address: String,
+    },
 }
 
 /// A request to download a file from a particular peer
