@@ -30,7 +30,6 @@ pub fn HdpHeader(
     let navigate1 = use_navigate();
     let navigate2 = use_navigate();
     let navigate3 = use_navigate();
-    let navigate4 = use_navigate();
 
     view! {
         <Style id="hdp-header">
@@ -87,7 +86,7 @@ pub fn HdpHeader(
                     <Tab
                         value="shares"
                         on:click=move |_| {
-                            navigate2("/shares", Default::default());
+                            navigate1("/shares", Default::default());
                         }
                     >
 
@@ -100,7 +99,7 @@ pub fn HdpHeader(
                     <Tab
                         value="peers"
                         on:click=move |_| {
-                            navigate3("/peers", Default::default());
+                            navigate2("/peers", Default::default());
                         }
                     >
 
@@ -113,7 +112,7 @@ pub fn HdpHeader(
                     <Tab
                         value="transfers"
                         on:click=move |_| {
-                            navigate4("/transfers", Default::default());
+                            navigate3("/transfers", Default::default());
                         }
                     >
 

@@ -4,7 +4,7 @@ use crate::{
     ui_messages::Command,
     FilesSignal, PeerPath, RequesterSetter,
 };
-use leptos::{either::Either, html::Input, prelude::*};
+use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
 use thaw::*;
@@ -123,17 +123,17 @@ pub fn Peers(
     };
 
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
-    let input_ref: NodeRef<Input> = NodeRef::new();
+    let input_value = RwSignal::new(String::new());
+
     let add_peer = move |_| {
-        let input = input_ref.get().unwrap();
-        let announce_payload = input.value();
+        let announce_payload = input_value.get();
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
             let add = Command::ConnectDirect(announce_payload.to_string());
             set_requester.update(|requester| requester.make_request(add));
         }
 
-        input.set_value("");
+        input_value.set(String::new());
     };
 
     let announce = move || {
@@ -142,13 +142,29 @@ pub fn Peers(
             .unwrap_or("No announce address".to_string())
     };
 
+    let copy_to_clipboard = move |_| {
+        wasm_bindgen_futures::spawn_local(async move {
+            let window = web_sys::window().unwrap();
+            let clipboard = window.navigator().clipboard();
+            let promise = clipboard.write_text(
+                &announce_address
+                    .get_untracked()
+                    .unwrap_or("Cannot get signal".to_string()),
+            );
+            let _result = wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
+            log::info!("Copied to clipboard");
+        });
+    };
+
     view! {
-        <p>Announce address<code>{announce}</code>
+        <p>Announce address<code>{announce}</code><span title="Copy to clipboard"><Button icon=icondata::ChCopy on:click=copy_to_clipboard size=ButtonSize::Small></Button></span>
         </p>
-        <form action="javascript:void(0);">
-            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter an announce address"/>
-            <input type="submit" value="Add peer" on:click=add_peer/>
-        </form>
+        <Input value=input_value placeholder="Enter an announce address">
+        <InputPrefix slot>
+        <Icon icon=icondata::AiUserOutlined/>
+        </InputPrefix>
+        </Input>
+        <Button on:click=add_peer>Add peer</Button>
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
     }
