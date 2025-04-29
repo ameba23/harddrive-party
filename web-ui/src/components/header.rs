@@ -1,4 +1,4 @@
-use crate::{display_bytes, peer::Peer, FilesReadSignal, PeerPath};
+use crate::{display_bytes, peer::Peer, FilesSignal, PeerPath};
 use leptos::prelude::*;
 use leptos_meta::Style;
 use leptos_router::hooks::use_navigate;
@@ -13,7 +13,7 @@ pub fn HdpHeader(
 ) -> impl IntoView {
     let selected_value = RwSignal::new("peers".to_string());
 
-    let files = use_context::<FilesReadSignal>().unwrap().0;
+    let files = use_context::<FilesSignal>().unwrap().0;
 
     let shared_files_size = move || match shares.get() {
         Some(me) => {
@@ -92,8 +92,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        {"🖧 Topics"}
-                        <Badge>{move || { topics.get().len() }}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::FaNetworkWiredSolid/>
+                            {" Topics"}
+                            <Badge>{move || { topics.get().len() }}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="shares"
@@ -102,8 +105,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "🖤 Shares"
-                        <Badge>{shared_files_size}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::AiHeartFilled/>
+                            " Shares"
+                            <Badge>{shared_files_size}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="peers"
@@ -112,8 +118,11 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "👾 Peers"
-                        <Badge>{move || { peers.get().len() }}</Badge>
+                        <Flex>
+                            <Icon icon=icondata::FaUsersSolid/>
+                            " Peers"
+                            <Badge>{move || { peers.get().len() }}</Badge>
+                        </Flex>
                     </Tab>
                     <Tab
                         value="transfers"
@@ -122,7 +131,10 @@ pub fn HdpHeader(
                         }
                     >
 
-                        "⇅ Transfers"
+                        <Flex>
+                            <Icon icon=icondata::LuArrowUpDown/>
+                            " Transfers"
+                        </Flex>
                     </Tab>
                 </TabList>
             </Space>

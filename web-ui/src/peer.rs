@@ -1,11 +1,12 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    FilesReadSignal, PeerPath,
+    FilesSignal, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
+use thaw::*;
 
 #[derive(Clone, Debug)]
 pub struct Peer {
@@ -26,7 +27,7 @@ impl Peer {
 
 #[component]
 pub fn Peer(peer: Peer) -> impl IntoView {
-    let files = use_context::<FilesReadSignal>().unwrap().0;
+    let files = use_context::<FilesSignal>().unwrap().0;
     // This signal is used below to provide context to File
     let (peer_signal, _set_peer) = signal((peer.name.clone(), peer.is_self));
 
@@ -56,27 +57,42 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                     path: "".to_string(), // TODO
                 }),
             ))
+            .filter(|(_, file)| file.is_visible.get())
             .map(|(_, file)| file.clone()) // TODO ideally dont clone
             .collect::<Vec<File>>()
     };
 
     // provide_context(PeerName(peer_signal));
     view! {
-        <li>
-            {peer_signal.get().0} " " {root_size} " shared" <table>
+        <div>
+            <Flex vertical=true>
+                <div>
+                    <Icon icon=icondata::AiUserOutlined/>
+                    {peer_signal.get().0}
+                    " "
+                    {root_size}
+                    " shared"
+                </div>
+                <Table>
+                    <TableBody>
+                        <For
+                            each=files_iter
+                            key=|file| file.name.clone()
+                            children=move |file: File| {
+                                view! {
+                                    <File
+                                        file
+                                        is_shared=peer.is_self
+                                        context=FileDisplayContext::Peer
+                                    />
+                                }
+                            }
+                        />
 
-                <For
-                    each=files_iter
-                    key=|file| file.name.clone()
-                    children=move |file: File| {
-                        view! {
-                            <File file is_shared=peer.is_self context=FileDisplayContext::Peer/>
-                        }
-                    }
-                />
-
-            </table>
-        </li>
+                    </TableBody>
+                </Table>
+            </Flex>
+        </div>
     }
 }
 
@@ -92,13 +108,11 @@ pub fn Peers(peers: ReadSignal<HashMap<String, Peer>>) -> impl IntoView {
         } else {
             Either::Right(view! {
                 <div>
-                    <ul>
-                        <For
-                            each=move || peers.get()
-                            key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                            children=move |(_peer_name, peer)| view! { <Peer peer/> }
-                        />
-                    </ul>
+                    <For
+                        each=move || peers.get()
+                        key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
+                        children=move |(_peer_name, peer)| view! { <Peer peer/> }
+                    />
                 </div>
             })
         }
