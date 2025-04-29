@@ -1,5 +1,6 @@
 //! Wire messages for communicating with other Peers
 use serde::{Deserialize, Serialize};
+use std::net::{IpAddr, SocketAddr};
 use thiserror::Error;
 
 // TODO read error
@@ -11,6 +12,8 @@ pub enum Request {
     Ls(IndexQuery),
     /// A request to download a remote peer's file (or a portion of the file)
     Read(ReadQuery),
+    /// Contact details of another peer
+    AnnouncePeer(AnnouncePeer),
 }
 
 /// A request to read the remote peer's shared file index
@@ -61,4 +64,36 @@ pub enum LsResponseError {
     DbError,
     #[error("Path not found")]
     PathNotFound,
+}
+
+/// Details of an announced peer
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
+pub struct AnnounceAddress {
+    pub connection_details: PeerConnectionDetails,
+    pub public_key: [u8; 32],
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
+pub struct AnnouncePeer {
+    pub announce_address: AnnounceAddress,
+    // TODO signature
+}
+
+#[repr(u8)]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]
+pub enum PeerConnectionDetails {
+    NoNat(SocketAddr) = 1,
+    Asymmetric(SocketAddr) = 2,
+    Symmetric(IpAddr) = 3,
+}
+
+impl PeerConnectionDetails {
+    /// Gets the IP address
+    pub fn ip(&self) -> IpAddr {
+        match self {
+            PeerConnectionDetails::NoNat(addr) => addr.ip(),
+            PeerConnectionDetails::Asymmetric(addr) => addr.ip(),
+            PeerConnectionDetails::Symmetric(ip) => *ip,
+        }
+    }
 }

@@ -1,7 +1,5 @@
 //! Topic name for connecting peers
 
-use std::collections::HashMap;
-
 use cryptoxide::{blake2b::Blake2b, chacha20poly1305::ChaCha20Poly1305, digest::Digest};
 use harddrive_party_shared::ui_messages::UiTopic;
 use rand::{thread_rng, Rng};
@@ -94,21 +92,17 @@ impl Topic {
 
 pub struct TopicsDb {
     names_to_connected: sled::Tree,
-    announce_addresses: HashMap<String, Vec<u8>>,
 }
 
 impl TopicsDb {
     pub fn new(db: sled::Tree) -> Self {
         Self {
             names_to_connected: db,
-            announce_addresses: HashMap::new(),
         }
     }
 
-    pub fn join(&mut self, topic: &Topic, announce_address: Vec<u8>) -> anyhow::Result<()> {
+    pub fn join(&mut self, topic: &Topic) -> anyhow::Result<()> {
         self.names_to_connected.insert(&topic.name, &JOINED)?;
-        self.announce_addresses
-            .insert(topic.name.clone(), announce_address);
         Ok(())
     }
 
@@ -124,19 +118,14 @@ impl TopicsDb {
                 if let Ok((topic_name_buf, joined_buf)) = kv_result {
                     // join or leave
                     if let Ok(topic_name) = std::str::from_utf8(&topic_name_buf) {
-                        let announce_address =
-                            self.announce_addresses.get(topic_name).map(|a| a.clone());
-
                         match joined_buf.to_vec().first() {
                             Some(1) => Some(UiTopic {
                                 name: topic_name.to_string(),
                                 connected: true,
-                                announce_payload: announce_address.clone(),
                             }),
                             Some(0) => Some(UiTopic {
                                 name: topic_name.to_string(),
                                 connected: false,
-                                announce_payload: announce_address.clone(),
                             }),
                             _ => None,
                         }

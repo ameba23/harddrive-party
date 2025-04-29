@@ -1,9 +1,7 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{
-        topic::Topic, DiscoveredPeer, DiscoveryMethods, PeerDiscovery, SessionToken, TOKEN_LENGTH,
-    },
+    discovery::{DiscoveredPeer, DiscoveryMethod, PeerDiscovery},
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -12,7 +10,7 @@ use crate::{
     rpc::Rpc,
     shares::Shares,
     ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
-    wire_messages::{Entry, IndexQuery, LsResponse, Request},
+    wire_messages::{AnnouncePeer, Entry, IndexQuery, LsResponse, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::ensure;
@@ -44,10 +42,10 @@ use tokio::{
 const MAX_REQUEST_SIZE: usize = 1024;
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const CACHE_SIZE: usize = 256;
+const PUBLIC_KEY_LENGTH: usize = 32;
 
 /// Key-value store sub-tree names
 const CONFIG: &[u8; 1] = b"c";
-const TOPIC: &[u8; 1] = b"t";
 pub const REQUESTS: &[u8; 1] = b"r";
 pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
 pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
@@ -77,6 +75,8 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
+    /// Public key (from certificate)
+    public_key: [u8; 32],
     /// Maintains lists of requested/downloaded files
     wishlist: WishList,
 }
@@ -86,17 +86,14 @@ impl Hdp {
     /// Takes:
     /// - The directory to store the database
     /// - Initial directories to share, if any
-    /// - Initial topic names to join, if any
     /// - The path to store downloaded files
     /// - An optional MQTT server to use for peer discovery if you do not want to use the default
     /// - [DiscoveryMethods]
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
-        initial_topic_names: Vec<String>,
         download_dir: PathBuf,
-        mqtt_server: Option<String>,
-        discovery_methods: DiscoveryMethods,
+        use_mdns: bool,
     ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
         // Channels for communication with UI
         let (command_tx, command_rx) = channel(1024);
@@ -138,27 +135,11 @@ impl Hdp {
             None => None,
         };
 
-        // Notify the UI of our own details
-        send_event(
-            response_tx.clone(),
-            UiEvent::PeerConnected {
-                name: name.clone(),
-                peer_type: PeerRemoteOrSelf::Me { os_home_dir },
-            },
-        )
-        .await;
-
-        // Setup initial topics
-        let topics = initial_topic_names
-            .iter()
-            .map(|name| Topic::new(name.to_string()))
-            .collect();
-
-        let topics_db = db.open_tree(TOPIC)?;
+        let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(topics, discovery_methods, pk_hash, topics_db, mqtt_server).await?;
+            PeerDiscovery::new(use_mdns, pk_hash, peers.clone()).await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
@@ -176,13 +157,30 @@ impl Hdp {
             }
         };
 
+        // Notify the UI of our own details
+        send_event(
+            response_tx.clone(),
+            UiEvent::PeerConnected {
+                name: name.clone(),
+                peer_type: PeerRemoteOrSelf::Me {
+                    os_home_dir,
+                    announce_address: peer_discovery.get_ui_announce_address()?,
+                },
+            },
+        )
+        .await;
+
         // Setup db for downloads/requests
         let wishlist = WishList::new(&db)?;
 
         Ok((
             Self {
-                peers: Default::default(),
-                rpc: Rpc::new(shares, response_tx.clone()),
+                peers,
+                rpc: Rpc::new(
+                    shares,
+                    response_tx.clone(),
+                    peer_discovery.peer_announce_tx.clone(),
+                ),
                 server_connection,
                 command_tx,
                 command_rx,
@@ -190,6 +188,7 @@ impl Hdp {
                 peer_discovery,
                 download_dir,
                 name,
+                public_key: pk_hash,
                 ls_cache: Default::default(),
                 wishlist,
             },
@@ -199,9 +198,6 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
     pub async fn run(&mut self) {
-        // Inform the UI of initial state of topics
-        self.topics_updated().await;
-
         let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
@@ -231,12 +227,16 @@ impl Hdp {
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
-                    if self.connect_to_peer(peer).await.is_err() {
-                        error!("Cannot connect to discovered peer");
+                    if let Err(err) = self.connect_to_peer(peer).await {
+                        error!("Cannot connect to discovered peer {:?}", err);
                     };
                 }
             }
         }
+    }
+
+    pub fn get_announce_address(&self) -> anyhow::Result<String> {
+        self.peer_discovery.get_ui_announce_address()
     }
 
     /// Handle a QUIC connection from/to another peer
@@ -244,23 +244,47 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        token: Option<SessionToken>,
+        discovery_method: Option<DiscoveryMethod>,
         remote_cert: Certificate,
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
+        let their_public_key =
+            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method.clone() {
+                Some(announce_address.public_key)
+            } else {
+                None
+            };
+
+        let announce_address =
+            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method {
+                Some(announce_address)
+            } else {
+                self.peer_discovery.get_pending_peer(&conn.remote_address())
+            };
+
+        if let Some(announce_address) = announce_address.clone() {
+            if announce_address.public_key == peer_public_key {
+                println!("Public key matches");
+            } else {
+                println!("Public key does not match!");
+            }
+        }
+
         let peers_clone = self.peers.clone();
-        let our_token = self.peer_discovery.session_token;
+        let our_public_key = self.public_key;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
+
         tokio::spawn(async move {
-            if let Err(error) = handle_session_token(&conn, token, our_token).await {
-                warn!("Failed to handle connecting peer's token {}", error);
+            if let Err(error) = initial_handshake(&conn, their_public_key, our_public_key).await {
+                warn!("Failed to handle initial handshake {}", error);
                 return;
             }
+            println!("announcing peer to ui...");
 
             {
                 // Add peer to our hashmap
@@ -274,13 +298,23 @@ impl Hdp {
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
                 let mut peers = peers_clone.lock().await;
+
+                if let Some(announce_address) = announce_address {
+                    let announce_peer = AnnouncePeer { announce_address };
+
+                    // Send their annouce details to other peers who we are connected to
+                    for peer in peers.values() {
+                        let request = Request::AnnouncePeer(announce_peer.clone());
+                        Self::request_peer(request, peer).await.unwrap(); // TODO
+                    }
+                }
+
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
                 let direction = if incoming { "incoming" } else { "outgoing" };
                 info!("[{}] connected to {} peers", direction, peers.len());
             }
-
             // Inform the UI that a new peer has connected
             send_event(
                 response_tx.clone(),
@@ -290,6 +324,7 @@ impl Hdp {
                 },
             )
             .await;
+
             loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
@@ -377,7 +412,7 @@ impl Hdp {
             .map_err(|_| UiServerError::ConnectionError)?;
 
         if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-            self.handle_connection(connection, false, Some(peer.token), remote_cert)
+            self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
                 .await;
             Ok(())
         } else {
@@ -392,74 +427,6 @@ impl Hdp {
     ) -> Result<(), HandleUiCommandError> {
         let id = ui_client_message.id;
         match ui_client_message.command {
-            Command::Join(topic_name) => {
-                let topic = Topic::new(topic_name.clone());
-                match self.peer_discovery.join_topic(topic).await {
-                    Ok(()) => {
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                        self.topics_updated().await;
-                    }
-                    Err(error) => {
-                        warn!("Error when joining topic {}", error);
-                        // Respond with an error
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::JoinOrLeaveError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
-            Command::Leave(topic_name) => {
-                let topic = Topic::new(topic_name.clone());
-                match self.peer_discovery.leave_topic(topic).await {
-                    Ok(()) => {
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                        self.topics_updated().await;
-                    }
-                    Err(error) => {
-                        warn!("Error when leaving topic {}", error);
-                        // Respond with an error
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::JoinOrLeaveError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
             Command::Close => {
                 // TODO tidy up peer discovery / active transfers
                 if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
@@ -1049,6 +1016,10 @@ impl Hdp {
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
         let peers = self.peers.lock().await;
         let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+        Self::request_peer(request, peer).await
+    }
+
+    async fn request_peer(request: Request, peer: &Peer) -> Result<RecvStream, RequestError> {
         let (mut send, recv) = peer.connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("message serialized, writing...");
@@ -1056,20 +1027,6 @@ impl Hdp {
         send.finish().await?;
         debug!("message sent");
         Ok(recv)
-    }
-
-    /// Called whenever the list of topics changes (user joins or leaves a topic) to inform the UI
-    async fn topics_updated(&self) {
-        if self
-            .response_tx
-            .send(UiServerMessage::Event(UiEvent::Topics(
-                self.peer_discovery.get_topic_names(),
-            )))
-            .await
-            .is_err()
-        {
-            warn!("UI response channel closed");
-        }
     }
 }
 
@@ -1080,9 +1037,9 @@ impl Hdp {
 // just hash the whole thing
 fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
     let mut hash = [0u8; 32];
-    let mut topic_hash = Blake2b::new(32);
-    topic_hash.input(cert.as_ref());
-    topic_hash.result(&mut hash);
+    let mut hasher = Blake2b::new(32);
+    hasher.input(cert.as_ref());
+    hasher.result(&mut hash);
     (key_to_animal::key_to_name(&hash), hash)
 }
 
@@ -1123,22 +1080,25 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
     Ok(stream.boxed())
 }
 
-/// If we have a token for the other party, send it to them.
-/// Otherwise, wait for them to send us their token
-async fn handle_session_token(
+/// If we have a public key for the other party, send it to them.
+/// Otherwise, wait for them to send us our public key
+async fn initial_handshake(
     conn: &quinn::Connection,
-    token: Option<SessionToken>,
-    our_token: SessionToken,
+    their_public_key: Option<[u8; 32]>,
+    our_public_key: [u8; 32],
 ) -> anyhow::Result<()> {
-    if let Some(thier_token) = token {
-        let (mut send, _recv) = conn.open_bi().await?;
-        send.write_all(&thier_token).await?;
-        send.finish().await?;
-    } else {
-        let (_send, mut recv) = conn.accept_bi().await?;
-        let buf = recv.read_to_end(TOKEN_LENGTH).await?;
-        ensure!(buf == our_token, "Rejected remote peer's token");
-    }
+    // if let Some(public_key) = their_public_key {
+    //     let (mut send, _recv) = conn.open_bi().await?;
+    //     send.write_all(&public_key).await?;
+    //     send.finish().await?;
+    // } else {
+    //     let (_send, mut recv) = conn.accept_bi().await?;
+    //     let buf = recv.read_to_end(PUBLIC_KEY_LENGTH).await?;
+    //     ensure!(
+    //         buf == our_public_key,
+    //         "Rejected remote peer's initial handshake"
+    //     );
+    // }
     Ok(())
 }
 
@@ -1221,20 +1181,14 @@ mod tests {
     async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, Receiver<UiServerMessage>) {
         let storage = TempDir::new().unwrap();
         let downloads = storage.path().to_path_buf();
-        Hdp::new(
-            storage,
-            share_dirs,
-            vec!["foo".to_string()],
-            downloads,
-            None,
-            DiscoveryMethods::MdnsOnly,
-        )
-        .await
-        .unwrap()
+        Hdp::new(storage, share_dirs, downloads, true)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::init();
         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice_name = alice.name.clone();
 
@@ -1249,6 +1203,7 @@ mod tests {
             bob.run().await;
         });
 
+        // Wait until they connect to each other using mDNS
         while let Some(res) = bob_rx.recv().await {
             println!("Res {:?}", res);
 
@@ -1268,7 +1223,7 @@ mod tests {
         };
         bob_command_tx
             .send(UiClientMessage {
-                id: 1,
+                id: 2,
                 command: Command::Read(req, alice_name.clone()),
             })
             .await
@@ -1290,7 +1245,7 @@ mod tests {
         };
         bob_command_tx
             .send(UiClientMessage {
-                id: 2,
+                id: 3,
                 command: Command::Ls(req, Some(alice_name)),
             })
             .await
@@ -1299,6 +1254,7 @@ mod tests {
         let mut entries = Vec::new();
         while let Some(res) = bob_rx.recv().await {
             if let UiServerMessage::Response { id, response } = res {
+                println!("response {:?}", response);
                 match response.unwrap() {
                     UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
                         for entry in some_entries {
@@ -1306,7 +1262,7 @@ mod tests {
                         }
                     }
                     UiResponse::EndResponse => {
-                        if id == 2 {
+                        if id == 3 {
                             break;
                         }
                     }
