@@ -395,7 +395,10 @@ impl Hdp {
                     Some(socket) => {
                         make_server_endpoint_basic_socket(socket, cert_der, priv_key_der)
                             .await
-                            .map_err(|_| UiServerError::ConnectionError)?
+                            .map_err(|err| {
+                                dbg!(err);
+                                UiServerError::ConnectionError
+                            })?
                     }
                     None => {
                         // This should be an impossible state to get into

@@ -84,6 +84,8 @@ enum CliCommand {
         #[arg(short, long)]
         end: Option<u64>,
     },
+    /// Connect to a peer
+    Connect { announce_address: String },
 }
 
 #[tokio::main]
@@ -333,6 +335,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+        CliCommand::Connect { announce_address } => {
+            let mut responses = harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::ConnectDirect(announce_address),
+            )
+            .await?;
         }
     };
     Ok(())

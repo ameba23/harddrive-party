@@ -98,7 +98,7 @@ const STUN_SERVERS: [&str; 93] = [
     "stun.oncloud7.ch:3478",
     "stun.sipnet.com:3478",
     "stun.voip.blackberry.com:3478",
-    "stun.finsterwalder.com:3478",
+    "stun.finsterwalder.com:3478", // Possible issue - need to check
     "stun.technosens.fr:3478",
     "stun.zentauron.de:3478",
     "stun.engineeredarts.co.uk:3478",

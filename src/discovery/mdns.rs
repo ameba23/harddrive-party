@@ -54,6 +54,7 @@ impl MdnsServer {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
                                 } else {
+                                    debug!("Found peer on mdns {their_addr:?}");
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections
                                     let us = addr.to_string();
