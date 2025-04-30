@@ -395,10 +395,7 @@ impl Hdp {
                     Some(socket) => {
                         make_server_endpoint_basic_socket(socket, cert_der, priv_key_der)
                             .await
-                            .map_err(|err| {
-                                dbg!(err);
-                                UiServerError::ConnectionError
-                            })?
+                            .map_err(|err| UiServerError::ConnectionError(format!("{err:?}")))?
                     }
                     None => {
                         // This should be an impossible state to get into
@@ -410,17 +407,15 @@ impl Hdp {
 
         let connection = endpoint
             .connect(peer.socket_address, "ssss") // TODO
-            .map_err(|_| UiServerError::ConnectionError)?
+            .map_err(|err| UiServerError::ConnectionError(format!("{err:?}")))?
             .await
-            .map_err(|_| UiServerError::ConnectionError)?;
+            .map_err(|err| UiServerError::ConnectionError(format!("{err:?}")))?;
 
-        if let Ok(remote_cert) = get_certificate_from_connection(&connection) {
-            self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
-                .await;
-            Ok(())
-        } else {
-            Err(UiServerError::ConnectionError)
-        }
+        let remote_cert = get_certificate_from_connection(&connection)
+            .map_err(|err| UiServerError::ConnectionError(format!("{err:?}")))?;
+        self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
+            .await;
+        Ok(())
     }
 
     /// Handle a command from the UI

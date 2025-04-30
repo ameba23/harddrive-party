@@ -139,8 +139,8 @@ pub enum UiResponse {
 /// An error in response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
 pub enum UiServerError {
-    #[error("Cannot connect")]
-    ConnectionError,
+    #[error("Cannot connect: {0}")]
+    ConnectionError(String),
     #[error("Request error")]
     RequestError, // TODO
     #[error("Error when joining or leaving")]
