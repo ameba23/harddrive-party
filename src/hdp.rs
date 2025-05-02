@@ -13,7 +13,6 @@ use crate::{
     wire_messages::{AnnouncePeer, Entry, IndexQuery, LsResponse, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
-use anyhow::ensure;
 use async_stream::try_stream;
 use bincode::{deserialize, serialize};
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
@@ -52,6 +51,7 @@ pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
 pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
 pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
 
+type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 pub struct Hdp {
@@ -76,7 +76,7 @@ pub struct Hdp {
     /// A name derived from our public key
     pub name: String,
     /// Public key (from certificate)
-    public_key: [u8; 32],
+    public_key: PublicKey,
     /// Maintains lists of requested/downloaded files
     wishlist: WishList,
 }
@@ -305,7 +305,9 @@ impl Hdp {
                     // Send their annouce details to other peers who we are connected to
                     for peer in peers.values() {
                         let request = Request::AnnouncePeer(announce_peer.clone());
-                        Self::request_peer(request, peer).await.unwrap(); // TODO
+                        if let Err(err) = Self::request_peer(request, peer).await {
+                            error!("Failed to send announce message to {peer:?} - {err:?}");
+                        }
                     }
                 }
 
@@ -688,7 +690,6 @@ impl Hdp {
 
                 match self.request(ls_request, &peer_name).await {
                     Ok(recv) => {
-                        // w(path: String, total_size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
                         let peer_public_key = {
                             let peers = self.peers.lock().await;
                             let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
@@ -1033,7 +1034,7 @@ impl Hdp {
 // TODO the ID should actually just be the public key from the
 // certicate, but i cant figure out how to extract it so for now
 // just hash the whole thing
-fn certificate_to_name(cert: Certificate) -> (String, [u8; 32]) {
+fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
     let mut hash = [0u8; 32];
     let mut hasher = Blake2b::new(32);
     hasher.input(cert.as_ref());

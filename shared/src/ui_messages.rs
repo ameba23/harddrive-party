@@ -143,8 +143,6 @@ pub enum UiServerError {
     ConnectionError(String),
     #[error("Request error")]
     RequestError, // TODO
-    #[error("Error when joining or leaving")]
-    JoinOrLeaveError,
     #[error("Error when updating shared directory")]
     ShareError(String),
 }
