@@ -412,8 +412,8 @@ impl Hdp {
         };
 
         let connection = endpoint
-            .connect(peer.socket_address, "ssss") // TODO
-            .map_err(|err| UiServerError::ConnectionError(format!("When conencting: {err:?}")))?
+            .connect(peer.socket_address, "localhost") // TODO
+            .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?
             .await
             .map_err(|err| UiServerError::ConnectionError(format!("After connecting: {err:?}")))?;
 
@@ -1192,7 +1192,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::init();
         let (mut alice, _alice_rx) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice_name = alice.name.clone();
 
