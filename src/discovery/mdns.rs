@@ -97,11 +97,6 @@ fn create_service_info(
     addr: &SocketAddr,
     public_key: &[u8; 32],
 ) -> anyhow::Result<ServiceInfo> {
-    // let capabilities: Vec<HandshakeRequest> = topics
-    //     .iter()
-    //     .map(|topic| handshake_request(topic, addr, public_key))
-    //     .collect();
-
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = HashMap::new();
@@ -134,8 +129,13 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, [u8; 32])> 
 
     let properties = info.get_properties();
 
-    let public_key = properties.get(PUBLIC_KEY_PROPERTY_NAME).unwrap();
-    let public_key = hex::decode(public_key).unwrap();
+    let public_key = properties
+        .get(PUBLIC_KEY_PROPERTY_NAME)
+        .ok_or_else(|| anyhow!("Cannot get public key property from mDNS service"))?;
+
+    let public_key = hex::decode(public_key)?
+        .try_into()
+        .map_err(|_| anyhow!("Bad public key length"))?;
 
     let their_ip = info
         .get_addresses()
@@ -146,7 +146,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, [u8; 32])> 
     let their_port = info.get_port();
 
     let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
-    Ok((addr, public_key.try_into().unwrap()))
+    Ok((addr, public_key))
 }
 
 #[cfg(test)]

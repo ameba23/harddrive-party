@@ -251,13 +251,6 @@ impl Hdp {
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
-        let their_public_key =
-            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method.clone() {
-                Some(announce_address.public_key)
-            } else {
-                None
-            };
-
         let announce_address =
             if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method {
                 Some(announce_address)
@@ -274,18 +267,11 @@ impl Hdp {
         }
 
         let peers_clone = self.peers.clone();
-        let our_public_key = self.public_key;
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
         let wishlist = self.wishlist.clone();
 
         tokio::spawn(async move {
-            if let Err(error) = initial_handshake(&conn, their_public_key, our_public_key).await {
-                warn!("Failed to handle initial handshake {}", error);
-                return;
-            }
-            println!("announcing peer to ui...");
-
             {
                 // Add peer to our hashmap
                 let peer = Peer::new(
@@ -1082,28 +1068,6 @@ async fn process_length_prefix(mut recv: RecvStream) -> anyhow::Result<LsRespons
         }
     };
     Ok(stream.boxed())
-}
-
-/// If we have a public key for the other party, send it to them.
-/// Otherwise, wait for them to send us our public key
-async fn initial_handshake(
-    conn: &quinn::Connection,
-    their_public_key: Option<[u8; 32]>,
-    our_public_key: [u8; 32],
-) -> anyhow::Result<()> {
-    // if let Some(public_key) = their_public_key {
-    //     let (mut send, _recv) = conn.open_bi().await?;
-    //     send.write_all(&public_key).await?;
-    //     send.finish().await?;
-    // } else {
-    //     let (_send, mut recv) = conn.accept_bi().await?;
-    //     let buf = recv.read_to_end(PUBLIC_KEY_LENGTH).await?;
-    //     ensure!(
-    //         buf == our_public_key,
-    //         "Rejected remote peer's initial handshake"
-    //     );
-    // }
-    Ok(())
 }
 
 async fn accept_incoming_request(
