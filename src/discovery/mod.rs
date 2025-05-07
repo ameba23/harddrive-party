@@ -10,7 +10,6 @@ use crate::{
 };
 use anyhow::anyhow;
 use base64::prelude::{Engine as _, BASE64_STANDARD_NO_PAD};
-use bincode::{deserialize, serialize};
 use harddrive_party_shared::wire_messages::PeerConnectionDetails;
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
@@ -150,7 +149,8 @@ impl PeerDiscovery {
 
     pub async fn connect_direct_to_peer(&mut self, announce_payload: &str) -> anyhow::Result<()> {
         let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload)?;
-        let announce_address: AnnounceAddress = deserialize(&announce_address_bytes)?;
+        let announce_address = AnnounceAddress::from_bytes(announce_address_bytes)?;
+
         handle_peer_announcement(
             self.hole_puncher.clone(),
             self.announce_address.clone(),
@@ -169,8 +169,8 @@ impl PeerDiscovery {
     }
 
     pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
-        let announce_address = serialize(&self.announce_address)?;
-        Ok(BASE64_STANDARD_NO_PAD.encode(&announce_address))
+        let bytes = self.announce_address.to_bytes();
+        Ok(BASE64_STANDARD_NO_PAD.encode(&bytes))
     }
 }
 
