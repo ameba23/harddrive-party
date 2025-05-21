@@ -27,8 +27,8 @@ pub fn Topics(topics: ReadSignal<Vec<UiTopic>>) -> impl IntoView {
     view! {
         <h2 class="text-xl">"Connected topics"</h2>
         <form action="javascript:void(0);">
-            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name"/>
-            <input type="submit" value="Join" on:click=join_topic/>
+            <input class="border-2 mx-1" node_ref=input_ref placeholder="Enter a topic name" />
+            <input type="submit" value="Join" on:click=join_topic />
         </form>
         <h2>"Connected"</h2>
         <ul>
@@ -39,9 +39,7 @@ pub fn Topics(topics: ReadSignal<Vec<UiTopic>>) -> impl IntoView {
 
                 key=|topic: &UiTopic| topic.name.clone()
                 children=move |topic| {
-                    view! {
-                        <Topic topic=RwSignal::new(topic) />
-                    }
+                    view! { <Topic topic=RwSignal::new(topic) /> }
                 }
             />
 
@@ -50,18 +48,12 @@ pub fn Topics(topics: ReadSignal<Vec<UiTopic>>) -> impl IntoView {
         <ul>
             <For
                 each=move || {
-                    topics
-                        .get()
-                        .into_iter()
-                        .filter(|topic| !topic.connected)
-                        .collect::<Vec<_>>()
+                    topics.get().into_iter().filter(|topic| !topic.connected).collect::<Vec<_>>()
                 }
 
                 key=|topic: &UiTopic| topic.name.clone()
                 children=move |topic| {
-                    view! {
-                        <Topic topic=RwSignal::new(topic) />
-                    }
+                    view! { <Topic topic=RwSignal::new(topic) /> }
                 }
             />
         </ul>

@@ -68,7 +68,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
         <div>
             <Flex vertical=true>
                 <div>
-                    <Icon icon=icondata::AiUserOutlined/>
+                    <Icon icon=icondata::AiUserOutlined />
                     {peer_signal.get().0}
                     " "
                     {root_size}
@@ -101,6 +101,8 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 pub fn Peers(
     peers: ReadSignal<HashMap<String, Peer>>,
     announce_address: ReadSignal<Option<String>>,
+    pending_peers: ReadSignal<HashSet<String>>,
+    set_pending_peers: WriteSignal<HashSet<String>>,
 ) -> impl IntoView {
     let show_peers = move || {
         if peers.get().is_empty() {
@@ -115,10 +117,26 @@ pub fn Peers(
                     <For
                         each=move || peers.get()
                         key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                        children=move |(_peer_name, peer)| view! { <Peer peer/> }
+                        children=move |(_peer_name, peer)| view! { <Peer peer /> }
                     />
                 </div>
             })
+        }
+    };
+
+    let show_pending_peers = move || {
+        view! {
+            <For
+                each=move || pending_peers.get()
+                key=|announce_address| announce_address.clone()
+                children=move |announce_address| {
+                    view! {
+                        <Flex>
+                            <Spinner label=announce_address size=SpinnerSize::Small />
+                        </Flex>
+                    }
+                }
+            />
         }
     };
 
@@ -131,6 +149,9 @@ pub fn Peers(
         if !announce_payload.is_empty() {
             let add = Command::ConnectDirect(announce_payload.to_string());
             set_requester.update(|requester| requester.make_request(add));
+            set_pending_peers.update(|pending_peers| {
+                pending_peers.insert(announce_payload.to_string());
+            });
         }
 
         input_value.set(String::new());
@@ -157,14 +178,27 @@ pub fn Peers(
     };
 
     view! {
-        <p>Announce address<code>{announce}</code><span title="Copy to clipboard"><Button icon=icondata::ChCopy on:click=copy_to_clipboard size=ButtonSize::Small></Button></span>
+        <p>
+            Announce address<code>{announce}</code> <Popover trigger_type=PopoverTriggerType::Click>
+                <PopoverTrigger slot>
+                    <span title="Copy to clipboard">
+                        <Button
+                            icon=icondata::ChCopy
+                            on:click=copy_to_clipboard
+                            size=ButtonSize::Small
+                        />
+                    </span>
+                </PopoverTrigger>
+                "Copied"
+            </Popover>
         </p>
         <Input value=input_value placeholder="Enter an announce address">
-        <InputPrefix slot>
-        <Icon icon=icondata::AiUserOutlined/>
-        </InputPrefix>
+            <InputPrefix slot>
+                <Icon icon=icondata::AiUserOutlined />
+            </InputPrefix>
         </Input>
         <Button on:click=add_peer>Add peer</Button>
+        {show_pending_peers}
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
     }

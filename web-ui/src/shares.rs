@@ -1,5 +1,5 @@
 use crate::{peer::Peer, ui_messages::Command, ErrorMessage, RequesterSetter, SuccessMessage};
-use leptos::{either::EitherOf3, html::Input, prelude::*};
+use leptos::{either::EitherOf3, prelude::*};
 use thaw::*;
 
 #[component]
@@ -13,7 +13,6 @@ pub fn Shares(
         None => Vec::new(),
     };
 
-    let input_ref: NodeRef<Input> = NodeRef::new();
     let set_requester = use_context::<RequesterSetter>().unwrap().0;
 
     let home_dir_if_exists = move || {
@@ -24,35 +23,35 @@ pub fn Shares(
         }
     };
 
-    let add_share = move |_| {
-        let input = input_ref.get().unwrap();
-        let dir_to_share = input.value();
-        let dir_to_share = dir_to_share.trim();
-        if !dir_to_share.is_empty() {
-            let join = Command::AddShare(dir_to_share.to_string());
-            set_requester.update(|requester| requester.make_request(join));
-        }
-        input.set_value(&home_dir_if_exists());
-    };
-
     view! {
         <h2 class="text-xl">"Shared files"</h2>
         <Flex vertical=true>
-            <form action="javascript:void(0);">
-                <Icon icon=icondata::AiFolderAddOutlined/>
-                <label for="add-share">"Add a directory to share"</label>
-                <div>
-                    <code>
-                        <input
-                            value=home_dir_if_exists
-                            class="border-2 mx-1"
-                            name="add-share"
-                            node_ref=input_ref
-                        />
-                    </code>
-                    <input type="submit" value="Add" on:click=add_share/>
-                </div>
-            </form>
+            <div>
+                {move || {
+                    let add_share_value = RwSignal::new(home_dir_if_exists());
+                    let add_share = move |_| {
+                        let dir_to_share = add_share_value.get();
+                        let dir_to_share = dir_to_share.trim();
+                        if !dir_to_share.is_empty() {
+                            let join = Command::AddShare(dir_to_share.to_string());
+                            set_requester.update(|requester| requester.make_request(join));
+                        }
+                        add_share_value.set(home_dir_if_exists());
+                    };
+
+                    view! {
+                        <p>"Add a directory to share"</p>
+                        <Flex>
+                        <Input value=add_share_value>
+                            <InputPrefix slot>
+                                <Icon icon=icondata::AiFolderAddOutlined />
+                            </InputPrefix>
+                        </Input>
+                        <Button on:click=add_share>"Add"</Button>
+                        </Flex>
+                    }
+                }}
+            </div>
 
             // TODO could use <Show> here
             {move || {
@@ -61,7 +60,7 @@ pub fn Shares(
                         EitherOf3::A(
                             view! {
                                 <span>
-                                    <SuccessMessage message/>
+                                    <SuccessMessage message />
                                 </span>
                             },
                         )
@@ -70,7 +69,7 @@ pub fn Shares(
                         EitherOf3::B(
                             view! {
                                 <span>
-                                    <ErrorMessage message/>
+                                    <ErrorMessage message />
                                 </span>
                             },
                         )
@@ -82,7 +81,7 @@ pub fn Shares(
             <For
                 each=selves
                 key=|peer| format!("{}{}", peer.name, peer.files.len())
-                children=move |peer| view! { <Peer peer/> }
+                children=move |peer| view! { <Peer peer /> }
             />
         </Flex>
     }

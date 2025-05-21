@@ -5,7 +5,7 @@ use crate::{
     FilesSignal, PeerPath,
 };
 use leptos::{
-    either::{Either, EitherOf3},
+    either::{Either, EitherOf3, EitherOf4},
     prelude::*,
 };
 use std::collections::BTreeMap;
@@ -70,28 +70,44 @@ pub fn Request(file: File) -> impl IntoView {
                     .map(|(_, file)| file.clone()) // TODO ideally dont clone
                     .collect::<Vec<File>>()
             };
-            let is_dir = file.is_dir == Some(true);
+            let icon = move || match file.is_dir {
+                Some(true) => {
+                    if file.is_expanded.get() {
+                        EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined /> })
+                    } else {
+                        EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined /> })
+                    }
+                }
+
+                Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined /> }),
+                None => EitherOf4::D(view! {}),
+            };
             Either::Left(view! {
                 <div>
-                    {request.peer_name} " " {display_bytes(request.total_size)} " "
+                    {icon}{request.peer_name} " " {display_bytes(request.total_size)} " "
                     {move || {
                         match file.download_status.get() {
                             DownloadStatus::Downloading { bytes_read, request_id: _ } => {
                                 EitherOf3::A(
                                     view! {
                                         <span>
-                                            <DownloadingFile bytes_read size=file.size/>
+                                            <DownloadingFile bytes_read size=file.size />
                                         </span>
                                     },
                                 )
                             }
                             DownloadStatus::Downloaded(_) => {
-                                EitherOf3::B(view! { <span>"✅"</span> })
+                                EitherOf3::B(
+                                    view! {
+                                        <span title="Download complete">
+                                            <Icon icon=icondata::AiCheckCircleTwotone />
+                                        </span>
+                                    },
+                                )
                             }
                             _ => EitherOf3::C(view! { <span></span> }),
                         }
-                    }}
-                    <Table>
+                    }} <Table>
                         <TableBody>
                             <For
                                 each=child_files

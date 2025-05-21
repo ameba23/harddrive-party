@@ -251,20 +251,45 @@ impl Hdp {
         debug!("[{}] Connected to peer {}", self.name, peer_name);
         let response_tx = self.response_tx.clone();
 
-        let announce_address =
-            if let Some(DiscoveryMethod::Direct(announce_address)) = discovery_method {
+        let discovery_method = if let Some(discovery_method) = discovery_method {
+            Some(discovery_method)
+        } else {
+            self.peer_discovery.get_pending_peer(&conn.remote_address())
+        };
+
+        let announce_address = if let Some(discovery_method) = discovery_method {
+            // If we have a request id we should send a UI response that the peer has
+            // successfully connected
+            // Ideally if we encounter a problem we should send an error response
+            if let Some(id) = discovery_method.get_request_id() {
+                if self
+                    .response_tx
+                    .send(UiServerMessage::Response {
+                        id,
+                        response: Ok(UiResponse::EndResponse),
+                    })
+                    .await
+                    .is_err()
+                {
+                    warn!("Response channel closed");
+                }
+            }
+
+            // If we know their announce address, check if it matches the certificate
+            if let Some(announce_address) = discovery_method.get_announce_address() {
+                if announce_address.public_key == peer_public_key {
+                    debug!("Public key matches");
+                } else {
+                    // TODO there should be some consequences here - eg: return
+                    error!("Public key does not match!");
+                }
                 Some(announce_address)
             } else {
-                self.peer_discovery.get_pending_peer(&conn.remote_address())
-            };
-
-        if let Some(announce_address) = announce_address.clone() {
-            if announce_address.public_key == peer_public_key {
-                println!("Public key matches");
-            } else {
-                println!("Public key does not match!");
+                None
             }
-        }
+        } else {
+            None
+        };
 
         let peers_clone = self.peers.clone();
         let rpc = self.rpc.clone();
@@ -993,10 +1018,24 @@ impl Hdp {
                 }
             }
             Command::ConnectDirect(remote_peer) => {
-                self.peer_discovery
-                    .connect_direct_to_peer(&remote_peer)
+                if let Err(err) = self
+                    .peer_discovery
+                    .connect_direct_to_peer(&remote_peer, id)
                     .await
-                    .unwrap();
+                {
+                    if self
+                        .response_tx
+                        .send(UiServerMessage::Response {
+                            id,
+                            response: Err(UiServerError::ConnectionError(err.to_string())),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return Err(HandleUiCommandError::ChannelClosed);
+                    }
+                }
+                // The EndResponse is sent by the connection handler when a connection is established
             }
         };
         Ok(())

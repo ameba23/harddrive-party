@@ -18,7 +18,6 @@ use leptos::prelude::*;
 use leptos_meta::Style;
 use leptos_router::{
     components::{Route, Routes},
-    hooks::use_navigate,
     path,
 };
 use log::{debug, info, warn};
@@ -64,6 +63,7 @@ pub fn HdpUi() -> impl IntoView {
     // Setup signals
     let (requester, set_requester) = signal(Requester::new(ws_service));
     let (peers, set_peers) = signal(HashMap::<String, Peer>::new());
+    let (pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
     let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
@@ -75,7 +75,6 @@ pub fn HdpUi() -> impl IntoView {
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
 
     provide_context(RequesterSetter(set_requester));
-    // provide_context(Requested(requested));
     provide_context(FilesSignal(files, set_files));
 
     spawn_local(async move {
@@ -258,6 +257,12 @@ pub fn HdpUi() -> impl IntoView {
                             }
                         }
                         Ok(UiResponse::EndResponse) => {
+                            if let Some(Command::ConnectDirect(announce_address)) = request {
+                                set_pending_peers.update(|pending_peers| {
+                                    pending_peers.remove(announce_address);
+                                })
+                            }
+
                             remove_request(&id);
                         }
                         Ok(UiResponse::Shares(ls_response)) => {
@@ -390,6 +395,7 @@ pub fn HdpUi() -> impl IntoView {
                                 // Now find the request and get peer_name
                                 if let Some(peer_path) = requests.get().get_by_id(*request_id) {
                                     set_files.update(|files| {
+                                        let is_dir_request = requested_files.len() > 0;
                                         for requested_file in requested_files {
                                             let download_status = if requested_file.downloaded {
                                                 DownloadStatus::Downloaded(*request_id)
@@ -419,6 +425,14 @@ pub fn HdpUi() -> impl IntoView {
                                                     is_visible: RwSignal::new(true),
                                                 });
                                         }
+                                        // TODO here we should set the state of the parent request
+                                        // - if request_files > 1 (or 0?) is_dir = Some(true) else
+                                        // Some(false)
+                                        files.entry(peer_path.clone()).and_modify(|file| {
+                                            if file.is_dir.is_none() {
+                                                file.is_dir = Some(is_dir_request);
+                                            }
+                                        });
                                     });
                                 }
                             }
@@ -430,6 +444,23 @@ pub fn HdpUi() -> impl IntoView {
                                 UiServerError::ShareError(error_message) => {
                                     set_add_or_remove_share_message
                                         .update(|message| *message = Some(Err(error_message)));
+                                }
+                                UiServerError::ConnectionError(error_message) => {
+                                    if let Some(Command::ConnectDirect(announce_address)) = request
+                                    {
+                                        // Display error
+                                        set_error_message.update(|error_messages| {
+                                            error_messages.insert(AppError::PeerConnection(
+                                                announce_address.clone(),
+                                                error_message,
+                                            ));
+                                        });
+
+                                        // Remove pending peer
+                                        set_pending_peers.update(|pending_peers| {
+                                            pending_peers.remove(announce_address);
+                                        })
+                                    }
                                 }
                                 _ => {
                                     warn!("Not handling error");
@@ -551,7 +582,7 @@ pub fn HdpUi() -> impl IntoView {
                 each=move || error_message.get()
                 key=|error_message| format!("{:?}", error_message)
                 children=move |error_message| {
-                    view! { <ErrorMessage message=format!("{}", error_message)/> }
+                    view! { <ErrorMessage message=format!("{}", error_message) /> }
                 }
             />
         }
@@ -605,24 +636,48 @@ pub fn HdpUi() -> impl IntoView {
         <Layout>
             <div id="root" class="main">
                 <nav>
-                    <HdpHeader peers shares/>
+                    <HdpHeader peers shares />
                     {error_message_display}
                 </nav>
                 <main>
                     <Layout>
                         <Routes fallback=|| "Not found">
-                            <Route path=path!("") view=move || view! { <Peers peers announce_address /> }/>
+                            <Route
+                                path=path!("")
+                                view=move || {
+                                    view! {
+                                        <Peers
+                                            peers
+                                            announce_address
+                                            pending_peers
+                                            set_pending_peers
+                                        />
+                                    }
+                                }
+                            />
                             <Route
                                 path=path!("shares")
                                 view=move || {
-                                    view! { <Shares shares add_or_remove_share_message home_dir/> }
+                                    view! { <Shares shares add_or_remove_share_message home_dir /> }
                                 }
                             />
 
-                            <Route path=path!("peers") view=move || view! { <Peers peers announce_address /> }/>
+                            <Route
+                                path=path!("peers")
+                                view=move || {
+                                    view! {
+                                        <Peers
+                                            peers
+                                            announce_address
+                                            pending_peers
+                                            set_pending_peers
+                                        />
+                                    }
+                                }
+                            />
                             <Route
                                 path=path!("transfers")
-                                view=move || view! { <Transfers requests files/> }
+                                view=move || view! { <Transfers requests files /> }
                             />
                         </Routes>
                     </Layout>
@@ -675,16 +730,21 @@ pub fn SuccessMessage(message: String) -> impl IntoView {
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum AppError {
     WsConnection,
+    PeerConnection(String, String),
 }
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let err_msg = match self {
+        match self {
             AppError::WsConnection => {
-                "Cannot connect to harddrive-party over websocket. Is harddrive party runnng?"
+                write!(
+                    f,
+                    "Cannot connect to harddrive-party over websocket. Is harddrive party runnng?"
+                )
             }
-        };
-
-        write!(f, "{}", err_msg)
+            AppError::PeerConnection(announce_address, message) => {
+                write!(f, "Cannot connect to peer {announce_address}: {message}")
+            }
+        }
     }
 }

@@ -91,7 +91,7 @@ pub fn HdpHeader(
                     >
 
                         <Flex>
-                            <Icon icon=icondata::AiHeartFilled/>
+                            <Icon icon=icondata::AiHeartFilled />
                             " Shares"
                             <Badge>{shared_files_size}</Badge>
                         </Flex>
@@ -104,7 +104,7 @@ pub fn HdpHeader(
                     >
 
                         <Flex>
-                            <Icon icon=icondata::FaUsersSolid/>
+                            <Icon icon=icondata::FaUsersSolid />
                             " Peers"
                             <Badge>{move || { peers.get().len() }}</Badge>
                         </Flex>
@@ -117,7 +117,7 @@ pub fn HdpHeader(
                     >
 
                         <Flex>
-                            <Icon icon=icondata::LuArrowUpDown/>
+                            <Icon icon=icondata::LuArrowUpDown />
                             " Transfers"
                         </Flex>
                     </Tab>

@@ -17,7 +17,7 @@ pub fn App() -> impl IntoView {
     view! {
         <ConfigProvider>
             <Router>
-                <HdpUi/>
+                <HdpUi />
             </Router>
         </ConfigProvider>
     }
