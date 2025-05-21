@@ -65,11 +65,6 @@ pub enum UiEvent {
     PeerDisconnected { name: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
-    // /// The requested or downloaded files have changed
-    // Wishlist {
-    //     requested: Vec<UiDownloadRequest>,
-    //     downloaded: Vec<UiDownloadRequest>,
-    // },
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a

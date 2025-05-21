@@ -17,7 +17,7 @@ use futures::StreamExt;
 use leptos::prelude::*;
 use leptos_meta::Style;
 use leptos_router::{
-    components::{Route, Routes},
+    components::{Redirect, Route, Routes},
     path,
 };
 use log::{debug, info, warn};
@@ -232,12 +232,12 @@ pub fn HdpUi() -> impl IntoView {
                                             ));
                                     });
 
-                                    set_requests.update(|requests| {
+                                    set_requests.update(|_requests| {
                                         // TODO Find request with this request id
                                         // update the total_bytes_read
                                     });
                                 }
-                                DownloadInfo::Completed(timestamp) => {
+                                DownloadInfo::Completed(_timestamp) => {
                                     // TODO Mark all files below this one in the dir heirarchy as
                                     // completed
                                     // TODO update requests to have progress = total_size
@@ -509,65 +509,7 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiServerMessage::Event(UiEvent::Uploaded(upload_info)) => {
                     debug!("Uploading {:?}", upload_info);
-                } // UiServerMessage::Event(UiEvent::Wishlist {
-                  //     requested,
-                  //     downloaded,
-                  // }) => {
-                  //     debug!("Requested {:?} Downloaded {:?}", requested, downloaded);
-                  //     let requested_clone = requested.clone();
-                  //     let downloaded_clone = downloaded.clone();
-                  //     set_files.update(|files| {
-                  //         for request in requested_clone {
-                  //             files
-                  //                 .entry(PeerPath {
-                  //                     peer_name: request.peer_name.clone(),
-                  //                     path: request.path.clone(),
-                  //                 })
-                  //                 .and_modify(|file| {
-                  //                     file.download_status.set(DownloadStatus::Requested);
-                  //                     file.request.set(Some(request.clone()));
-                  //                 })
-                  //                 .or_insert(File::from_download_request(
-                  //                     request,
-                  //                     DownloadStatus::Requested,
-                  //                 ));
-                  //         }
-                  //
-                  //         for request in downloaded_clone {
-                  //             files
-                  //                 .entry(PeerPath {
-                  //                     peer_name: request.peer_name.clone(),
-                  //                     path: request.path.clone(),
-                  //                 })
-                  //                 .and_modify(|file| {
-                  //                     file.download_status.set(DownloadStatus::Downloaded);
-                  //                     file.request.set(Some(request.clone()));
-                  //                 })
-                  //                 .or_insert(File::from_download_request(
-                  //                     request,
-                  //                     DownloadStatus::Downloaded,
-                  //                 ));
-                  //         }
-                  //     });
-                  //     set_requested.update(|existing_requested| {
-                  //         existing_requested.clear();
-                  //         for request in requested {
-                  //             existing_requested.insert(PeerPath {
-                  //                 peer_name: request.peer_name.clone(),
-                  //                 path: request.path.clone(),
-                  //             });
-                  //         }
-                  //     });
-                  //     set_downloaded.update(|existing_downloaded| {
-                  //         existing_downloaded.clear();
-                  //         for request in downloaded {
-                  //             existing_downloaded.insert(PeerPath {
-                  //                 peer_name: request.peer_name.clone(),
-                  //                 path: request.path.clone(),
-                  //             });
-                  //         }
-                  //     });
-                  // }
+                }
             }
         }
         debug!("ws closed");
@@ -587,7 +529,6 @@ pub fn HdpUi() -> impl IntoView {
             />
         }
     };
-    let selected_value = RwSignal::new("peers".to_string());
 
     view! {
         <Style id="hdp-header">
@@ -645,14 +586,7 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("")
                                 view=move || {
-                                    view! {
-                                        <Peers
-                                            peers
-                                            announce_address
-                                            pending_peers
-                                            set_pending_peers
-                                        />
-                                    }
+                                    view! { <Redirect path="/peers" /> }
                                 }
                             />
                             <Route
