@@ -13,7 +13,7 @@ use base64::prelude::{Engine as _, BASE64_STANDARD_NO_PAD};
 use harddrive_party_shared::wire_messages::PeerConnectionDetails;
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
-use log::{debug, error};
+use log::{debug, error, warn};
 use quinn::AsyncUdpSocket;
 use std::{
     collections::HashMap,
@@ -78,7 +78,6 @@ impl DiscoveryMethod {
 pub struct PeerDiscovery {
     peers_tx: Sender<DiscoveredPeer>,
     pub peers_rx: Receiver<DiscoveredPeer>,
-    mdns_server: Option<MdnsServer>,
     hole_puncher: Option<HolePuncher>,
     /// Our own connection details
     announce_address: AnnounceAddress,
@@ -123,7 +122,7 @@ impl PeerDiscovery {
         let id = hex::encode(public_key);
 
         // Only use mdns if we are on a local network
-        let mdns_server = if use_mdns && is_private(my_local_ip) {
+        let _mdns_server = if use_mdns && is_private(my_local_ip) {
             Some(MdnsServer::new(&id, addr, peers_tx.clone(), public_key).await?)
         } else {
             None
@@ -143,7 +142,6 @@ impl PeerDiscovery {
         let peer_discovery = Self {
             peers_tx: peers_tx.clone(),
             peers_rx,
-            mdns_server,
             hole_puncher: hole_puncher.clone(),
             announce_address,
             pending_peer_connections: Default::default(),
@@ -155,9 +153,10 @@ impl PeerDiscovery {
         let own_announce_address = peer_discovery.announce_address.clone();
         let peers = peer_discovery.peers.clone();
 
+        // In a separate task, loop over gossiped peer announcements
         tokio::spawn(async move {
             while let Some(announce_peer) = peer_announce_rx.recv().await {
-                handle_peer_announcement(
+                if let Err(err) = handle_peer_announcement(
                     hole_puncher.clone(),
                     own_announce_address.clone(),
                     peers_tx.clone(),
@@ -168,7 +167,9 @@ impl PeerDiscovery {
                     },
                 )
                 .await
-                .unwrap();
+                {
+                    warn!("Failed to handle gossiped peer announcement {err}");
+                }
             }
         });
 
@@ -297,7 +298,7 @@ pub async fn handle_peer(
             PeerConnectionDetails::NoNat(socket_address) => {
                 // They are symmetric (hard), we have no nat
                 // Wait for them to connect
-                Ok((None, socket_address.clone()))
+                Ok((None, *socket_address))
             }
         },
         PeerConnectionDetails::Asymmetric(socket_address) => {
@@ -342,7 +343,7 @@ pub async fn handle_peer(
                 PeerConnectionDetails::NoNat(socket_address) => {
                     // They are Asymmetric (easy), we have no nat
                     // just wait for them to connect
-                    Ok((None, socket_address.clone()))
+                    Ok((None, *socket_address))
                 }
             }
         }

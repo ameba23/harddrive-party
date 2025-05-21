@@ -18,6 +18,7 @@ const PUBLIC_KEY_PROPERTY_NAME: &str = "hdp-pk";
 
 /// Announces ourself on mDNS
 pub struct MdnsServer {}
+
 impl MdnsServer {
     pub async fn new(
         id: &str,
@@ -42,7 +43,7 @@ impl MdnsServer {
 
         let mdns_receiver = mdns.browse(SERVICE_TYPE)?;
 
-        let service = create_service_info(&id.to_string(), &addr, &public_key)?;
+        let service = create_service_info(id, &addr, &public_key)?;
         mdns.register(service)?;
 
         tokio::spawn(async move {
@@ -101,7 +102,7 @@ fn create_service_info(
     let host_name = "localhost"; // TODO
     let mut properties = HashMap::new();
     properties.insert(
-        format!("{}", PUBLIC_KEY_PROPERTY_NAME),
+        PUBLIC_KEY_PROPERTY_NAME.to_string(),
         hex::encode(public_key),
     );
 

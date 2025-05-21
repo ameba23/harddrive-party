@@ -75,8 +75,6 @@ pub struct Hdp {
     ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
-    /// Public key (from certificate)
-    public_key: PublicKey,
     /// Maintains lists of requested/downloaded files
     wishlist: WishList,
 }
@@ -188,7 +186,6 @@ impl Hdp {
                 peer_discovery,
                 download_dir,
                 name,
-                public_key: pk_hash,
                 ls_cache: Default::default(),
                 wishlist,
             },
@@ -367,12 +364,6 @@ impl Hdp {
 
     /// Handle an incoming connection from a remote peer
     async fn handle_incoming_connection(&mut self, incoming_conn: quinn::Connecting) {
-        // if self
-        //     .peers
-        //     .contains_key(&incoming_conn.remote_address().to_string())
-        // {
-        //     println!("Not conencting to existing peer");
-        // } else {
         match incoming_conn.await {
             Ok(conn) => {
                 debug!(
@@ -1211,11 +1202,8 @@ mod tests {
 
         // Wait until they connect to each other using mDNS
         while let Some(res) = bob_rx.recv().await {
-            println!("Res {:?}", res);
-
             if let UiServerMessage::Event(UiEvent::PeerConnected { name, peer_type: _ }) = res {
                 if name == alice_name {
-                    println!("connected to {}", name);
                     break;
                 }
             }
@@ -1236,7 +1224,6 @@ mod tests {
             .unwrap();
 
         while let Some(res) = bob_rx.recv().await {
-            println!("Res {:?}", res);
             if let UiServerMessage::Response { id: _, response } = res {
                 assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
                 break;
@@ -1260,7 +1247,6 @@ mod tests {
         let mut entries = Vec::new();
         while let Some(res) = bob_rx.recv().await {
             if let UiServerMessage::Response { id, response } = res {
-                println!("response {:?}", response);
                 match response.unwrap() {
                     UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
                         for entry in some_entries {

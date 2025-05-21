@@ -80,13 +80,15 @@ pub struct AnnouncePeer {
 }
 
 impl AnnounceAddress {
+    /// Deserialize bytes to an AnnounceAddress - doing this manually gives us a small saving over
+    /// using bincode - meaning the addresses are slightly shorted
     pub fn from_bytes(input: Vec<u8>) -> Result<Self, AnnounceAddressDecodeError> {
         if input.len() < 33 {
             return Err(AnnounceAddressDecodeError::BadLength);
         }
         let public_key = &input[..32];
-        let ee = &input[32];
-        let (ee, ip, port) = if *ee > 2 {
+        let type_value = &input[32];
+        let (type_value, ip, port) = if *type_value > 2 {
             if input.len() < 33 + 16 {
                 return Err(AnnounceAddressDecodeError::BadLength);
             }
@@ -99,8 +101,8 @@ impl AnnounceAddress {
             );
             let ip = IpAddr::V6(Ipv6Addr::from_bits(ip_u128));
 
-            let ee = ee - 2;
-            let port = if ee == 1 {
+            let type_value = type_value - 2;
+            let port = if type_value == 1 {
                 None
             } else {
                 if input.len() < 33 + 16 + 2 {
@@ -114,7 +116,7 @@ impl AnnounceAddress {
                 ))
             };
 
-            (ee, ip, port)
+            (type_value, ip, port)
         } else {
             if input.len() < 33 + 4 {
                 return Err(AnnounceAddressDecodeError::BadLength);
@@ -127,7 +129,7 @@ impl AnnounceAddress {
             );
             let ip = IpAddr::V4(Ipv4Addr::from_bits(ip_u32));
 
-            let port = if *ee == 1 {
+            let port = if *type_value == 1 {
                 None
             } else {
                 if input.len() < 33 + 4 + 2 {
@@ -140,10 +142,10 @@ impl AnnounceAddress {
                         .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
                 ))
             };
-            (*ee, ip, port)
+            (*type_value, ip, port)
         };
 
-        let connection_details = match ee {
+        let connection_details = match type_value {
             0 => {
                 let socket_addr = match ip {
                     IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port.unwrap())),
@@ -169,14 +171,14 @@ impl AnnounceAddress {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut ee = match self.connection_details {
+        let mut type_value = match self.connection_details {
             PeerConnectionDetails::NoNat(_) => 0,
             PeerConnectionDetails::Symmetric(_) => 1,
             PeerConnectionDetails::Asymmetric(_) => 2,
         };
 
         if self.connection_details.ip().is_ipv6() {
-            ee += 3;
+            type_value += 3;
         }
         let ip = match self.connection_details.ip() {
             IpAddr::V4(ip_v4) => {
@@ -198,7 +200,7 @@ impl AnnounceAddress {
         let mut announce_address: Vec<u8> = Vec::new();
 
         announce_address.extend_from_slice(&self.public_key);
-        announce_address.extend_from_slice(&[ee]);
+        announce_address.extend_from_slice(&[type_value]);
         announce_address.extend_from_slice(&ip);
         announce_address.extend_from_slice(&port);
         announce_address

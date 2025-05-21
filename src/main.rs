@@ -342,6 +342,22 @@ async fn main() -> anyhow::Result<()> {
                 Command::ConnectDirect(announce_address),
             )
             .await?;
+            // TODO could add a timeout here
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully connected");
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when connecting {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
     };
     Ok(())
