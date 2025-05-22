@@ -531,49 +531,6 @@ pub fn HdpUi() -> impl IntoView {
     };
 
     view! {
-        <Style id="hdp-header">
-            "
-                .hdp-header {
-                    height: 64px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: space-between;
-                    padding: 0 20px;
-                    z-index: 1000;
-                    position: relative;
-                }
-                .hdp-name {
-                    cursor: pointer;
-                    display: flex;
-                    align-items: center;
-                    height: 100%;
-                    font-weight: 600;
-                    font-size: 20px;
-                }
-                .hdp-header__menu-mobile {
-                    display: none !important;
-                }
-                .hdp-header__right-btn .thaw-select {
-                    width: 60px;
-                }
-                @media screen and (max-width: 600px) {
-                    .hdp-header {
-                        padding: 0 8px;
-                    }
-                    .hdp-name {
-                        display: none;
-                    }
-                }
-                @media screen and (max-width: 1200px) {
-                    .hdp-header__right-btn {
-                        display: none !important;
-                    }
-                    .hdp-header__menu-mobile {
-                        display: inline-block !important;
-                    }
-                }
-            "
-        </Style>
         <Layout>
             <div id="root" class="main">
                 <nav>
