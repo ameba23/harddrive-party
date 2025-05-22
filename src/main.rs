@@ -112,7 +112,11 @@ async fn main() -> anyhow::Result<()> {
             download_dir,
             no_mdns,
         } => {
-            let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
+            let ui_address = ui_address.unwrap_or_else(|| {
+                DEFAULT_UI_ADDRESS
+                    .parse()
+                    .expect("Default UI address should parse")
+            });
 
             let storage = match storage {
                 Some(storage) => PathBuf::from(storage),
@@ -172,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
             // Split path into peername and path components
             let (peer_name, peer_path) = match path {
                 Some(given_path) => {
-                    let (peer_name, peer_path) = path_to_peer_path(given_path);
+                    let (peer_name, peer_path) = path_to_peer_path(given_path)?;
                     (peer_name, Some(peer_path))
                 }
                 None => (None, None),
@@ -272,7 +276,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Download { path } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
+            let (peer_name, peer_path) = path_to_peer_path(path)?;
 
             let mut responses = single_client_command(
                 ui_addr,
@@ -303,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Read { path, start, end } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
+            let (peer_name, peer_path) = path_to_peer_path(path)?;
 
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
@@ -320,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
             while let Some(response) = responses.recv().await {
                 match response {
                     Ok(UiResponse::Read(data)) => {
-                        print!("{}", std::str::from_utf8(&data).unwrap());
+                        print!("{}", std::str::from_utf8(&data).unwrap_or_default());
                     }
                     Ok(UiResponse::EndResponse) => {
                         break;
@@ -363,19 +367,20 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn path_to_peer_path(path: String) -> (Option<String>, String) {
-    let path_buf = PathBuf::from(path);
+fn path_to_peer_path(path: String) -> anyhow::Result<(Option<String>, String)> {
+    let path_buf = PathBuf::from(path.clone());
     if let Some(first_component) = path_buf.iter().next() {
-        let peer_name = first_component.to_str().unwrap();
-        let remaining_path = path_buf
-            .strip_prefix(peer_name)
-            .unwrap()
+        let peer_name = first_component
             .to_str()
-            .unwrap()
+            .ok_or(anyhow!("Could not parse path {path}"))?;
+        let remaining_path = path_buf
+            .strip_prefix(peer_name)?
+            .to_str()
+            .ok_or(anyhow!("Could note parse path {path}"))?
             .to_string();
-        (Some(peer_name.to_string()), remaining_path)
+        Ok((Some(peer_name.to_string()), remaining_path))
     } else {
-        (None, "".to_string())
+        Ok((None, "".to_string()))
     }
 }
 

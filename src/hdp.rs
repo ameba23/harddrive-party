@@ -38,9 +38,14 @@ use tokio::{
     },
 };
 
+/// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
+/// The maximum bytes transfered at a time when downloading
 const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
+/// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
+/// This saves making subsequent requests with a duplicate query
 const CACHE_SIZE: usize = 256;
+/// The size in bytes of a public key (certificate hash)
 const PUBLIC_KEY_LENGTH: usize = 32;
 
 /// Key-value store sub-tree names
@@ -52,20 +57,22 @@ pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
 pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
 
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
+/// The cache for index requests
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
+/// A harddrive-party instance
 pub struct Hdp {
     /// A map of peernames to peer connections
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// Remote proceduce call for share queries and downloads
     rpc: Rpc,
-    /// The QUIC endpoint
+    /// The QUIC endpoint and TLS certificate
     pub server_connection: ServerConnection,
-    /// Channel for commands from the UI
+    /// Channel for commands from the UI (outgoing)
     pub command_tx: Sender<UiClientMessage>,
-    /// Channel for commands from the UI
+    /// Channel for commands from the UI (incoming)
     command_rx: Receiver<UiClientMessage>,
-    /// Channel for responses to the UI
+    /// Channel for responses to the UI (outgoing)
     response_tx: Sender<UiServerMessage>,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
@@ -85,8 +92,7 @@ impl Hdp {
     /// - The directory to store the database
     /// - Initial directories to share, if any
     /// - The path to store downloaded files
-    /// - An optional MQTT server to use for peer discovery if you do not want to use the default
-    /// - [DiscoveryMethods]
+    /// - Whether to use mDNS to discover peers on the local network
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
@@ -428,6 +434,8 @@ impl Hdp {
     }
 
     /// Handle a command from the UI
+    /// This should only return fatal errors - errors relating to handling the command should be
+    /// sent to the UI
     async fn handle_command(
         &mut self,
         ui_client_message: UiClientMessage,
@@ -440,8 +448,7 @@ impl Hdp {
                     endpoint.wait_idle().await;
                 }
                 // TODO call flush on sled db
-                // TODO why an error?
-                return Err(HandleUiCommandError::ConnectionClosed);
+                return Ok(());
             }
             Command::Ls(query, peer_name_option) => {
                 // If no name given send the query to all connected peers
@@ -699,8 +706,25 @@ impl Hdp {
                     Ok(recv) => {
                         let peer_public_key = {
                             let peers = self.peers.lock().await;
-                            let peer = peers.get(&peer_name).unwrap(); // TODO or send error response
-                            peer.public_key
+                            match peers.get(&peer_name) {
+                                Some(peer) => peer.public_key,
+                                None => {
+                                    warn!("Handling request to download a file from a peer who is not connected");
+                                    if self
+                                        .response_tx
+                                        .send(UiServerMessage::Response {
+                                            id,
+                                            response: Err(UiServerError::RequestError),
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        return Err(HandleUiCommandError::ChannelClosed);
+                                    } else {
+                                        return Ok(());
+                                    }
+                                }
+                            }
                         };
                         let response_tx = self.response_tx.clone();
                         let wishlist = self.wishlist.clone();

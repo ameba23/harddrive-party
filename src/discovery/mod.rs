@@ -199,8 +199,12 @@ impl PeerDiscovery {
     }
 
     pub fn get_pending_peer(&self, socket_address: &SocketAddr) -> Option<DiscoveryMethod> {
-        let mut connections = self.pending_peer_connections.write().unwrap();
-        connections.remove(socket_address)
+        if let Ok(mut connections) = self.pending_peer_connections.write() {
+            connections.remove(socket_address)
+        } else {
+            error!("Poisoned RwLock pending_peer_connections");
+            None
+        }
     }
 
     pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
@@ -265,7 +269,7 @@ pub async fn handle_peer_announcement(
             // They connect to us
             pending_peer_connections
                 .write()
-                .unwrap()
+                .map_err(|_| anyhow!("Poisoned RwLock pending_peer_connections"))?
                 .insert(socket_address, discovery_method);
             Ok(())
         }
