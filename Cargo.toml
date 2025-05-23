@@ -13,9 +13,9 @@ homepage = "https://gitlab.com/pegpeg/harddrive-party"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
 keywords = ["peer-to-peer", "filesharing", "p2p"]
 include = [
-    "src/**",
+    "src/",
     "Cargo.toml",
-    "web-ui/dist/**"
+    "web-ui/dist/"
 ]
 
 [dependencies]
