@@ -4,7 +4,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use warp::Filter;
 
 #[derive(RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/web-ui/dist"]
+#[folder = "web-ui/dist"]
 struct WebUi;
 
 pub async fn http_server(ws_addr: SocketAddr, download_dir: PathBuf) {
