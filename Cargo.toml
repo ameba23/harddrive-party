@@ -48,7 +48,7 @@ lru = "0.10.0"
 async-stream = "0.3.4"
 warp = "0.3.5"
 warp-embed = "0.4.0"
-rust-embed = "6"
+rust-embed = { version = "6", features = ["interpolate-folder-path"] }
 base64 = "0.22.1"
 
 [dev-dependencies]
