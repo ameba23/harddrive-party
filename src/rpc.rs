@@ -5,7 +5,7 @@ use crate::{
     ui_messages::{UiEvent, UiServerMessage, UploadInfo},
 };
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{IndexQuery, ReadQuery, Request};
+use harddrive_party_shared::wire_messages::{AnnouncePeer, IndexQuery, ReadQuery, Request};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
@@ -34,10 +34,15 @@ pub struct Rpc {
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
     // upload_rx: UnboundedReceiver<ReadRequest>,
+    peer_announce_tx: Sender<AnnouncePeer>,
 }
 
 impl Rpc {
-    pub fn new(shares: Shares, event_tx: Sender<UiServerMessage>) -> Rpc {
+    pub fn new(
+        shares: Shares,
+        event_tx: Sender<UiServerMessage>,
+        peer_announce_tx: Sender<AnnouncePeer>,
+    ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
 
@@ -50,7 +55,11 @@ impl Rpc {
             uploader.run().await;
         });
 
-        Rpc { shares, upload_tx }
+        Rpc {
+            shares,
+            upload_tx,
+            peer_announce_tx,
+        }
     }
 
     /// Handle a request
@@ -72,6 +81,12 @@ impl Rpc {
                         if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
                         // TODO else
                     }
+                    Request::AnnouncePeer(announce_peer) => {
+                        log::info!(
+                            "Discovered peer through existing peer connection {announce_peer:?}"
+                        );
+                        self.peer_announce_tx.send(announce_peer).await.unwrap();
+                    }
                 }
             }
             Err(_) => {
@@ -88,6 +103,7 @@ impl Rpc {
         recursive: bool,
         mut output: quinn::SendStream,
     ) -> Result<(), RpcError> {
+        println!("Responding to ls query");
         match self.shares.query(path, searchterm, recursive) {
             Ok(response_iterator) => {
                 for res in response_iterator {

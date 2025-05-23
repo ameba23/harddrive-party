@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use harddrive_party::{
-    discovery::DiscoveryMethods,
     hdp::Hdp,
     http::http_server,
     ui_messages::{Command, UiResponse},
@@ -33,9 +32,6 @@ enum CliCommand {
         /// Directories to share (may be given multiple times)
         #[arg(short, long)]
         share_dir: Vec<String>,
-        /// Initial topics to join (may be given multiple times)
-        #[arg(short, long)]
-        topic: Vec<String>,
         /// IP and port to host UI - defaults to 127.0.0.1:4001
         #[arg(short, long)]
         ui_address: Option<SocketAddr>,
@@ -46,14 +42,10 @@ enum CliCommand {
         /// Directory to store downloads. Defaults to ~/Downloads
         #[arg(short, long)]
         download_dir: Option<String>,
-        /// Mqtt server to use for peer discovery. Defaults to broker.hivemq.com:1883
-        #[arg(short, long)]
-        mqtt_server: Option<String>,
+        /// If set, will not use mdns
+        #[arg(long)]
+        no_mdns: bool,
     },
-    /// Join a given topic name
-    Join { topic: String },
-    /// Leave a given topic name
-    Leave { topic: String },
     /// Download a file or dir
     Download {
         /// Peername and path - given as "peername/path"
@@ -92,6 +84,8 @@ enum CliCommand {
         #[arg(short, long)]
         end: Option<u64>,
     },
+    /// Connect to a peer
+    Connect { announce_address: String },
 }
 
 #[tokio::main]
@@ -115,11 +109,14 @@ async fn main() -> anyhow::Result<()> {
             storage,
             share_dir,
             ui_address,
-            topic,
             download_dir,
-            mqtt_server,
+            no_mdns,
         } => {
-            let ui_address = ui_address.unwrap_or_else(|| DEFAULT_UI_ADDRESS.parse().unwrap());
+            let ui_address = ui_address.unwrap_or_else(|| {
+                DEFAULT_UI_ADDRESS
+                    .parse()
+                    .expect("Default UI address should parse")
+            });
 
             let storage = match storage {
                 Some(storage) => PathBuf::from(storage),
@@ -130,7 +127,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            let initial_topics = topic;
             let initial_share_dirs = share_dir;
 
             let download_dir = match download_dir {
@@ -143,15 +139,8 @@ async fn main() -> anyhow::Result<()> {
             };
             create_dir_all(&download_dir).await?;
 
-            let (mut hdp, recv) = Hdp::new(
-                storage,
-                initial_share_dirs,
-                initial_topics,
-                download_dir,
-                mqtt_server,
-                DiscoveryMethods::MqttAndMdns,
-            )
-            .await?;
+            let (mut hdp, recv) =
+                Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.name.green(),
@@ -172,47 +161,12 @@ async fn main() -> anyhow::Result<()> {
                 http_server(ui_address, download_dir).await;
             });
 
+            println!(
+                "Announce address {}",
+                hdp.get_announce_address().unwrap_or_default()
+            );
+
             hdp.run().await;
-        }
-        CliCommand::Join { topic } => {
-            let mut responses =
-                harddrive_party::ws::single_client_command(ui_addr, Command::Join(topic.clone()))
-                    .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::EndResponse) => {
-                        println!("Successfully joined topic {}", topic);
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error when joining topic {:?}", e);
-                        break;
-                    }
-                }
-            }
-        }
-        CliCommand::Leave { topic } => {
-            let mut responses =
-                harddrive_party::ws::single_client_command(ui_addr, Command::Leave(topic.clone()))
-                    .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::EndResponse) => {
-                        println!("Successfully left topic {}", topic);
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error when leaving topic {:?}", e);
-                        break;
-                    }
-                }
-            }
         }
         CliCommand::Ls {
             path,
@@ -222,7 +176,7 @@ async fn main() -> anyhow::Result<()> {
             // Split path into peername and path components
             let (peer_name, peer_path) = match path {
                 Some(given_path) => {
-                    let (peer_name, peer_path) = path_to_peer_path(given_path);
+                    let (peer_name, peer_path) = path_to_peer_path(given_path)?;
                     (peer_name, Some(peer_path))
                 }
                 None => (None, None),
@@ -322,7 +276,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Download { path } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
+            let (peer_name, peer_path) = path_to_peer_path(path)?;
 
             let mut responses = single_client_command(
                 ui_addr,
@@ -353,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Read { path, start, end } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path);
+            let (peer_name, peer_path) = path_to_peer_path(path)?;
 
             let mut responses = harddrive_party::ws::single_client_command(
                 ui_addr,
@@ -370,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
             while let Some(response) = responses.recv().await {
                 match response {
                     Ok(UiResponse::Read(data)) => {
-                        print!("{}", std::str::from_utf8(&data).unwrap());
+                        print!("{}", std::str::from_utf8(&data).unwrap_or_default());
                     }
                     Ok(UiResponse::EndResponse) => {
                         break;
@@ -386,23 +340,47 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        CliCommand::Connect { announce_address } => {
+            let mut responses = harddrive_party::ws::single_client_command(
+                ui_addr,
+                Command::ConnectDirect(announce_address),
+            )
+            .await?;
+            // TODO could add a timeout here
+            while let Some(response) = responses.recv().await {
+                match response {
+                    Ok(UiResponse::EndResponse) => {
+                        println!("Successfully connected");
+                        break;
+                    }
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error when connecting {:?}", e);
+                        break;
+                    }
+                }
+            }
+        }
     };
     Ok(())
 }
 
-fn path_to_peer_path(path: String) -> (Option<String>, String) {
-    let path_buf = PathBuf::from(path);
+fn path_to_peer_path(path: String) -> anyhow::Result<(Option<String>, String)> {
+    let path_buf = PathBuf::from(path.clone());
     if let Some(first_component) = path_buf.iter().next() {
-        let peer_name = first_component.to_str().unwrap();
-        let remaining_path = path_buf
-            .strip_prefix(peer_name)
-            .unwrap()
+        let peer_name = first_component
             .to_str()
-            .unwrap()
+            .ok_or(anyhow!("Could not parse path {path}"))?;
+        let remaining_path = path_buf
+            .strip_prefix(peer_name)?
+            .to_str()
+            .ok_or(anyhow!("Could note parse path {path}"))?
             .to_string();
-        (Some(peer_name.to_string()), remaining_path)
+        Ok((Some(peer_name.to_string()), remaining_path))
     } else {
-        (None, "".to_string())
+        Ok((None, "".to_string()))
     }
 }
 

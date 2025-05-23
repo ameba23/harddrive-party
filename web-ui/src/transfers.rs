@@ -33,7 +33,7 @@ pub fn Transfers(
             <For
                 each=wishlist
                 key=|file| format!("{}{:?}", file.name, file.size)
-                children=move |file| view! { <Request file/> }
+                children=move |file| view! { <Request file /> }
             />
         </Flex>
     }

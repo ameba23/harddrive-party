@@ -245,6 +245,7 @@ impl HolePuncher {
         Ok(())
     }
 
+    /// Hole punch to a peer for who we do not know which port
     pub async fn hole_punch_peer_without_port(
         &mut self,
         addr: IpAddr,
@@ -259,6 +260,7 @@ impl HolePuncher {
         let join_handle = tokio::spawn(async move {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
+                // Send a packet to a random port
                 let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, rng.gen()));
                 if let Err(err) = udp_send.send(packet).await {
                     warn!("Failed to forward holepunch packet to {addr}: {err}");
