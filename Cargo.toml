@@ -15,7 +15,7 @@ keywords = ["peer-to-peer", "filesharing", "p2p"]
 include = [
     "src/",
     "Cargo.toml",
-    "web-ui/dist/"
+    "dist/"
 ]
 
 [dependencies]

@@ -1,4 +1,5 @@
 Cargo.lock
+/web-ui/dist
 /target
 /extra-test-data
 /alice-db

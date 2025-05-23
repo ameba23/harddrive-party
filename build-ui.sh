@@ -1,4 +1,4 @@
 #!/bin/sh
 cd web-ui
-trunk build --release
+trunk build --release --dist ../dist
 cd ..
