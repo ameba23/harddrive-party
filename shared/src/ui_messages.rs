@@ -15,10 +15,6 @@ pub struct UiClientMessage {
 /// A command from the UI
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum Command {
-    /// Join a given topic name
-    Join(String),
-    /// Leave a given topic name
-    Leave(String),
     /// Query peers' files. If no peer name is given, query all connected peers
     Ls(IndexQuery, Option<String>),
     /// Read a portion a of a file, from the given connect peer name
@@ -37,6 +33,8 @@ pub enum Command {
     RequestedFiles(u32),
     /// Cancel a particular request
     RemoveRequest(u32),
+    /// Connect to the given peer
+    ConnectDirect(String),
     /// Shutdown gracefully
     Close,
 }
@@ -67,13 +65,6 @@ pub enum UiEvent {
     PeerDisconnected { name: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
-    /// The topics connected to has changed
-    Topics(Vec<(String, bool)>),
-    // /// The requested or downloaded files have changed
-    // Wishlist {
-    //     requested: Vec<UiDownloadRequest>,
-    //     downloaded: Vec<UiDownloadRequest>,
-    // },
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
@@ -83,7 +74,10 @@ pub enum PeerRemoteOrSelf {
     /// A remote peer
     Remote,
     /// Ourself, with the path of our home directory
-    Me { os_home_dir: Option<String> },
+    Me {
+        os_home_dir: Option<String>,
+        announce_address: String,
+    },
 }
 
 /// A request to download a file from a particular peer
@@ -140,12 +134,10 @@ pub enum UiResponse {
 /// An error in response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
 pub enum UiServerError {
-    #[error("Cannot connect")]
-    ConnectionError,
+    #[error("Cannot connect: {0}")]
+    ConnectionError(String),
     #[error("Request error")]
     RequestError, // TODO
-    #[error("Error when joining or leaving")]
-    JoinOrLeaveError,
     #[error("Error when updating shared directory")]
     ShareError(String),
 }

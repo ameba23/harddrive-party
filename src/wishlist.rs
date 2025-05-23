@@ -12,6 +12,7 @@ use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use harddrive_party_shared::ui_messages::UiRequestedFile;
 use key_to_animal::key_to_name;
+use log::warn;
 use std::time::{Duration, SystemTime};
 
 /// How many entries to send when updating the UI
@@ -385,9 +386,14 @@ impl WishList {
             // Then add new requests as they arrive
             while let Some(event) = (&mut subscriber).await {
                 if let sled::Event::Insert { key, value } = event {
-                    let request =
-                        RequestedFile::from_db_key_value(key.to_vec(), value.to_vec()).unwrap();
-                        yield request;
+                    match RequestedFile::from_db_key_value(key.to_vec(), value.to_vec()) {
+                        Ok(request) => {
+                            yield request;
+                        }
+                        Err(err) => {
+                            warn!("Error converting values from db: {err}");
+                        }
+                    }
                 }
             }
         };

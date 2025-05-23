@@ -221,13 +221,6 @@ async fn read_responses(
                         } => {
                             println!("Connected to remote peer: {}", name);
                         }
-                        UiEvent::Topics(topics) => {
-                            for (topic, connected) in topics {
-                                if connected {
-                                    println!("Connected to {}", topic);
-                                }
-                            }
-                        }
                         _ => {
                             println!("Got event {:?}", event);
                         }
@@ -272,66 +265,6 @@ fn cache_event(server_message: &UiServerMessage, cache: &mut Vec<UiEvent>) {
                     }
                 })
             }
-            UiEvent::Topics(..) => {
-                cache.retain(|event| !matches!(event, UiEvent::Topics(..)));
-                cache.push(ui_event.clone());
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use futures::future::join_all;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test_ws_server() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let server_addr = listener.local_addr().unwrap();
-        let server_addr = format!("ws://{server_addr}");
-
-        let (command_tx, mut command_rx) = channel(1024);
-        let (response_tx, response_rx) = channel(1024);
-        // Run the ws server
-        tokio::spawn(async move {
-            server(listener, command_tx, response_rx).await;
-        });
-
-        // Mock of Hdp
-        tokio::spawn(async move {
-            while let Some(client_message) = command_rx.recv().await {
-                if let Command::Join(_) = client_message.command {
-                    response_tx
-                        .send(UiServerMessage::Response {
-                            id: client_message.id,
-                            response: Ok(UiResponse::EndResponse),
-                        })
-                        .await
-                        .unwrap();
-                }
-            }
-        });
-        let command = Command::Join("foo".to_string());
-
-        async fn run_command(server_addr: String, command: Command) -> UiResponse {
-            single_client_command(server_addr, command)
-                .await
-                .unwrap()
-                .recv()
-                .await
-                .unwrap()
-                .unwrap()
-        }
-
-        // Connect with 3 clients
-        let client_futures: Vec<_> = (0..3)
-            .map(|_| run_command(server_addr.clone(), command.clone()))
-            .collect();
-
-        for response in join_all(client_futures).await {
-            assert_eq!(response, UiResponse::EndResponse);
         }
     }
 }

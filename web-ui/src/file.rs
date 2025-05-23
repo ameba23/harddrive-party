@@ -88,18 +88,27 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     };
 
     // Only display download button if we dont have it requested, and it is not our share
-    let download_button_style = move || {
+    let download_button = move || {
         if file.download_status.get() == DownloadStatus::Nothing
             && !is_shared
             && file.request.get() == None
             && context != FileDisplayContext::Transfer
         {
-            ""
+            Either::Left(view! {
+                <span title="Download">
+                    <Button
+                        icon=icondata::FiDownload
+                        on:click=download_request
+                        size=ButtonSize::Small
+                    />
+                </span>
+            })
         } else {
-            "display:none"
+            Either::Right(view! {})
         }
     };
 
+    let peer_name = file.peer_name.clone();
     let expand_dir = move |_| {
         if file.is_dir.unwrap_or_default() {
             if file.is_expanded.get() {
@@ -125,13 +134,18 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 });
                 file.is_expanded.set(false);
             } else {
-                // If this is ourselve Command::Shares otherwise Command::Ls(query, peer_name)
-                let ls = Command::Shares(IndexQuery {
+                let query = IndexQuery {
                     path: Some(file_name.get()),
                     searchterm: None,
                     recursive: false,
-                });
-                set_requester.update(|requester| requester.make_request(ls));
+                };
+                let command = if is_shared {
+                    Command::Shares(query)
+                } else {
+                    Command::Ls(query, Some(peer_name.clone()))
+                };
+
+                set_requester.update(|requester| requester.make_request(command));
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
                 // state
                 file.is_expanded.set(true);
@@ -163,13 +177,13 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         let icon = move || match file.is_dir {
             Some(true) => {
                 if file.is_expanded.get() {
-                    EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined/> })
+                    EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined /> })
                 } else {
-                    EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined/> })
+                    EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined /> })
                 }
             }
 
-            Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined/> }),
+            Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined /> }),
             None => EitherOf4::D(view! {}),
         };
         let (name, indentation) = match file_name.rsplit_once('/') {
@@ -189,10 +203,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         <TableRow on:click=expand_dir>
             <TableCell>{file_name_and_indentation}</TableCell>
             <TableCell>
-                " " {display_bytes(file.size.unwrap_or_default())} " "
-                <button style=download_button_style on:click=download_request title="Download">
-                    "🠫"
-                </button>
+                " " {display_bytes(file.size.unwrap_or_default())} " " {download_button()}
                 {move || {
                     match file.download_status.get() {
                         DownloadStatus::Nothing => EitherOf5::A(view! { <span></span> }),
@@ -203,10 +214,8 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                                 let file_path = file_name.get();
                                 EitherOf5::C(
                                     view! {
-                                        <span>
-                                            "Downloaded"
-                                            <Preview file_path=&file_path shared=is_shared/>
-                                        </span>
+                                        "Downloaded"
+                                        <Preview file_path=&file_path shared=is_shared />
                                     },
                                 )
                             }
@@ -218,14 +227,13 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             EitherOf5::E(
                                 view! {
                                     <span>
-                                        <DownloadingFile bytes_read size=file.size/>
+                                        <DownloadingFile bytes_read size=file.size />
                                     </span>
                                 },
                             )
                         }
                     }
-                }}
-                // TODO fix this
+                }} // TODO fix this
                 {move || {
                     if is_shared {
                         view! {
@@ -234,12 +242,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         }
                     } else {
                         view! {
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-
                             // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
                             <span></span>
                         }
@@ -250,11 +252,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         </TableRow>
     }
 }
-
-// enum LocalStorage {
-//     Downloads,
-//     Shared(String),
-// }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum DownloadStatus {
@@ -267,8 +264,14 @@ pub enum DownloadStatus {
 /// Show progress when currently downloading
 #[component]
 pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
-    // This will be a progress bar
+    let progress: f64 = match size {
+        Some(0) => 0.0,
+        Some(size) => bytes_read as f64 / size as f64,
+        None => 0.0,
+    };
+    let value = RwSignal::new(progress);
     view! {
+        <ProgressBar value />
         <span>
             {format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}
         </span>
@@ -287,14 +290,12 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
             let escaped_path = urlencoding::encode(&file_path);
             Either::Left(view! {
                 <span>
-                    <button>
-                        <a
-                            href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
-                            target="_blank"
-                        >
-                            "View"
-                        </a>
-                    </button>
+                    <a
+                        href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
+                        target="_blank"
+                    >
+                        <Button size=ButtonSize::Small>"View"</Button>
+                    </a>
                 </span>
             })
         }

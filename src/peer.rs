@@ -32,6 +32,7 @@ const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 const UPDATE_EVERY: u64 = 10 * 1024;
 
 /// Representation of a remote peer
+#[derive(Debug)]
 pub struct Peer {
     /// The QUIC connection to this peer
     pub connection: Connection,

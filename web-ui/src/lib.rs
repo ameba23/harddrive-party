@@ -4,7 +4,6 @@ pub mod hdp;
 pub mod peer;
 mod requests;
 pub mod shares;
-pub mod topics;
 pub mod transfers;
 pub mod ws;
 
@@ -18,7 +17,7 @@ pub fn App() -> impl IntoView {
     view! {
         <ConfigProvider>
             <Router>
-                <HdpUi/>
+                <HdpUi />
             </Router>
         </ConfigProvider>
     }
