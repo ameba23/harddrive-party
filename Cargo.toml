@@ -11,7 +11,7 @@ license = "GPL-3.0-or-later"
 description = "Share files peer-to-peer"
 homepage = "https://gitlab.com/pegpeg/harddrive-party"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
-keywords = ["peer-to-peer", "filesharing", "p2p"]
+keywords = ["peer-to-peer", "filesharing", "file-sharing", "p2p"]
 include = [
     "src/",
     "Cargo.toml",
