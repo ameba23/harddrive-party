@@ -42,12 +42,12 @@ pub fn Shares(
                     view! {
                         <p>"Add a directory to share"</p>
                         <Flex>
-                        <Input value=add_share_value>
-                            <InputPrefix slot>
-                                <Icon icon=icondata::AiFolderAddOutlined />
-                            </InputPrefix>
-                        </Input>
-                        <Button on:click=add_share>"Add"</Button>
+                            <Input value=add_share_value>
+                                <InputPrefix slot>
+                                    <Icon icon=icondata::AiFolderAddOutlined />
+                                </InputPrefix>
+                            </Input>
+                            <Button on:click=add_share>"Add"</Button>
                         </Flex>
                     }
                 }}
@@ -69,7 +69,9 @@ pub fn Shares(
                         EitherOf3::B(
                             view! {
                                 <span>
-                                    <ErrorMessage message />
+                                    <ErrorMessage message>
+                                        <span />
+                                    </ErrorMessage>
                                 </span>
                             },
                         )

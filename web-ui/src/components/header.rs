@@ -1,6 +1,5 @@
 use crate::{display_bytes, peer::Peer, FilesSignal, PeerPath};
 use leptos::prelude::*;
-use leptos_meta::Style;
 use leptos_router::hooks::use_navigate;
 use std::collections::HashMap;
 use thaw::*;
@@ -42,45 +41,45 @@ pub fn HdpHeader(
                     title="harddrive-party"
                 />
                 <TabList class="tab-list" selected_value>
-                <Flex>
-                    <Tab
-                        value="shares"
-                        on:click=move |_| {
-                            navigate1("/shares", Default::default());
-                        }
-                    >
+                    <Flex>
+                        <Tab
+                            value="shares"
+                            on:click=move |_| {
+                                navigate1("/shares", Default::default());
+                            }
+                        >
 
-                        <Flex>
-                            <Icon icon=icondata::AiHeartFilled />
-                            " Shares"
-                            <Badge>{shared_files_size}</Badge>
-                        </Flex>
-                    </Tab>
-                    <Tab
-                        value="peers"
-                        on:click=move |_| {
-                            navigate2("/peers", Default::default());
-                        }
-                    >
+                            <Flex>
+                                <Icon icon=icondata::AiHeartFilled />
+                                " Shares"
+                                <Badge>{shared_files_size}</Badge>
+                            </Flex>
+                        </Tab>
+                        <Tab
+                            value="peers"
+                            on:click=move |_| {
+                                navigate2("/peers", Default::default());
+                            }
+                        >
 
-                        <Flex>
-                            <Icon icon=icondata::FaUsersSolid />
-                            " Peers"
-                            <Badge>{move || { peers.get().len() }}</Badge>
-                        </Flex>
-                    </Tab>
-                    <Tab
-                        value="transfers"
-                        on:click=move |_| {
-                            navigate3("/transfers", Default::default());
-                        }
-                    >
+                            <Flex>
+                                <Icon icon=icondata::FaUsersSolid />
+                                " Peers"
+                                <Badge>{move || { peers.get().len() }}</Badge>
+                            </Flex>
+                        </Tab>
+                        <Tab
+                            value="transfers"
+                            on:click=move |_| {
+                                navigate3("/transfers", Default::default());
+                            }
+                        >
 
-                        <Flex>
-                            <Icon icon=icondata::LuArrowUpDown />
-                            " Transfers"
-                        </Flex>
-                    </Tab>
+                            <Flex>
+                                <Icon icon=icondata::LuArrowUpDown />
+                                " Transfers"
+                            </Flex>
+                        </Tab>
                     </Flex>
                 </TabList>
             </Flex>

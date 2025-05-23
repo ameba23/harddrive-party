@@ -246,7 +246,7 @@ pub async fn handle_peer_announcement(
     // Check that we are not already connected to this peer
     let name = key_to_animal::key_to_name(&announce_address.public_key);
     if peers.lock().await.contains_key(&name) {
-        return Err("Already connected to this peer");
+        return Err(anyhow!("Already connected to this peer"));
     }
 
     // TODO check that it is not already a pending peer connection

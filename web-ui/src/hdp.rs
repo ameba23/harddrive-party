@@ -15,7 +15,6 @@ use crate::{
 };
 use futures::StreamExt;
 use leptos::prelude::*;
-use leptos_meta::Style;
 use leptos_router::{
     components::{Redirect, Route, Routes},
     path,
@@ -200,7 +199,7 @@ pub fn HdpUi() -> impl IntoView {
                                 DownloadInfo::Downloading {
                                     path,
                                     bytes_read,
-                                    total_bytes_read,
+                                    total_bytes_read: _,
                                     speed: _,
                                 } => {
                                     set_files.update(|files| {
@@ -524,7 +523,34 @@ pub fn HdpUi() -> impl IntoView {
                 each=move || error_message.get()
                 key=|error_message| format!("{:?}", error_message)
                 children=move |error_message| {
-                    view! { <ErrorMessage message=format!("{}", error_message) /> }
+                    match error_message {
+                        AppError::WsConnection => {
+                            view! {
+                                <ErrorMessage message=format!("{}", error_message)>
+                                    <span />
+                                </ErrorMessage>
+                            }
+                        }
+                        _ => {
+                            view! {
+                                <ErrorMessage message=format!("{}", error_message)>
+
+                                    <MessageBarActions>
+                                        <Button
+                                            appearance=ButtonAppearance::Transparent
+                                            icon=icondata::AiCloseOutlined
+                                            on:click=move |_| {
+                                                set_error_message
+                                                    .update(|error_messages| {
+                                                        error_messages.remove(&error_message);
+                                                    })
+                                            }
+                                        />
+                                    </MessageBarActions>
+                                </ErrorMessage>
+                            }
+                        }
+                    }
                 }
             />
         }
@@ -593,13 +619,14 @@ pub fn display_bytes(bytes: u64) -> String {
 }
 
 #[component]
-pub fn ErrorMessage(message: String) -> impl IntoView {
+pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
     view! {
         <MessageBar intent=MessageBarIntent::Error>
             <MessageBarBody>
                 <MessageBarTitle>"Error"</MessageBarTitle>
                 {message}
             </MessageBarBody>
+            {children()}
         </MessageBar>
     }
 }
