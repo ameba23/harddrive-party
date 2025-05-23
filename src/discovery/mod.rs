@@ -223,6 +223,8 @@ fn is_private(ip: IpAddr) -> bool {
     }
 }
 
+/// This is called when a peer is announced, either directly by the user or through a gossiped peer
+/// announcement from another connected peer.
 pub async fn handle_peer_announcement(
     hole_puncher: Option<HolePuncher>,
     our_announce_address: AnnounceAddress,
@@ -238,13 +240,13 @@ pub async fn handle_peer_announcement(
 
     // Check it is not ourself
     if our_announce_address == announce_address {
-        return Ok(());
+        return Err(anyhow!("Cannot connect to ourself"));
     }
 
     // Check that we are not already connected to this peer
     let name = key_to_animal::key_to_name(&announce_address.public_key);
     if peers.lock().await.contains_key(&name) {
-        return Ok(());
+        return Err("Already connected to this peer");
     }
 
     // TODO check that it is not already a pending peer connection
@@ -258,7 +260,7 @@ pub async fn handle_peer_announcement(
     {
         Ok((Some(discovered_peer), _)) => {
             // We connect to them
-            debug!("Connect to {:?}", discovered_peer);
+            debug!("Connecting to {:?}", discovered_peer);
             if peers_tx.send(discovered_peer).await.is_err() {
                 error!("Cannot write to channel");
             }
@@ -277,6 +279,7 @@ pub async fn handle_peer_announcement(
     };
 }
 
+/// Handle a peer we have discovered - depending on NAT type
 pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
     local: &PeerConnectionDetails,
@@ -286,6 +289,7 @@ pub async fn handle_peer(
         .get_announce_address()
         .ok_or(anyhow!("Cannot handle MDNS peer"))?
         .clone();
+
     match announce_address.connection_details {
         PeerConnectionDetails::Symmetric(remote_ip) => match local {
             PeerConnectionDetails::Symmetric(_) => {
@@ -297,7 +301,7 @@ pub async fn handle_peer(
                     // Wait for them to connect to us
                     Ok((None, socket_address))
                 }
-                None => Err(anyhow!("We have asymmetric nat but no local socket")),
+                None => Err(anyhow!("We have asymmetric NAT but no local socket")),
             },
             PeerConnectionDetails::NoNat(socket_address) => {
                 // They are symmetric (hard), we have no nat
