@@ -4,14 +4,11 @@ use colored::Colorize;
 use harddrive_party::{
     hdp::Hdp,
     http::http_server,
-    ui_messages::{Command, UiResponse},
+    ui_messages::UiResponse,
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
-    ws::single_client_command,
 };
 use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::{fs::create_dir_all, net::TcpListener};
-
-const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
@@ -19,8 +16,10 @@ const DEFAULT_UI_ADDRESS: &str = "127.0.0.1:4001";
 struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
-    #[arg(short, long)]
-    ui_addr: Option<String>,
+    /// Where to host UI, or where to expect it to be hosted
+    #[arg(short, long, required = false, default_value = "127.0.0.1:3030")]
+    ui_address: String,
+    /// Verbose mode with additional logging
     #[arg(short, long)]
     verbose: bool,
 }
@@ -32,9 +31,6 @@ enum CliCommand {
         /// Directories to share (may be given multiple times)
         #[arg(short, long)]
         share_dir: Vec<String>,
-        /// IP and port to host UI - defaults to 127.0.0.1:4001
-        #[arg(short, long)]
-        ui_address: Option<SocketAddr>,
         /// Directory to store local database.
         /// Defaults to $XDG_DATA_HOME/harddrive-party or ~/.local/share/harddrive-party
         #[arg(long)]
@@ -42,7 +38,7 @@ enum CliCommand {
         /// Directory to store downloads. Defaults to ~/Downloads
         #[arg(short, long)]
         download_dir: Option<String>,
-        /// If set, will not use mdns
+        /// If set, will not use mDNS to discover peers on the local network
         #[arg(long)]
         no_mdns: bool,
     },
@@ -92,10 +88,6 @@ enum CliCommand {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let ui_addr = cli
-        .ui_addr
-        .unwrap_or(format!("ws://{}", DEFAULT_UI_ADDRESS));
-
     if cli.verbose {
         env::set_var(
             "RUST_LOG",
@@ -108,16 +100,9 @@ async fn main() -> anyhow::Result<()> {
         CliCommand::Start {
             storage,
             share_dir,
-            ui_address,
             download_dir,
             no_mdns,
         } => {
-            let ui_address = ui_address.unwrap_or_else(|| {
-                DEFAULT_UI_ADDRESS
-                    .parse()
-                    .expect("Default UI address should parse")
-            });
-
             let storage = match storage {
                 Some(storage) => PathBuf::from(storage),
                 None => {
@@ -139,27 +124,18 @@ async fn main() -> anyhow::Result<()> {
             };
             create_dir_all(&download_dir).await?;
 
-            let (mut hdp, recv) =
-                Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
+            let mut hdp = Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.name.green(),
                 hdp.server_connection.to_string().yellow(),
             );
 
-            let command_tx = hdp.command_tx.clone();
-
-            let ws_listener = TcpListener::bind(&ui_address).await?;
-            println!("Websocket server for UI listening on: {}", ui_address);
-            tokio::spawn(async move {
-                harddrive_party::ws::server(ws_listener, command_tx, recv).await;
-            });
-
             let download_dir = hdp.download_dir.clone();
-            // HTTP server
-            tokio::spawn(async move {
-                http_server(ui_address, download_dir).await;
-            });
+            let shared_state = hdp.shared_state.clone();
+
+            let ui_address: SocketAddr = cli.ui_address.parse()?;
+            http_server(shared_state, ui_address, download_dir).await?;
 
             println!(
                 "Announce address {}",
@@ -182,186 +158,186 @@ async fn main() -> anyhow::Result<()> {
                 None => (None, None),
             };
 
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::Ls(
-                    IndexQuery {
-                        path: peer_path,
-                        searchterm,
-                        recursive: recursive.unwrap_or(true),
-                    },
-                    peer_name,
-                ),
-            )
-            .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
-                        LsResponse::Success(entries) => {
-                            for entry in entries {
-                                if entry.is_dir {
-                                    println!(
-                                        "{} {} bytes",
-                                        format!("[{}/{}]", peer_name, entry.name).blue(),
-                                        entry.size
-                                    );
-                                } else {
-                                    println!("{}/{} {}", peer_name, entry.name, entry.size);
-                                }
-                            }
-                        }
-                        LsResponse::Err(err) => {
-                            println!("Error from peer {:?}", err);
-                        }
-                    },
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
+            // let mut responses = harddrive_party::ws::single_client_command(
+            //     ui_addr,
+            //     Command::Ls(
+            //         IndexQuery {
+            //             path: peer_path,
+            //             searchterm,
+            //             recursive: recursive.unwrap_or(true),
+            //         },
+            //         peer_name,
+            //     ),
+            // )
+            // .await?;
+            // while let Some(response) = responses.recv().await {
+            //     match response {
+            //         Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
+            //             LsResponse::Success(entries) => {
+            //                 for entry in entries {
+            //                     if entry.is_dir {
+            //                         println!(
+            //                             "{} {} bytes",
+            //                             format!("[{}/{}]", peer_name, entry.name).blue(),
+            //                             entry.size
+            //                         );
+            //                     } else {
+            //                         println!("{}/{} {}", peer_name, entry.name, entry.size);
+            //                     }
+            //                 }
+            //             }
+            //             LsResponse::Err(err) => {
+            //                 println!("Error from peer {:?}", err);
+            //             }
+            //         },
+            //         Ok(UiResponse::EndResponse) => {
+            //             break;
+            //         }
+            //         Ok(some_other_response) => {
+            //             println!("Got unexpected response {:?}", some_other_response);
+            //         }
+            //         Err(e) => {
+            //             println!("Error from WS server {:?}", e);
+            //             break;
+            //         }
+            //     }
+            // }
         }
         CliCommand::Shares {
             path,
             searchterm,
             recursive,
         } => {
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::Shares(IndexQuery {
-                    path,
-                    searchterm,
-                    recursive: recursive.unwrap_or(true),
-                }),
-            )
-            .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Shares(ls_response)) => match ls_response {
-                        LsResponse::Success(entries) => {
-                            for entry in entries {
-                                if entry.is_dir {
-                                    println!(
-                                        "{} {} bytes",
-                                        format!("[{}]", entry.name).blue(),
-                                        entry.size
-                                    );
-                                } else {
-                                    println!("{} {}", entry.name, entry.size);
-                                }
-                            }
-                        }
-                        LsResponse::Err(err) => {
-                            println!("Error from peer {:?}", err);
-                        }
-                    },
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
+            // let mut responses = harddrive_party::ws::single_client_command(
+            //     ui_addr,
+            //     Command::Shares(IndexQuery {
+            //         path,
+            //         searchterm,
+            //         recursive: recursive.unwrap_or(true),
+            //     }),
+            // )
+            // .await?;
+            // while let Some(response) = responses.recv().await {
+            //     match response {
+            //         Ok(UiResponse::Shares(ls_response)) => match ls_response {
+            //             LsResponse::Success(entries) => {
+            //                 for entry in entries {
+            //                     if entry.is_dir {
+            //                         println!(
+            //                             "{} {} bytes",
+            //                             format!("[{}]", entry.name).blue(),
+            //                             entry.size
+            //                         );
+            //                     } else {
+            //                         println!("{} {}", entry.name, entry.size);
+            //                     }
+            //                 }
+            //             }
+            //             LsResponse::Err(err) => {
+            //                 println!("Error from peer {:?}", err);
+            //             }
+            //         },
+            //         Ok(UiResponse::EndResponse) => {
+            //             break;
+            //         }
+            //         Ok(some_other_response) => {
+            //             println!("Got unexpected response {:?}", some_other_response);
+            //         }
+            //         Err(e) => {
+            //             println!("Error from WS server {:?}", e);
+            //             break;
+            //         }
+            //     }
+            // }
         }
         CliCommand::Download { path } => {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            let mut responses = single_client_command(
-                ui_addr,
-                Command::Download {
-                    path: peer_path,
-                    peer_name: peer_name.unwrap_or_default(),
-                },
-            )
-            .await?;
-
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Download(download_response)) => {
-                        println!("Downloaded {}", download_response);
-                    }
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
+            // let mut responses = single_client_command(
+            //     ui_addr,
+            //     Command::Download {
+            //         path: peer_path,
+            //         peer_name: peer_name.unwrap_or_default(),
+            //     },
+            // )
+            // .await?;
+            //
+            // while let Some(response) = responses.recv().await {
+            //     match response {
+            //         Ok(UiResponse::Download(download_response)) => {
+            //             println!("Downloaded {}", download_response);
+            //         }
+            //         Ok(UiResponse::EndResponse) => {
+            //             break;
+            //         }
+            //         Ok(some_other_response) => {
+            //             println!("Got unexpected response {:?}", some_other_response);
+            //         }
+            //         Err(e) => {
+            //             println!("Error from WS server {:?}", e);
+            //             break;
+            //         }
+            //     }
+            // }
         }
         CliCommand::Read { path, start, end } => {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::Read(
-                    ReadQuery {
-                        path: peer_path,
-                        start,
-                        end,
-                    },
-                    peer_name.unwrap_or_default(),
-                ),
-            )
-            .await?;
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::Read(data)) => {
-                        print!("{}", std::str::from_utf8(&data).unwrap_or_default());
-                    }
-                    Ok(UiResponse::EndResponse) => {
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                        break;
-                    }
-                    Err(e) => {
-                        println!("Error from WS server {:?}", e);
-                        break;
-                    }
-                }
-            }
+            // let mut responses = harddrive_party::ws::single_client_command(
+            //     ui_addr,
+            //     Command::Read(
+            //         ReadQuery {
+            //             path: peer_path,
+            //             start,
+            //             end,
+            //         },
+            //         peer_name.unwrap_or_default(),
+            //     ),
+            // )
+            // .await?;
+            // while let Some(response) = responses.recv().await {
+            //     match response {
+            //         Ok(UiResponse::Read(data)) => {
+            //             print!("{}", std::str::from_utf8(&data).unwrap_or_default());
+            //         }
+            //         Ok(UiResponse::EndResponse) => {
+            //             break;
+            //         }
+            //         Ok(some_other_response) => {
+            //             println!("Got unexpected response {:?}", some_other_response);
+            //             break;
+            //         }
+            //         Err(e) => {
+            //             println!("Error from WS server {:?}", e);
+            //             break;
+            //         }
+            //     }
+            // }
         }
         CliCommand::Connect { announce_address } => {
-            let mut responses = harddrive_party::ws::single_client_command(
-                ui_addr,
-                Command::ConnectDirect(announce_address),
-            )
-            .await?;
-            // TODO could add a timeout here
-            while let Some(response) = responses.recv().await {
-                match response {
-                    Ok(UiResponse::EndResponse) => {
-                        println!("Successfully connected");
-                        break;
-                    }
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
-                    Err(e) => {
-                        println!("Error when connecting {:?}", e);
-                        break;
-                    }
-                }
-            }
+            // let mut responses = harddrive_party::ws::single_client_command(
+            //     ui_addr,
+            //     Command::ConnectDirect(announce_address),
+            // )
+            // .await?;
+            // // TODO could add a timeout here
+            // while let Some(response) = responses.recv().await {
+            //     match response {
+            //         Ok(UiResponse::EndResponse) => {
+            //             println!("Successfully connected");
+            //             break;
+            //         }
+            //         Ok(some_other_response) => {
+            //             println!("Got unexpected response {:?}", some_other_response);
+            //         }
+            //         Err(e) => {
+            //             println!("Error when connecting {:?}", e);
+            //             break;
+            //         }
+            //     }
+            // }
         }
     };
     Ok(())

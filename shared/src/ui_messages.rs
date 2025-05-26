@@ -5,52 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
 
-/// A command from the UI together with a random ID used to refer to it
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct UiClientMessage {
-    pub id: u32,
-    pub command: Command,
-}
-
-/// A command from the UI
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum Command {
-    /// Query peers' files. If no peer name is given, query all connected peers
-    Ls(IndexQuery, Option<String>),
-    /// Read a portion a of a file, from the given connect peer name
-    Read(ReadQuery, String),
-    /// Download a file or dir
-    Download { path: String, peer_name: String },
-    /// Query our own shares
-    Shares(IndexQuery),
-    /// Add or update a directory to share
-    AddShare(String),
-    /// Stop sharing a directory
-    RemoveShare(String),
-    /// Get download requests
-    Requests,
-    /// Get files associated with a particular request
-    RequestedFiles(u32),
-    /// Cancel a particular request
-    RemoveRequest(u32),
-    /// Connect to the given peer
-    ConnectDirect(String),
-    /// Shutdown gracefully
-    Close,
-}
-
-/// A message to the UI
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum UiServerMessage {
-    /// The response to a `Command`
-    Response {
-        id: u32,
-        response: Result<UiResponse, UiServerError>,
-    },
-    /// Some server message which is not responding to a particular command
-    Event(UiEvent),
-}
-
 /// 'Events' are messages sent from the server which are not in response to a particular
 /// request - eg: to inform the UI that a peer connected or disconnected
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
@@ -65,6 +19,8 @@ pub enum UiEvent {
     PeerDisconnected { name: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
+    /// Download
+    Download(DownloadResponse),
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a

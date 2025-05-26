@@ -1,5 +1,4 @@
 pub use harddrive_party_shared::ui_messages;
-use harddrive_party_shared::ui_messages::{PeerRemoteOrSelf, UiServerError};
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
@@ -9,7 +8,10 @@ use crate::{
     requests::Requests,
     shares::Shares,
     transfers::Transfers,
-    ui_messages::{Command, DownloadInfo, UiEvent},
+    ui_messages::{
+        DownloadInfo, PeerRemoteOrSelf, UiDownloadRequest, UiEvent, UiResponse, UiServerError,
+        UiServerMessage,
+    },
     wire_messages::IndexQuery,
     ws::{Requester, WebsocketService},
 };
@@ -23,7 +25,6 @@ use log::{debug, info, warn};
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thaw::*;
-use ui_messages::{UiDownloadRequest, UiResponse, UiServerMessage};
 use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
 

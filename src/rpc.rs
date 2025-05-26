@@ -2,7 +2,7 @@
 
 use crate::{
     shares::{EntryParseError, Shares},
-    ui_messages::{UiEvent, UiServerMessage, UploadInfo},
+    ui_messages::{UiEvent, UploadInfo},
 };
 use bincode::{deserialize, serialize};
 use harddrive_party_shared::wire_messages::{AnnouncePeer, IndexQuery, ReadQuery, Request};
@@ -12,7 +12,10 @@ use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        broadcast,
+        mpsc::{channel, Receiver, Sender},
+    },
 };
 
 /// Number of bytes uploaded at a time
@@ -33,14 +36,13 @@ pub struct Rpc {
     pub shares: Shares,
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
-    // upload_rx: UnboundedReceiver<ReadRequest>,
     peer_announce_tx: Sender<AnnouncePeer>,
 }
 
 impl Rpc {
     pub fn new(
         shares: Shares,
-        event_tx: Sender<UiServerMessage>,
+        event_broadcaster: broadcast::Sender<UiEvent>,
         peer_announce_tx: Sender<AnnouncePeer>,
     ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
@@ -50,7 +52,7 @@ impl Rpc {
             let mut uploader = Uploader {
                 shares: shares_clone,
                 upload_rx,
-                event_tx,
+                event_broadcaster,
             };
             uploader.run().await;
         });
@@ -172,7 +174,7 @@ struct Uploader {
     /// Incoming read requests
     upload_rx: Receiver<ReadRequest>,
     /// Channel for sending messages to the UI
-    event_tx: Sender<UiServerMessage>,
+    event_broadcaster: broadcast::Sender<UiEvent>,
 }
 
 impl Uploader {
@@ -210,14 +212,13 @@ impl Uploader {
                     }
                     bytes_read += n as u64;
                     if self
-                        .event_tx
-                        .send(UiServerMessage::Event(UiEvent::Uploaded(UploadInfo {
+                        .event_broadcaster
+                        .send(UiEvent::Uploaded(UploadInfo {
                             path: path.clone(),
                             bytes_read,
                             speed: 0, // TODO
                             peer_name: requester_name.clone(),
-                        })))
-                        .await
+                        }))
                         .is_err()
                     {
                         warn!("Ui response channel closed");

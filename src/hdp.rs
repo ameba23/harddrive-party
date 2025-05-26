@@ -9,7 +9,7 @@ use crate::{
     },
     rpc::Rpc,
     shares::Shares,
-    ui_messages::{Command, UiClientMessage, UiEvent, UiResponse, UiServerError, UiServerMessage},
+    ui_messages::{UiEvent, UiServerError},
     wire_messages::{AnnouncePeer, Entry, IndexQuery, LsResponse, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
@@ -33,6 +33,7 @@ use thiserror::Error;
 use tokio::{
     select,
     sync::{
+        broadcast,
         mpsc::{channel, Receiver, Sender},
         Mutex,
     },
@@ -60,30 +61,41 @@ type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 /// The cache for index requests
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
-/// A harddrive-party instance
-pub struct Hdp {
+#[derive(Clone)]
+pub struct SharedState {
     /// A map of peernames to peer connections
     peers: Arc<Mutex<HashMap<String, Peer>>>,
+    /// The index of shared files
+    pub shares: Shares,
+    /// Cache for remote peer's file index
+    pub ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
+    /// Maintains lists of requested/downloaded files
+    pub wishlist: WishList,
+    /// Channel for sending events to the UI
+    pub event_broadcaster: broadcast::Sender<UiEvent>,
+}
+
+impl SharedState {
+    async fn send_event(&self, event: UiEvent) {
+        if self.event_broadcaster.send(event).is_err() {
+            warn!("UI response channel closed");
+        }
+    }
+}
+
+/// A harddrive-party instance
+pub struct Hdp {
+    pub shared_state: SharedState,
     /// Remote proceduce call for share queries and downloads
     rpc: Rpc,
     /// The QUIC endpoint and TLS certificate
     pub server_connection: ServerConnection,
-    /// Channel for commands from the UI (outgoing)
-    pub command_tx: Sender<UiClientMessage>,
-    /// Channel for commands from the UI (incoming)
-    command_rx: Receiver<UiClientMessage>,
-    /// Channel for responses to the UI (outgoing)
-    response_tx: Sender<UiServerMessage>,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
     /// Download directory
     pub download_dir: PathBuf,
-    /// Cache for remote peer's file index
-    ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// A name derived from our public key
     pub name: String,
-    /// Maintains lists of requested/downloaded files
-    wishlist: WishList,
 }
 
 impl Hdp {
@@ -98,11 +110,7 @@ impl Hdp {
         share_dirs: Vec<String>,
         download_dir: PathBuf,
         use_mdns: bool,
-    ) -> anyhow::Result<(Self, Receiver<UiServerMessage>)> {
-        // Channels for communication with UI
-        let (command_tx, command_rx) = channel(1024);
-        let (response_tx, response_rx) = channel(65536);
-
+    ) -> anyhow::Result<Self> {
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
@@ -161,42 +169,40 @@ impl Hdp {
             }
         };
 
-        // Notify the UI of our own details
-        send_event(
-            response_tx.clone(),
-            UiEvent::PeerConnected {
-                name: name.clone(),
-                peer_type: PeerRemoteOrSelf::Me {
-                    os_home_dir,
-                    announce_address: peer_discovery.get_ui_announce_address()?,
-                },
-            },
-        )
-        .await;
-
         // Setup db for downloads/requests
         let wishlist = WishList::new(&db)?;
 
-        Ok((
-            Self {
-                peers,
-                rpc: Rpc::new(
-                    shares,
-                    response_tx.clone(),
-                    peer_discovery.peer_announce_tx.clone(),
-                ),
-                server_connection,
-                command_tx,
-                command_rx,
-                response_tx,
-                peer_discovery,
-                download_dir,
-                name,
-                ls_cache: Default::default(),
-                wishlist,
+        let (event_broadcaster, _rx) = broadcast::channel(65536);
+
+        // Notify the UI of our own details
+        event_broadcaster.send(UiEvent::PeerConnected {
+            name: name.clone(),
+            peer_type: PeerRemoteOrSelf::Me {
+                os_home_dir,
+                announce_address: peer_discovery.get_ui_announce_address()?,
             },
-            response_rx,
-        ))
+        })?;
+
+        let shared_state = SharedState {
+            wishlist,
+            shares: shares.clone(),
+            peers,
+            ls_cache: Default::default(),
+            event_broadcaster: event_broadcaster.clone(),
+        };
+
+        Ok(Self {
+            shared_state: shared_state.clone(),
+            rpc: Rpc::new(
+                shares,
+                event_broadcaster,
+                peer_discovery.peer_announce_tx.clone(),
+            ),
+            server_connection,
+            peer_discovery,
+            download_dir,
+            name,
+        })
     }
 
     /// Loop handling incoming peer connections, commands from the UI, and discovered peers
@@ -219,13 +225,6 @@ impl Hdp {
                 // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
                     self.handle_incoming_connection(incoming_conn).await;
-                }
-                // A command from the UI
-                Some(command) = self.command_rx.recv() => {
-                    if let Err(err) = self.handle_command(command).await {
-                        error!("Closing connection {err}");
-                        break;
-                    };
                 }
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
@@ -252,7 +251,6 @@ impl Hdp {
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
         debug!("[{}] Connected to peer {}", self.name, peer_name);
-        let response_tx = self.response_tx.clone();
 
         let discovery_method = if let Some(discovery_method) = discovery_method {
             Some(discovery_method)
@@ -265,17 +263,18 @@ impl Hdp {
             // successfully connected
             // Ideally if we encounter a problem we should send an error response
             if let Some(id) = discovery_method.get_request_id() {
-                if self
-                    .response_tx
-                    .send(UiServerMessage::Response {
-                        id,
-                        response: Ok(UiResponse::EndResponse),
-                    })
-                    .await
-                    .is_err()
-                {
-                    warn!("Response channel closed");
-                }
+                // TODO this should be a oneshot
+                // if self
+                //     .response_tx
+                //     .send(UiServerMessage::Response {
+                //         id,
+                //         response: Ok(UiResponse::EndResponse),
+                //     })
+                //     .await
+                //     .is_err()
+                // {
+                //     warn!("Response channel closed");
+                // }
             }
 
             // If we know their announce address, check if it matches the certificate
@@ -294,24 +293,23 @@ impl Hdp {
             None
         };
 
-        let peers_clone = self.peers.clone();
         let rpc = self.rpc.clone();
         let download_dir = self.download_dir.clone();
-        let wishlist = self.wishlist.clone();
+        let shared_state = self.shared_state.clone();
 
         tokio::spawn(async move {
             {
                 // Add peer to our hashmap
                 let peer = Peer::new(
                     conn.clone(),
-                    response_tx.clone(),
+                    shared_state.event_broadcaster.clone(),
                     download_dir,
                     peer_public_key,
-                    wishlist,
+                    shared_state.wishlist.clone(),
                 );
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
-                let mut peers = peers_clone.lock().await;
+                let mut peers = shared_state.peers.lock().await;
 
                 if let Some(announce_address) = announce_address {
                     let announce_peer = AnnouncePeer { announce_address };
@@ -332,14 +330,12 @@ impl Hdp {
                 info!("[{}] connected to {} peers", direction, peers.len());
             }
             // Inform the UI that a new peer has connected
-            send_event(
-                response_tx.clone(),
-                UiEvent::PeerConnected {
+            shared_state
+                .send_event(UiEvent::PeerConnected {
                     name: peer_name.clone(),
                     peer_type: PeerRemoteOrSelf::Remote,
-                },
-            )
-            .await;
+                })
+                .await;
 
             loop {
                 match accept_incoming_request(&conn).await {
@@ -353,18 +349,16 @@ impl Hdp {
                 }
             }
 
-            let mut peers = peers_clone.lock().await;
+            let mut peers = shared_state.peers.lock().await;
             if peers.remove(&peer_name).is_none() {
                 warn!("Connection closed but peer not present in map");
             }
             debug!("Connection closed - removed peer");
-            send_event(
-                response_tx,
-                UiEvent::PeerDisconnected {
+            shared_state
+                .send_event(UiEvent::PeerDisconnected {
                     name: peer_name.clone(),
-                },
-            )
-            .await;
+                })
+                .await;
         });
     }
 
@@ -433,632 +427,9 @@ impl Hdp {
         Ok(())
     }
 
-    /// Handle a command from the UI
-    /// This should only return fatal errors - errors relating to handling the command should be
-    /// sent to the UI
-    async fn handle_command(
-        &mut self,
-        ui_client_message: UiClientMessage,
-    ) -> Result<(), HandleUiCommandError> {
-        let id = ui_client_message.id;
-        match ui_client_message.command {
-            Command::Close => {
-                // TODO tidy up peer discovery / active transfers
-                if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
-                    endpoint.wait_idle().await;
-                }
-                // TODO call flush on sled db
-                return Ok(());
-            }
-            Command::Ls(query, peer_name_option) => {
-                // If no name given send the query to all connected peers
-                let requests = match peer_name_option {
-                    Some(name) => {
-                        vec![(Request::Ls(query), name)]
-                    }
-                    None => {
-                        let peers = self.peers.lock().await;
-                        peers
-                            .keys()
-                            .map(|peer_name| (Request::Ls(query.clone()), peer_name.to_string()))
-                            .collect()
-                    }
-                };
-                debug!("Making request to {} peers", requests.len());
-
-                // If there is no request to make (no peers), end the response
-                if requests.is_empty()
-                    && self
-                        .response_tx
-                        .send(UiServerMessage::Response {
-                            id,
-                            response: Ok(UiResponse::EndResponse),
-                        })
-                        .await
-                        .is_err()
-                {
-                    warn!("Response channel closed");
-                }
-
-                // Track how many remaining requests there are, so we can terminate the reponse
-                // when all are finished
-                let remaining_responses: Arc<Mutex<usize>> = Arc::new(Mutex::new(requests.len()));
-
-                for (request, peer_name) in requests {
-                    // First check the local cache for an existing response
-                    let mut cache = self.ls_cache.lock().await;
-
-                    if let hash_map::Entry::Occupied(mut peer_cache_entry) =
-                        cache.entry(peer_name.clone())
-                    {
-                        let peer_cache = peer_cache_entry.get_mut();
-                        if let Some(responses) = peer_cache.get(&request) {
-                            debug!("Found existing responses in cache");
-                            for entries in responses.iter() {
-                                if self
-                                    .response_tx
-                                    .send(UiServerMessage::Response {
-                                        id,
-                                        response: Ok(UiResponse::Ls(
-                                            LsResponse::Success(entries.to_vec()),
-                                            peer_name.to_string(),
-                                        )),
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    warn!("Response channel closed");
-                                    break;
-                                }
-                            }
-                            // Terminate with an endresponse
-                            // If there was more then one peer we need to only
-                            // send this if we are the last one
-                            let mut remaining = remaining_responses.lock().await;
-                            *remaining -= 1;
-                            if *remaining == 0
-                                && self
-                                    .response_tx
-                                    .send(UiServerMessage::Response {
-                                        id,
-                                        response: Ok(UiResponse::EndResponse),
-                                    })
-                                    .await
-                                    .is_err()
-                            {
-                                warn!("Response channel closed");
-                                break;
-                            }
-                            continue;
-                        }
-                    }
-
-                    debug!("Sending ls query to {}", peer_name);
-                    let req_clone = request.clone();
-                    let peer_name_clone = peer_name.clone();
-
-                    match self.request(request, &peer_name).await {
-                        Ok(recv) => {
-                            let response_tx = self.response_tx.clone();
-                            let remaining_responses_clone = remaining_responses.clone();
-                            let ls_cache = self.ls_cache.clone();
-                            let ls_response_stream = {
-                                match process_length_prefix(recv).await {
-                                    Ok(ls_response_stream) => ls_response_stream,
-                                    Err(error) => {
-                                        warn!("Could not process length prefix {}", error);
-                                        return Err(HandleUiCommandError::ConnectionClosed);
-                                    }
-                                }
-                            };
-                            tokio::spawn(async move {
-                                // TODO handle error
-                                pin_mut!(ls_response_stream);
-
-                                let mut cached_entries = Vec::new();
-                                while let Some(Ok(ls_response)) = ls_response_stream.next().await {
-                                    // If it is not an err, add it to the local
-                                    // cache
-                                    if let LsResponse::Success(entries) = ls_response.clone() {
-                                        cached_entries.push(entries);
-                                    }
-
-                                    if response_tx
-                                        .send(UiServerMessage::Response {
-                                            id,
-                                            response: Ok(UiResponse::Ls(
-                                                ls_response,
-                                                peer_name_clone.to_string(),
-                                            )),
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        warn!("Response channel closed");
-                                        break;
-                                    }
-                                }
-                                if !cached_entries.is_empty() {
-                                    debug!("Writing ls cache {}", cached_entries.len());
-                                    let mut cache = ls_cache.lock().await;
-                                    let peer_cache =
-                                        cache.entry(peer_name_clone.clone()).or_insert(
-                                            // Unwrap ok here becasue CACHE_SIZE is non-zero
-                                            LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-                                        );
-                                    peer_cache.put(req_clone, cached_entries);
-                                }
-
-                                // Terminate with an endresponse
-                                // If there was more then one peer we need to only
-                                // send this if we are the last one
-                                let mut remaining = remaining_responses_clone.lock().await;
-                                *remaining -= 1;
-                                if *remaining == 0
-                                    && response_tx
-                                        .send(UiServerMessage::Response {
-                                            id,
-                                            response: Ok(UiResponse::EndResponse),
-                                        })
-                                        .await
-                                        .is_err()
-                                {
-                                    warn!("Response channel closed");
-                                }
-                            });
-                        }
-                        Err(err) => {
-                            error!("Error from remote peer following ls query {:?}", err);
-                            // TODO map the error
-                            if self
-                                .response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Err(UiServerError::RequestError),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                return Err(HandleUiCommandError::ChannelClosed);
-                            }
-                        }
-                    }
-                }
-            }
-            Command::Shares(query) => {
-                // Query our own share index
-                // TODO should probably do this in a separate task
-                match self
-                    .rpc
-                    .shares
-                    .query(query.path, query.searchterm, query.recursive)
-                {
-                    Ok(response_iterator) => {
-                        for res in response_iterator {
-                            if self
-                                .response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::Shares(res)),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                warn!("Response channel closed");
-                                break;
-                            };
-                        }
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                    Err(error) => {
-                        warn!("Error querying own shares {:?}", error);
-                        // TODO send this err to UI
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::RequestError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        };
-                    }
-                }
-            }
-            Command::Download { path, peer_name } => {
-                // Get details of the file / dir
-                let ls_request = Request::Ls(IndexQuery {
-                    path: Some(path.clone()),
-                    searchterm: None,
-                    recursive: true,
-                });
-                // let mut cache = self.ls_cache.lock().await;
-                //
-                // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
-                //     cache.entry(peer_name.clone())
-                // {
-                //     let peer_cache = peer_cache_entry.get_mut();
-                //     if let Some(responses) = peer_cache.get(&ls_request) {
-                //         debug!("Found existing responses in cache");
-                //         for entries in responses.iter() {
-                //             for entry in entries.iter() {
-                //                 debug!("Adding {} to wishlist dir: {}", entry.name, entry.is_dir);
-                //             }
-                //         }
-                //     } else {
-                //         debug!("Found nothing in cache");
-                //     }
-                // }
-
-                match self.request(ls_request, &peer_name).await {
-                    Ok(recv) => {
-                        let peer_public_key = {
-                            let peers = self.peers.lock().await;
-                            match peers.get(&peer_name) {
-                                Some(peer) => peer.public_key,
-                                None => {
-                                    warn!("Handling request to download a file from a peer who is not connected");
-                                    if self
-                                        .response_tx
-                                        .send(UiServerMessage::Response {
-                                            id,
-                                            response: Err(UiServerError::RequestError),
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        return Err(HandleUiCommandError::ChannelClosed);
-                                    } else {
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                        };
-                        let response_tx = self.response_tx.clone();
-                        let wishlist = self.wishlist.clone();
-                        tokio::spawn(async move {
-                            if let Ok(ls_response_stream) = process_length_prefix(recv).await {
-                                pin_mut!(ls_response_stream);
-                                while let Some(Ok(ls_response)) = ls_response_stream.next().await {
-                                    if let LsResponse::Success(entries) = ls_response {
-                                        for entry in entries.iter() {
-                                            if entry.name == path {
-                                                if let Err(err) =
-                                                    wishlist.add_request(&DownloadRequest::new(
-                                                        entry.name.clone(),
-                                                        entry.size,
-                                                        id,
-                                                        peer_public_key,
-                                                    ))
-                                                {
-                                                    error!("Cannot add download request {:?}", err);
-                                                }
-                                            }
-                                            if !entry.is_dir {
-                                                debug!("Adding {} to wishlist", entry.name);
-
-                                                if let Err(err) =
-                                                    wishlist.add_requested_file(&RequestedFile {
-                                                        path: entry.name.clone(),
-                                                        size: entry.size,
-                                                        request_id: id,
-                                                        downloaded: false,
-                                                    })
-                                                {
-                                                    error!(
-                                                        "Cannot make download request {:?}",
-                                                        err
-                                                    );
-                                                };
-                                            }
-                                        }
-                                    }
-                                }
-                                // Inform the UI that the request has been made
-                                if response_tx
-                                    .send(UiServerMessage::Response {
-                                        id,
-                                        response: Ok(UiResponse::Download(DownloadResponse {
-                                            download_info: DownloadInfo::Requested(get_timestamp()),
-                                            path,
-                                            peer_name,
-                                        })),
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    // log error
-                                }
-                            }
-                        });
-                    }
-                    Err(error) => {
-                        error!("Error from remote peer when making query {:?}", error);
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::RequestError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
-            Command::Read(read_query, peer_name) => {
-                let request = Request::Read(read_query);
-
-                match self.request(request, &peer_name).await {
-                    Ok(mut recv) => {
-                        let response_tx = self.response_tx.clone();
-                        tokio::spawn(async move {
-                            let mut buf: [u8; DOWNLOAD_BLOCK_SIZE] = [0; DOWNLOAD_BLOCK_SIZE];
-                            let mut bytes_read: u64 = 0;
-                            // TODO handle errors here
-                            while let Ok(Some(n)) = recv.read(&mut buf).await {
-                                bytes_read += n as u64;
-                                debug!("Read {} bytes", bytes_read);
-
-                                if response_tx
-                                    .send(UiServerMessage::Response {
-                                        id,
-                                        response: Ok(UiResponse::Read(buf[..n].to_vec())),
-                                    })
-                                    .await
-                                    .is_err()
-                                {
-                                    warn!("Response channel closed");
-                                    break;
-                                };
-                            }
-                            // Terminate with an endresponse
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::EndResponse),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                warn!("Response channel closed");
-                            }
-                        });
-                    }
-
-                    Err(err) => {
-                        error!("Error from remote peer following read request {:?}", err);
-                        // TODO map the error
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::RequestError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                }
-            }
-            // Add a directory to share
-            Command::AddShare(share_dir) => {
-                let response_tx = self.response_tx.clone();
-                let mut shares = self.rpc.shares.clone();
-                tokio::spawn(async move {
-                    match shares.scan(&share_dir).await {
-                        Ok(num_added) => {
-                            info!("{} shares added", num_added);
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::AddShare(num_added)),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                error!("Channel closed");
-                            }
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::EndResponse),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                error!("Channel closed");
-                            }
-                        }
-                        Err(err) => {
-                            warn!("Error adding share dir {}", err);
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Err(UiServerError::ShareError(err.to_string())),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                error!("Channel closed");
-                            }
-                        }
-                    };
-                });
-            }
-            Command::RemoveShare(share_name) => {
-                let response_tx = self.response_tx.clone();
-                let mut shares = self.rpc.shares.clone();
-                tokio::spawn(async move {
-                    match shares.remove_share_dir(&share_name) {
-                        Ok(()) => {
-                            info!("{} no longer shared", share_name);
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::EndResponse),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                error!("Channel closed");
-                            }
-                        }
-                        Err(err) => {
-                            warn!("Error removing share dir {}", err);
-                            if response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Err(UiServerError::ShareError(err.to_string())),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                error!("Channel closed");
-                            }
-                        }
-                    };
-                });
-            }
-            Command::RequestedFiles(request_id) => {
-                match self.wishlist.requested_files(request_id) {
-                    Ok(response_iterator) => {
-                        for res in response_iterator {
-                            if self
-                                .response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::RequestedFiles(res)),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                warn!("Response channel closed");
-                                break;
-                            };
-                        }
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                    Err(error) => {
-                        error!("Error getting requested files from wishlist {:?}", error);
-                        // TODO more detailed error should be forwarded
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::RequestError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        };
-                    }
-                }
-            }
-            Command::RemoveRequest(_request_id) => {
-                // TODO self.wishlist.remove_request
-                todo!();
-            }
-            Command::Requests => {
-                match self.wishlist.requested() {
-                    Ok(response_iterator) => {
-                        for res in response_iterator {
-                            if self
-                                .response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::Requests(res)),
-                                })
-                                .await
-                                .is_err()
-                            {
-                                warn!("Response channel closed");
-                                break;
-                            };
-                        }
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::EndResponse),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        }
-                    }
-                    Err(error) => {
-                        error!("Error getting requests from wishlist {:?}", error);
-                        // TODO more detailed error should be forwarded
-                        if self
-                            .response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Err(UiServerError::RequestError),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return Err(HandleUiCommandError::ChannelClosed);
-                        };
-                    }
-                }
-            }
-            Command::ConnectDirect(remote_peer) => {
-                if let Err(err) = self
-                    .peer_discovery
-                    .connect_direct_to_peer(&remote_peer, id)
-                    .await
-                {
-                    if self
-                        .response_tx
-                        .send(UiServerMessage::Response {
-                            id,
-                            response: Err(UiServerError::ConnectionError(err.to_string())),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return Err(HandleUiCommandError::ChannelClosed);
-                    }
-                }
-                // The EndResponse is sent by the connection handler when a connection is established
-            }
-        };
-        Ok(())
-    }
-
     /// Open a request stream and write a request to the given peer
     async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let peers = self.peers.lock().await;
+        let peers = self.shared_state.peers.lock().await;
         let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
         Self::request_peer(request, peer).await
     }
@@ -1085,12 +456,6 @@ fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
     hasher.input(cert.as_ref());
     hasher.result(&mut hash);
     (key_to_animal::key_to_name(&hash), hash)
-}
-
-async fn send_event(sender: Sender<UiServerMessage>, event: UiEvent) {
-    if sender.send(UiServerMessage::Event(event)).await.is_err() {
-        warn!("UI response channel closed");
-    }
 }
 
 /// A stream of Ls responses
