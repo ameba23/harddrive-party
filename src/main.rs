@@ -127,15 +127,14 @@ async fn main() -> anyhow::Result<()> {
             let mut hdp = Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
             println!(
                 "{} listening for peers on {}",
-                hdp.name.green(),
+                hdp.shared_state.name.green(),
                 hdp.server_connection.to_string().yellow(),
             );
 
-            let download_dir = hdp.download_dir.clone();
             let shared_state = hdp.shared_state.clone();
 
             let ui_address: SocketAddr = cli.ui_address.parse()?;
-            http_server(shared_state, ui_address, download_dir).await?;
+            http_server(shared_state, ui_address).await?;
 
             println!(
                 "Announce address {}",

@@ -1,5 +1,9 @@
 //! Http server for serving web-ui as well as static locally available files
-use crate::{hdp::SharedState, ws::handle_socket};
+use crate::{
+    api::{post_connect, post_files, post_shares},
+    hdp::SharedState,
+    ws::handle_socket,
+};
 use axum::{
     extract::{
         ws::{WebSocket, WebSocketUpgrade},
@@ -7,7 +11,7 @@ use axum::{
     },
     http::{Response, StatusCode},
     response::IntoResponse,
-    routing::{any, get},
+    routing::{any, get, post},
     Router,
 };
 use log::error;
@@ -56,20 +60,19 @@ async fn static_handler(Path(file_path): Path<String>) -> impl IntoResponse {
 //     .run(http_sockect_addr)
 //     .await;
 // }
-pub async fn http_server(
-    shared_state: SharedState,
-    addr: SocketAddr,
-    download_dir: PathBuf,
-) -> anyhow::Result<()> {
+pub async fn http_server(shared_state: SharedState, addr: SocketAddr) -> anyhow::Result<()> {
     let app = Router::new()
-        .nest_service("/downloads", ServeDir::new(download_dir))
+        .nest_service(
+            "/downloads",
+            ServeDir::new(shared_state.download_dir.clone()),
+        )
+        .route("/connect", post(post_connect))
         // .route("/peers", get(peers))
-        // .route("/files", get(files))
+        .route("/files", post(post_files))
         // .route("/download", post(download))
-        // .route("/shares", get(shares))
+        .route("/shares", post(post_shares))
         // .route("/shares", put(put_shares))
         // .route("/shares", delete(delete_shares))
-        // .route("/connect", post(connect))
         // .route("/connect", delete(delete_connect))
         // .route("/requests", get(requests))
         // .route("/request", get(request))
@@ -95,4 +98,41 @@ async fn ws_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(shared_state, socket, addr))
+}
+
+use axum::{
+    body::Body,
+    extract::{FromRequest, Request},
+};
+use serde::de::DeserializeOwned;
+use std::convert::Infallible;
+
+pub struct Bincode<T>(pub T);
+
+impl<T, S> FromRequest<S, Body> for Bincode<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, String);
+
+    async fn from_request(req: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
+        let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "Failed to read request body".into(),
+                )
+            })?;
+
+        let obj = bincode::deserialize::<T>(&bytes).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Failed to decode bincode body".into(),
+            )
+        })?;
+
+        Ok(Bincode(obj))
+    }
 }

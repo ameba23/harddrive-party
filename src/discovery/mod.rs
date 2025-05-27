@@ -24,7 +24,7 @@ use tokio::{
     net::UdpSocket,
     sync::{
         mpsc::{channel, Receiver, Sender},
-        Mutex,
+        oneshot, Mutex,
     },
 };
 
@@ -43,13 +43,8 @@ pub struct DiscoveredPeer {
 
 #[derive(Debug, Clone)]
 pub enum DiscoveryMethod {
-    Direct {
-        announce_address: AnnounceAddress,
-        request_id: u32,
-    },
-    Gossip {
-        announce_address: AnnounceAddress,
-    },
+    Direct { announce_address: AnnounceAddress },
+    Gossip { announce_address: AnnounceAddress },
     Mdns,
 }
 
@@ -65,13 +60,6 @@ impl DiscoveryMethod {
             _ => None,
         }
     }
-
-    pub fn get_request_id(&self) -> Option<u32> {
-        match self {
-            DiscoveryMethod::Direct { request_id, .. } => Some(*request_id),
-            _ => None,
-        }
-    }
 }
 
 /// Handles the different peer discovery methods
@@ -82,7 +70,7 @@ pub struct PeerDiscovery {
     /// Our own connection details
     announce_address: AnnounceAddress,
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, DiscoveryMethod>>>,
-    pub peer_announce_tx: Sender<AnnouncePeer>,
+    pub peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
 }
 
@@ -155,47 +143,24 @@ impl PeerDiscovery {
 
         // In a separate task, loop over gossiped peer announcements
         tokio::spawn(async move {
-            while let Some(announce_peer) = peer_announce_rx.recv().await {
+            while let Some(peer_connect) = peer_announce_rx.recv().await {
                 if let Err(err) = handle_peer_announcement(
                     hole_puncher.clone(),
                     own_announce_address.clone(),
                     peers_tx.clone(),
                     pending_peer_connections.clone(),
                     peers.clone(),
-                    DiscoveryMethod::Gossip {
-                        announce_address: announce_peer.announce_address,
-                    },
+                    peer_connect.discovery_method,
                 )
                 .await
                 {
+                    // TODO if there is a response channel, send error
                     warn!("Failed to handle gossiped peer announcement {err}");
                 }
             }
         });
 
         Ok((socket_option, peer_discovery))
-    }
-
-    pub async fn connect_direct_to_peer(
-        &mut self,
-        announce_payload: &str,
-        request_id: u32,
-    ) -> anyhow::Result<()> {
-        let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload)?;
-        let announce_address = AnnounceAddress::from_bytes(announce_address_bytes)?;
-
-        handle_peer_announcement(
-            self.hole_puncher.clone(),
-            self.announce_address.clone(),
-            self.peers_tx.clone(),
-            self.pending_peer_connections.clone(),
-            self.peers.clone(),
-            DiscoveryMethod::Direct {
-                announce_address: announce_address.clone(),
-                request_id,
-            },
-        )
-        .await
     }
 
     pub fn get_pending_peer(&self, socket_address: &SocketAddr) -> Option<DiscoveryMethod> {
@@ -398,4 +363,9 @@ pub async fn handle_peer(
             }
         }
     }
+}
+
+pub struct PeerConnect {
+    pub discovery_method: DiscoveryMethod,
+    pub response_tx: Option<oneshot::Sender<bool>>,
 }

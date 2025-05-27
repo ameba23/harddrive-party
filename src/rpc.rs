@@ -1,6 +1,7 @@
 //! Remote procedure call for share index queries and file uploading
 
 use crate::{
+    discovery::{DiscoveryMethod, PeerConnect},
     shares::{EntryParseError, Shares},
     ui_messages::{UiEvent, UploadInfo},
 };
@@ -36,14 +37,14 @@ pub struct Rpc {
     pub shares: Shares,
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
-    peer_announce_tx: Sender<AnnouncePeer>,
+    peer_announce_tx: Sender<PeerConnect>,
 }
 
 impl Rpc {
     pub fn new(
         shares: Shares,
         event_broadcaster: broadcast::Sender<UiEvent>,
-        peer_announce_tx: Sender<AnnouncePeer>,
+        peer_announce_tx: Sender<PeerConnect>,
     ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
@@ -87,7 +88,16 @@ impl Rpc {
                         log::info!(
                             "Discovered peer through existing peer connection {announce_peer:?}"
                         );
-                        self.peer_announce_tx.send(announce_peer).await.unwrap();
+                        let discovery_method = DiscoveryMethod::Gossip {
+                            announce_address: announce_peer.announce_address,
+                        };
+                        self.peer_announce_tx
+                            .send(PeerConnect {
+                                discovery_method,
+                                response_tx: None,
+                            })
+                            .await
+                            .unwrap();
                     }
                 }
             }
