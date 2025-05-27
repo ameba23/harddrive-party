@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
 
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+pub struct FilesQuery {
+    pub peer_name: Option<String>,
+    pub query: IndexQuery,
+}
+
 /// 'Events' are messages sent from the server which are not in response to a particular
 /// request - eg: to inform the UI that a peer connected or disconnected
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
