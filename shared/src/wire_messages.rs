@@ -17,7 +17,7 @@ pub enum Request {
 }
 
 /// A request to read the remote peer's shared file index
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Eq, Hash, Default)]
 pub struct IndexQuery {
     /// Base directory to query - defaults to all shared directories
     pub path: Option<String>,
@@ -47,7 +47,7 @@ pub enum LsResponse {
 }
 
 /// A file or directory entry in a share query response
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
 pub struct Entry {
     /// Path and filename
     pub name: String,

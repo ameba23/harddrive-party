@@ -1,7 +1,8 @@
 //! Main program loop handling connections to/from peers and messages to/from the UI
 
 use crate::{
-    discovery::{DiscoveredPeer, DiscoveryMethod, PeerDiscovery},
+    api::UiServerErrorWrapper,
+    discovery::{DiscoveredPeer, DiscoveryMethod, PeerConnect, PeerDiscovery},
     peer::Peer,
     quic::{
         generate_certificate, get_certificate_from_connection, make_server_endpoint,
@@ -10,21 +11,19 @@ use crate::{
     rpc::Rpc,
     shares::Shares,
     ui_messages::{UiEvent, UiServerError},
-    wire_messages::{AnnouncePeer, Entry, IndexQuery, LsResponse, Request},
-    wishlist::{DownloadRequest, RequestedFile, WishList},
+    wire_messages::{AnnounceAddress, AnnouncePeer, Entry, Request},
+    wishlist::WishList,
 };
-use async_stream::try_stream;
-use bincode::{deserialize, serialize};
+use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
+use bincode::serialize;
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
-use futures::{pin_mut, stream::BoxStream, StreamExt};
-use harddrive_party_shared::ui_messages::{DownloadInfo, DownloadResponse, PeerRemoteOrSelf};
+use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
 use log::{debug, error, info, warn};
 use lru::LruCache;
 use quinn::{Endpoint, RecvStream};
 use rustls::Certificate;
 use std::{
-    collections::{hash_map, HashMap},
-    num::NonZeroUsize,
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -34,8 +33,8 @@ use tokio::{
     select,
     sync::{
         broadcast,
-        mpsc::{channel, Receiver, Sender},
-        Mutex,
+        mpsc::{channel, Sender},
+        oneshot, Mutex,
     },
 };
 
@@ -73,10 +72,14 @@ pub struct SharedState {
     pub wishlist: WishList,
     /// Channel for sending events to the UI
     pub event_broadcaster: broadcast::Sender<UiEvent>,
+    /// Channel for announcing peers to connect to
+    peer_announce_tx: Sender<PeerConnect>,
     /// Download directory
     pub download_dir: PathBuf,
     /// A name derived from our public key
     pub name: String,
+    /// Our own connection details
+    pub announce_address: AnnounceAddress,
 }
 
 impl SharedState {
@@ -102,6 +105,34 @@ impl SharedState {
         send.finish().await?;
         debug!("message sent");
         Ok(recv)
+    }
+
+    pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
+        let bytes = self.announce_address.to_bytes();
+        Ok(BASE64_STANDARD_NO_PAD.encode(&bytes))
+    }
+
+    pub async fn connect_to_peer(
+        &self,
+        announce_address: AnnounceAddress,
+    ) -> Result<(), UiServerErrorWrapper> {
+        let discovery_method = DiscoveryMethod::Direct {
+            announce_address: announce_address.clone(),
+        };
+
+        let (response_tx, response_rx) = oneshot::channel();
+        let peer_connect = PeerConnect {
+            discovery_method,
+            response_tx: Some(response_tx),
+        };
+        self.peer_announce_tx
+            .send(peer_connect)
+            .await
+            .map_err(|_| {
+                UiServerError::PeerDiscovery("Peer announce channel closed".to_string())
+            })?;
+
+        response_rx.await?
     }
 }
 
@@ -192,24 +223,26 @@ impl Hdp {
 
         let (event_broadcaster, _rx) = broadcast::channel(65536);
 
-        // Notify the UI of our own details
-        event_broadcaster.send(UiEvent::PeerConnected {
-            name: name.clone(),
-            peer_type: PeerRemoteOrSelf::Me {
-                os_home_dir,
-                announce_address: peer_discovery.get_ui_announce_address()?,
-            },
-        })?;
-
         let shared_state = SharedState {
             wishlist,
             shares: shares.clone(),
             peers,
             ls_cache: Default::default(),
             event_broadcaster: event_broadcaster.clone(),
+            peer_announce_tx: peer_discovery.peer_announce_tx.clone(),
             download_dir,
-            name,
+            name: name.clone(),
+            announce_address: peer_discovery.announce_address.clone(),
         };
+
+        // Notify the UI of our own details
+        event_broadcaster.send(UiEvent::PeerConnected {
+            name,
+            peer_type: PeerRemoteOrSelf::Me {
+                os_home_dir,
+                announce_address: shared_state.get_ui_announce_address()?,
+            },
+        })?;
 
         Ok(Self {
             shared_state: shared_state.clone(),
@@ -256,7 +289,7 @@ impl Hdp {
     }
 
     pub fn get_announce_address(&self) -> anyhow::Result<String> {
-        self.peer_discovery.get_ui_announce_address()
+        self.shared_state.get_ui_announce_address()
     }
 
     /// Handle a QUIC connection from/to another peer
@@ -528,152 +561,4 @@ pub fn get_timestamp() -> Duration {
     system_time
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("Time went backwards")
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::wire_messages::{Entry, ReadQuery};
-
-    use super::*;
-    use tempfile::TempDir;
-
-    async fn setup_peer(share_dirs: Vec<String>) -> Hdp {
-        let storage = TempDir::new().unwrap();
-        let downloads = storage.path().to_path_buf();
-        Hdp::new(storage, share_dirs, downloads, true)
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_read() -> Result<(), Box<dyn std::error::Error>> {
-        let mut alice = setup_peer(vec!["tests/test-data".to_string()]).await;
-        let alice_name = alice.shared_state.name.clone();
-
-        tokio::spawn(async move {
-            alice.run().await;
-        });
-
-        let mut bob = setup_peer(vec![]).await;
-        let mut bob_rx = bob.shared_state.event_broadcaster.subscribe();
-
-        tokio::spawn(async move {
-            bob.run().await;
-        });
-
-        // Wait until they connect to each other using mDNS
-        while let event = bob_rx.recv().await.unwrap() {
-            if let UiEvent::PeerConnected { name, peer_type: _ } = event {
-                if name == alice_name {
-                    break;
-                }
-            }
-        }
-        //
-        //     // Do a read request
-        //     let req = ReadQuery {
-        //         path: "test-data/somefile".to_string(),
-        //         start: None,
-        //         end: None,
-        //     };
-        //     bob_command_tx
-        //         .send(UiClientMessage {
-        //             id: 2,
-        //             command: Command::Read(req, alice_name.clone()),
-        //         })
-        //         .await
-        //         .unwrap();
-        //
-        //     while let Some(res) = bob_rx.recv().await {
-        //         if let UiServerMessage::Response { id: _, response } = res {
-        //             assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
-        //             break;
-        //         }
-        //     }
-        //
-        //     // // Do an Ls query
-        //     let req = IndexQuery {
-        //         path: None,
-        //         searchterm: None,
-        //         recursive: true,
-        //     };
-        //     bob_command_tx
-        //         .send(UiClientMessage {
-        //             id: 3,
-        //             command: Command::Ls(req, Some(alice_name)),
-        //         })
-        //         .await
-        //         .unwrap();
-        //
-        //     let mut entries = Vec::new();
-        //     while let Some(res) = bob_rx.recv().await {
-        //         if let UiServerMessage::Response { id, response } = res {
-        //             match response.unwrap() {
-        //                 UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
-        //                     for entry in some_entries {
-        //                         entries.push(entry);
-        //                     }
-        //                 }
-        //                 UiResponse::EndResponse => {
-        //                     if id == 3 {
-        //                         break;
-        //                     }
-        //                 }
-        //                 _ => {}
-        //             }
-        //         }
-        //     }
-        //     let test_entries = create_test_entries();
-        //     assert_eq!(test_entries, entries);
-        //
-        //     // Close the connection
-        //     alice_command_tx
-        //         .send(UiClientMessage {
-        //             id: 3,
-        //             command: Command::Close,
-        //         })
-        //         .await
-        //         .unwrap();
-        Ok(())
-    }
-
-    fn create_test_entries() -> Vec<Entry> {
-        vec![
-            Entry {
-                name: "".to_string(),
-                size: 17,
-                is_dir: true,
-            },
-            Entry {
-                name: "test-data".to_string(),
-                size: 17,
-                is_dir: true,
-            },
-            Entry {
-                name: "test-data/subdir".to_string(),
-                size: 12,
-                is_dir: true,
-            },
-            Entry {
-                name: "test-data/subdir/subsubdir".to_string(),
-                size: 6,
-                is_dir: true,
-            },
-            Entry {
-                name: "test-data/somefile".to_string(),
-                size: 5,
-                is_dir: false,
-            },
-            Entry {
-                name: "test-data/subdir/anotherfile".to_string(),
-                size: 6,
-                is_dir: false,
-            },
-            Entry {
-                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
-                size: 6,
-                is_dir: false,
-            },
-        ]
-    }
 }

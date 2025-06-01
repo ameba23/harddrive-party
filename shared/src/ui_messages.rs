@@ -1,6 +1,6 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
+use crate::wire_messages::{IndexQuery, LsResponse};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
@@ -26,7 +26,7 @@ pub enum UiEvent {
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
     /// Download
-    Download(DownloadResponse),
+    Download(DownloadEvent),
 }
 
 /// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
@@ -82,7 +82,6 @@ pub struct UploadInfo {
 /// Response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiResponse {
-    Download(DownloadResponse),
     Read(Vec<u8>),
     Ls(LsResponse, String),
     Shares(LsResponse),
@@ -90,7 +89,6 @@ pub enum UiResponse {
     RemoveShare,
     Requests(Vec<UiDownloadRequest>),
     RequestedFiles(Vec<UiRequestedFile>),
-    EndResponse,
 }
 
 /// An error in response to a UI command
@@ -102,11 +100,16 @@ pub enum UiServerError {
     RequestError, // TODO
     #[error("Error when updating shared directory")]
     ShareError(String),
+    #[error("Serialization: {0}")]
+    Serialization(String),
+    #[error("Peer discovery: {0}")]
+    PeerDiscovery(String),
+    #[error("Poisoned lock")]
+    Poison,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum DownloadInfo {
-    Requested(Duration),
     Downloading {
         /// File path of currently downloading file
         path: String,
@@ -122,7 +125,8 @@ pub enum DownloadInfo {
 
 /// A response to a download request
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct DownloadResponse {
+pub struct DownloadEvent {
+    pub request_id: u32,
     /// File path of requested file of directory
     pub path: String,
     /// Name of the peer who holds the file or directory
@@ -131,12 +135,9 @@ pub struct DownloadResponse {
     // pub total_size: u64,
 }
 
-impl fmt::Display for DownloadResponse {
+impl fmt::Display for DownloadEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.download_info {
-            DownloadInfo::Requested(_time) => {
-                write!(f, "Requested {}/{}", self.peer_name, self.path)
-            }
             DownloadInfo::Downloading {
                 path,
                 bytes_read,

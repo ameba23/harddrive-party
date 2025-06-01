@@ -1,4 +1,5 @@
 pub mod api;
+pub mod client;
 pub mod discovery;
 pub mod hdp;
 pub mod http;

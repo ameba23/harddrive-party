@@ -134,7 +134,9 @@ async fn main() -> anyhow::Result<()> {
             let shared_state = hdp.shared_state.clone();
 
             let ui_address: SocketAddr = cli.ui_address.parse()?;
-            http_server(shared_state, ui_address).await?;
+            let addr = http_server(shared_state, ui_address).await?;
+
+            println!("Web UI served on http://{}", addr);
 
             println!(
                 "Announce address {}",

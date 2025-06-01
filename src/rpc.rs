@@ -125,13 +125,13 @@ impl Rpc {
                     })?;
 
                     // Write the length prefix
-                    // TODO this should be a varint
-                    let length: u64 = buf
+                    // TODO use big endian, u32
+                    let length: u32 = buf
                         .len()
                         .try_into()
                         .map_err(|_| RpcError::U64ConvertError)?;
                     debug!("Writing prefix {length}");
-                    output.write_all(&length.to_le_bytes()).await?;
+                    output.write_all(&length.to_be_bytes()).await?;
 
                     output.write_all(&buf).await?;
                     debug!("Written ls response");

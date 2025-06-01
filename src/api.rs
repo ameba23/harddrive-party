@@ -1,9 +1,10 @@
 use crate::{
-    discovery::{DiscoveryMethod, PeerConnect},
+    discovery::hole_punch::HolePunchError,
     hdp::SharedState,
     http::Bincode,
     ui_messages::{FilesQuery, UiResponse, UiServerError},
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, Request},
+    wishlist::{DownloadRequest, RequestedFile},
 };
 use async_stream::try_stream;
 use axum::{
@@ -14,12 +15,12 @@ use axum::{
     Json,
 };
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
+use bytes::{BufMut, BytesMut};
 use futures::{channel::mpsc, pin_mut, StreamExt};
 use log::{debug, error, warn};
+use rand::{rngs::OsRng, Rng};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use thiserror::Error;
-use tokio::sync::{oneshot, Mutex};
 
 pub async fn version() -> String {
     "1".to_string()
@@ -32,18 +33,8 @@ pub async fn post_connect(
 ) -> Result<StatusCode, UiServerErrorWrapper> {
     let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload).unwrap();
     let announce_address = AnnounceAddress::from_bytes(announce_address_bytes).unwrap();
-    let (response_tx, response_rx) = oneshot::channel();
 
-    let discovery_method = DiscoveryMethod::Direct {
-        announce_address: announce_address.clone(),
-    };
-
-    let peer_connect = PeerConnect {
-        discovery_method,
-        response_tx: Some(response_tx),
-    };
-    //shared_state.
-    //now wait for peer_connect event - or a timeout
+    shared_state.connect_to_peer(announce_address).await?;
     Ok(StatusCode::OK)
 }
 
@@ -52,7 +43,7 @@ pub async fn post_files(
     State(shared_state): State<SharedState>,
     Bincode(files_query): Bincode<FilesQuery>,
 ) -> Result<(StatusCode, Body), UiServerErrorWrapper> {
-    let (mut response_tx, response_rx) = mpsc::channel(256);
+    let (response_tx, response_rx) = mpsc::channel(256);
 
     // If no name given send the query to all connected peers
     let requests = match files_query.peer_name {
@@ -79,10 +70,6 @@ pub async fn post_files(
     //     return Ok(StatusCode::OK);
     // }
 
-    // Track how many remaining requests there are, so we can terminate the response
-    // when all are finished
-    let remaining_responses: Arc<Mutex<usize>> = Arc::new(Mutex::new(requests.len()));
-
     for (request, peer_name) in requests {
         // // First check the local cache for an existing response
         // let mut cache = self.ls_cache.lock().await;
@@ -108,46 +95,24 @@ pub async fn post_files(
         //                 break;
         //             }
         //         }
-        //         // Terminate with an endresponse
-        //         // If there was more then one peer we need to only
-        //         // send this if we are the last one
-        //         let mut remaining = remaining_responses.lock().await;
-        //         *remaining -= 1;
-        //         if *remaining == 0
-        //             && self
-        //                 .response_tx
-        //                 .send(UiServerMessage::Response {
-        //                     id,
-        //                     response: Ok(UiResponse::EndResponse),
-        //                 })
-        //                 .await
-        //                 .is_err()
-        //         {
-        //             warn!("Response channel closed");
-        //             break;
-        //         }
         //         continue;
         //     }
         // }
 
         debug!("Sending ls query to {}", peer_name);
-        let req_clone = request.clone();
         let peer_name_clone = peer_name.clone();
 
         match shared_state.request(request, &peer_name).await {
             Ok(recv) => {
-                let remaining_responses_clone = remaining_responses.clone();
                 // let ls_cache = self.ls_cache.clone();
                 let ls_response_stream = {
                     match process_length_prefix(recv).await {
                         Ok(ls_response_stream) => ls_response_stream,
                         Err(error) => {
                             warn!("Could not process length prefix {}", error);
-                            return Err(UiServerErrorWrapper::Server(
-                                UiServerError::ConnectionError(
-                                    "Could not process length prefix".to_string(),
-                                ),
-                            ));
+                            return Err(UiServerErrorWrapper(UiServerError::ConnectionError(
+                                "Could not process length prefix".to_string(),
+                            )));
                         }
                     }
                 };
@@ -163,16 +128,13 @@ pub async fn post_files(
                         if let LsResponse::Success(entries) = ls_response.clone() {
                             cached_entries.push(entries);
                         }
-
-                        if response_tx
-                            .try_send(
-                                bincode::serialize(&Ok::<UiResponse, UiServerError>(
-                                    UiResponse::Ls(ls_response, peer_name_clone.to_string()),
-                                ))
-                                .unwrap(),
-                            )
-                            .is_err()
-                        {
+                        let serialized_res = bincode::serialize(&Ok::<UiResponse, UiServerError>(
+                            UiResponse::Ls(ls_response, peer_name_clone.to_string()),
+                        ))
+                        .unwrap();
+                        let serialized_res = create_length_prefixed_message(&serialized_res);
+                        println!("Sending a res");
+                        if response_tx.try_send(serialized_res).is_err() {
                             warn!("Response channel closed");
                             break;
                         }
@@ -186,40 +148,11 @@ pub async fn post_files(
                     //     );
                     //     peer_cache.put(req_clone, cached_entries);
                     // }
-
-                    // Terminate with an endresponse
-                    // If there was more then one peer we need to only
-                    // send this if we are the last one
-                    let mut remaining = remaining_responses_clone.lock().await;
-                    *remaining -= 1;
-                    if *remaining == 0
-                        && response_tx
-                            .try_send(
-                                bincode::serialize(&Ok::<UiResponse, UiServerError>(
-                                    UiResponse::EndResponse,
-                                ))
-                                .unwrap(),
-                            )
-                            .is_err()
-                    {
-                        warn!("Response channel closed");
-                    }
                 });
             }
             Err(err) => {
                 error!("Error from remote peer following ls query {:?}", err);
-                // TODO map the error
-                if response_tx
-                    .try_send(
-                        bincode::serialize(&Err::<UiResponse, UiServerError>(
-                            UiServerError::RequestError,
-                        ))
-                        .unwrap(),
-                    )
-                    .is_err()
-                {
-                    error!("Channel closed");
-                }
+                return Err(UiServerErrorWrapper(UiServerError::RequestError));
             }
         }
     }
@@ -242,17 +175,21 @@ pub async fn post_shares(
             let (mut response_tx, response_rx) = mpsc::channel(256);
             tokio::spawn(async move {
                 for res in response_iterator {
-                    if response_tx
-                        .try_send(
-                            bincode::serialize(&Ok::<UiResponse, UiServerError>(
-                                UiResponse::Shares(res),
-                            ))
-                            .unwrap(),
-                        )
-                        .is_err()
-                    {
-                        warn!("Response channel closed");
-                    };
+                    match bincode::serialize(&Ok::<LsResponse, UiServerError>(res)) {
+                        Ok(serialized_res) => {
+                            let serialized_res = create_length_prefixed_message(&serialized_res);
+                            if response_tx.try_send(serialized_res).is_err() {
+                                warn!(
+                                    "Response channel closed - probably the UI client disconnected"
+                                );
+                                break;
+                            };
+                        }
+                        Err(err) => {
+                            error!("Could not serialize response: {err}");
+                            continue;
+                        }
+                    }
                 }
             });
 
@@ -261,11 +198,95 @@ pub async fn post_shares(
         }
         Err(error) => {
             warn!("Error querying own shares {:?}", error);
-            Err(UiServerErrorWrapper::Server(UiServerError::ShareError(
+            Err(UiServerErrorWrapper(UiServerError::ShareError(
                 error.to_string(),
             )))
         }
     }
+}
+
+pub async fn post_download(
+    State(shared_state): State<SharedState>,
+    // TODO use UI peerpath type
+    Bincode((path, peer_name)): Bincode<(String, String)>,
+) -> Result<(StatusCode, u32), UiServerErrorWrapper> {
+    // Get details of the file / dir
+    let ls_request = Request::Ls(IndexQuery {
+        path: Some(path.clone()),
+        searchterm: None,
+        recursive: true,
+    });
+    //             // let mut cache = self.ls_cache.lock().await;
+    //             //
+    //             // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
+    //             //     cache.entry(peer_name.clone())
+    //             // {
+    //             //     let peer_cache = peer_cache_entry.get_mut();
+    //             //     if let Some(responses) = peer_cache.get(&ls_request) {
+    //             //         debug!("Found existing responses in cache");
+    //             //         for entries in responses.iter() {
+    //             //             for entry in entries.iter() {
+    //             //                 debug!("Adding {} to wishlist dir: {}", entry.name, entry.is_dir);
+    //             //             }
+    //             //         }
+    //             //     } else {
+    //             //         debug!("Found nothing in cache");
+    //             //     }
+    //             // }
+    //
+    let recv = shared_state.request(ls_request, &peer_name).await.unwrap();
+    let peer_public_key = {
+        let peers = shared_state.peers.lock().await;
+        match peers.get(&peer_name) {
+            Some(peer) => peer.public_key,
+            None => {
+                warn!("Handling request to download a file from a peer who is not connected");
+                // TODO return an error
+                return Err(
+                    UiServerError::ConnectionError("Peer not connected".to_string()).into(),
+                );
+            }
+        }
+    };
+    let mut rng = OsRng;
+    let id: u32 = rng.gen();
+
+    let ls_response_stream = process_length_prefix(recv).await.unwrap();
+    pin_mut!(ls_response_stream);
+    while let Some(Ok(ls_response)) = ls_response_stream.next().await {
+        if let LsResponse::Success(entries) = ls_response {
+            for entry in entries.iter() {
+                if entry.name == path {
+                    if let Err(err) = shared_state.wishlist.add_request(&DownloadRequest::new(
+                        entry.name.clone(),
+                        entry.size,
+                        id,
+                        peer_public_key,
+                    )) {
+                        error!("Cannot add download request {:?}", err);
+                    }
+                }
+                if !entry.is_dir {
+                    debug!("Adding {} to wishlist", entry.name);
+
+                    if let Err(err) = shared_state.wishlist.add_requested_file(&RequestedFile {
+                        path: entry.name.clone(),
+                        size: entry.size,
+                        request_id: id,
+                        downloaded: false,
+                    }) {
+                        error!("Cannot make download request {:?}", err);
+                    };
+                }
+            }
+        }
+    }
+    // TODO consider replacing this reponse with a DownloadResponse struct with timestamp
+    //         response: Ok(UiResponse::Download(DownloadResponse {
+    //             download_info: DownloadInfo::Requested(get_timestamp()),
+    //             path,
+    //             peer_name,
+    Ok((StatusCode::OK, id))
 }
 
 //         Command::Close => {
@@ -275,129 +296,6 @@ pub async fn post_shares(
 //             }
 //             // TODO call flush on sled db
 //             return Ok(());
-//         }
-//         Command::Download { path, peer_name } => {
-//             // Get details of the file / dir
-//             let ls_request = Request::Ls(IndexQuery {
-//                 path: Some(path.clone()),
-//                 searchterm: None,
-//                 recursive: true,
-//             });
-//             // let mut cache = self.ls_cache.lock().await;
-//             //
-//             // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
-//             //     cache.entry(peer_name.clone())
-//             // {
-//             //     let peer_cache = peer_cache_entry.get_mut();
-//             //     if let Some(responses) = peer_cache.get(&ls_request) {
-//             //         debug!("Found existing responses in cache");
-//             //         for entries in responses.iter() {
-//             //             for entry in entries.iter() {
-//             //                 debug!("Adding {} to wishlist dir: {}", entry.name, entry.is_dir);
-//             //             }
-//             //         }
-//             //     } else {
-//             //         debug!("Found nothing in cache");
-//             //     }
-//             // }
-//
-//             match self.request(ls_request, &peer_name).await {
-//                 Ok(recv) => {
-//                     let peer_public_key = {
-//                         let peers = self.peers.lock().await;
-//                         match peers.get(&peer_name) {
-//                             Some(peer) => peer.public_key,
-//                             None => {
-//                                 warn!("Handling request to download a file from a peer who is not connected");
-//                                 if self
-//                                     .response_tx
-//                                     .send(UiServerMessage::Response {
-//                                         id,
-//                                         response: Err(UiServerError::RequestError),
-//                                     })
-//                                     .await
-//                                     .is_err()
-//                                 {
-//                                     return Err(HandleUiCommandError::ChannelClosed);
-//                                 } else {
-//                                     return Ok(());
-//                                 }
-//                             }
-//                         }
-//                     };
-//                     let response_tx = self.response_tx.clone();
-//                     let wishlist = self.wishlist.clone();
-//                     tokio::spawn(async move {
-//                         if let Ok(ls_response_stream) = process_length_prefix(recv).await {
-//                             pin_mut!(ls_response_stream);
-//                             while let Some(Ok(ls_response)) = ls_response_stream.next().await {
-//                                 if let LsResponse::Success(entries) = ls_response {
-//                                     for entry in entries.iter() {
-//                                         if entry.name == path {
-//                                             if let Err(err) =
-//                                                 wishlist.add_request(&DownloadRequest::new(
-//                                                     entry.name.clone(),
-//                                                     entry.size,
-//                                                     id,
-//                                                     peer_public_key,
-//                                                 ))
-//                                             {
-//                                                 error!("Cannot add download request {:?}", err);
-//                                             }
-//                                         }
-//                                         if !entry.is_dir {
-//                                             debug!("Adding {} to wishlist", entry.name);
-//
-//                                             if let Err(err) =
-//                                                 wishlist.add_requested_file(&RequestedFile {
-//                                                     path: entry.name.clone(),
-//                                                     size: entry.size,
-//                                                     request_id: id,
-//                                                     downloaded: false,
-//                                                 })
-//                                             {
-//                                                 error!(
-//                                                     "Cannot make download request {:?}",
-//                                                     err
-//                                                 );
-//                                             };
-//                                         }
-//                                     }
-//                                 }
-//                             }
-//                             // Inform the UI that the request has been made
-//                             if response_tx
-//                                 .send(UiServerMessage::Response {
-//                                     id,
-//                                     response: Ok(UiResponse::Download(DownloadResponse {
-//                                         download_info: DownloadInfo::Requested(get_timestamp()),
-//                                         path,
-//                                         peer_name,
-//                                     })),
-//                                 })
-//                                 .await
-//                                 .is_err()
-//                             {
-//                                 // log error
-//                             }
-//                         }
-//                     });
-//                 }
-//                 Err(error) => {
-//                     error!("Error from remote peer when making query {:?}", error);
-//                     if self
-//                         .response_tx
-//                         .send(UiServerMessage::Response {
-//                             id,
-//                             response: Err(UiServerError::RequestError),
-//                         })
-//                         .await
-//                         .is_err()
-//                     {
-//                         return Err(HandleUiCommandError::ChannelClosed);
-//                     }
-//                 }
-//             }
 //         }
 //         Command::Read(read_query, peer_name) => {
 //             let request = Request::Read(read_query);
@@ -634,9 +532,36 @@ pub async fn post_shares(
 //     };
 /// An error in response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
-pub enum UiServerErrorWrapper {
-    #[error("Error: {0}")]
-    Server(#[from] UiServerError),
+pub struct UiServerErrorWrapper(UiServerError);
+
+impl std::fmt::Display for UiServerErrorWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<UiServerError> for UiServerErrorWrapper {
+    fn from(error: UiServerError) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(error)
+    }
+}
+
+impl<T> From<std::sync::PoisonError<T>> for UiServerErrorWrapper {
+    fn from(_error: std::sync::PoisonError<T>) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::Poison)
+    }
+}
+
+impl From<HolePunchError> for UiServerErrorWrapper {
+    fn from(error: HolePunchError) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::PeerDiscovery(error.to_string()))
+    }
+}
+
+impl From<tokio::sync::oneshot::error::RecvError> for UiServerErrorWrapper {
+    fn from(error: tokio::sync::oneshot::error::RecvError) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::PeerDiscovery(error.to_string()))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -649,7 +574,7 @@ impl IntoResponse for UiServerErrorWrapper {
     fn into_response(self) -> Response {
         log::error!("{self:?}");
         let error_response = ErrorResponse {
-            error: self.to_string(),
+            error: self.0.to_string(),
             message: format!("{self:?}"),
         };
         (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
@@ -662,11 +587,10 @@ type LsResponseStream = futures::stream::BoxStream<'static, anyhow::Result<LsRes
 /// Process responses that are prefixed with their length in bytes
 async fn process_length_prefix(mut recv: quinn::RecvStream) -> anyhow::Result<LsResponseStream> {
     // Read the length prefix
-    // TODO this should be a varint
-    let mut length_buf: [u8; 8] = [0; 8];
+    let mut length_buf: [u8; 4] = [0; 4];
     let stream = try_stream! {
         while let Ok(()) = recv.read_exact(&mut length_buf).await {
-            let length: u64 = u64::from_le_bytes(length_buf);
+            let length: u32 = u32::from_be_bytes(length_buf);
             debug!("Read prefix {length}");
 
             // Read a message
@@ -685,4 +609,12 @@ async fn process_length_prefix(mut recv: quinn::RecvStream) -> anyhow::Result<Ls
         }
     };
     Ok(stream.boxed())
+}
+
+/// This is used for http responses for the files and shares routes
+fn create_length_prefixed_message(message: &[u8]) -> BytesMut {
+    let mut buf = BytesMut::with_capacity(4 + message.len());
+    buf.put_u32(message.len() as u32); // 4-byte big-endian length prefix
+    buf.put_slice(message);
+    buf
 }

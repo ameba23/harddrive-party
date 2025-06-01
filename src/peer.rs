@@ -6,14 +6,13 @@ use std::{
 
 use crate::{
     hdp::get_timestamp,
-    ui_messages::{DownloadResponse, UiEvent, UiResponse},
+    ui_messages::{DownloadEvent, DownloadInfo, UiEvent},
     wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::anyhow;
 use bincode::serialize;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::ui_messages::DownloadInfo;
 use key_to_animal::key_to_name;
 use log::{debug, error, warn};
 use quinn::{Connection, RecvStream};
@@ -114,7 +113,8 @@ async fn process_requests(
                         // TODO here we could also send an EndResponse message
                         if request_complete
                             && event_broadcaster
-                                .send(UiEvent::Download(DownloadResponse {
+                                .send(UiEvent::Download(DownloadEvent {
+                                    request_id: id,
                                     path: associated_request.path.clone(),
                                     peer_name: peer_name.clone(),
                                     download_info: DownloadInfo::Completed(get_timestamp()),
@@ -199,7 +199,8 @@ async fn download(
                         bytes_read_since_last_ui_update = 0;
 
                         if event_broadcaster
-                            .send(UiEvent::Download(DownloadResponse {
+                            .send(UiEvent::Download(DownloadEvent {
+                                request_id: id,
                                 path: associated_request.path.clone(),
                                 peer_name: peer_name.clone(),
                                 download_info: DownloadInfo::Downloading {
@@ -245,7 +246,8 @@ async fn download(
     }
     // Send a final update to give the UI an accurate report on bytes downloaded
     if event_broadcaster
-        .send(UiEvent::Download(DownloadResponse {
+        .send(UiEvent::Download(DownloadEvent {
+            request_id: id,
             peer_name: peer_name.clone(),
             path: associated_request.path.clone(),
             download_info: DownloadInfo::Downloading {

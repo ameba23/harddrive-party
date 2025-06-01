@@ -1,6 +1,5 @@
 //! Udp hole-punch logic
 //! A lot of this is copied from <https://github.com/Frando/quinn-holepunch>
-use anyhow::anyhow;
 use futures::ready;
 use log::{debug, info, warn};
 use rand::{Rng, SeedableRng};
@@ -11,6 +10,7 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
+use thiserror::Error;
 use tokio::{
     io::Interest,
     net::UdpSocket,
@@ -183,7 +183,7 @@ pub struct HolePuncher {
 
 impl HolePuncher {
     /// Make a connection by holepunching
-    pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> anyhow::Result<()> {
+    pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> Result<(), HolePunchError> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
         let mut packet = OutgoingHolepunchPacket {
             dest: addr,
@@ -205,7 +205,7 @@ impl HolePuncher {
                       debug!("sent initial packet to {addr}, waiting");
                       attempts += 1;
                       if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
-                          return Err(anyhow!("Reached max holepunch attempts - giving up"));
+                          return Err(HolePunchError::MaxAttempts);
                       }
                   } else {
                       debug!("sent ack packet to {addr}, waiting");
@@ -249,7 +249,7 @@ impl HolePuncher {
     pub async fn hole_punch_peer_without_port(
         &mut self,
         addr: IpAddr,
-    ) -> anyhow::Result<SocketAddr> {
+    ) -> Result<SocketAddr, HolePunchError> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
 
         let stop_signal = Arc::new(RwLock::new(false));
@@ -320,7 +320,7 @@ const ACK_PUNCH: [u8; 1] = [1];
 
 pub async fn birthday_hard_side(
     target_addr: SocketAddr,
-) -> anyhow::Result<(UdpSocket, SocketAddr)> {
+) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
     let (socket_tx, socket_rx) = std_mpsc::channel(); // TODO limit
     let (stop_signal_tx, _stop_signal_rx) = broadcast::channel(1);
 
@@ -364,6 +364,26 @@ pub async fn birthday_hard_side(
     // TODO we should have a timeout here
     let socket = socket_rx.recv()?;
     // This stops all the listener tasks
-    stop_signal_tx.send(true)?;
+    stop_signal_tx
+        .send(true)
+        .map_err(|_| HolePunchError::Broadcast)?;
     Ok((socket, target_addr))
+}
+
+#[derive(Error, Debug)]
+pub enum HolePunchError {
+    #[error("MPSC recv: {0}")]
+    MpSc(#[from] std::sync::mpsc::RecvError),
+    #[error("Could not send stop signal due to broadcaster error")]
+    Broadcast,
+    #[error("IO: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Reached max holepunch attempts - giving up")]
+    MaxAttempts,
+    #[error("Broadcast receive: {0}")]
+    BroadCastRecv(#[from] tokio::sync::broadcast::error::RecvError),
+    #[error("Panic during task which sends outgoing packets")]
+    Join(#[from] tokio::task::JoinError),
+    #[error("Could not send holepunch packet - channel closed")]
+    MpscSend(#[from] tokio::sync::mpsc::error::SendError<OutgoingHolepunchPacket>),
 }
