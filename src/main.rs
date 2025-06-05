@@ -1,14 +1,15 @@
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use futures::StreamExt;
 use harddrive_party::{
-    hdp::Hdp,
-    http::http_server,
-    ui_messages::UiResponse,
+    ui_messages::{DownloadInfo, UiEvent, UiResponse},
+    ui_server::{client::Client, http_server},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
+    Hdp,
 };
 use std::{env, net::SocketAddr, path::PathBuf};
-use tokio::{fs::create_dir_all, net::TcpListener};
+use tokio::fs::create_dir_all;
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]
@@ -140,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
 
             println!(
                 "Announce address {}",
-                hdp.get_announce_address().unwrap_or_default()
+                hdp.shared_state.get_ui_announce_address()
             );
 
             hdp.run().await;
@@ -159,184 +160,141 @@ async fn main() -> anyhow::Result<()> {
                 None => (None, None),
             };
 
-            // let mut responses = harddrive_party::ws::single_client_command(
-            //     ui_addr,
-            //     Command::Ls(
-            //         IndexQuery {
-            //             path: peer_path,
-            //             searchterm,
-            //             recursive: recursive.unwrap_or(true),
-            //         },
-            //         peer_name,
-            //     ),
-            // )
-            // .await?;
-            // while let Some(response) = responses.recv().await {
-            //     match response {
-            //         Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
-            //             LsResponse::Success(entries) => {
-            //                 for entry in entries {
-            //                     if entry.is_dir {
-            //                         println!(
-            //                             "{} {} bytes",
-            //                             format!("[{}/{}]", peer_name, entry.name).blue(),
-            //                             entry.size
-            //                         );
-            //                     } else {
-            //                         println!("{}/{} {}", peer_name, entry.name, entry.size);
-            //                     }
-            //                 }
-            //             }
-            //             LsResponse::Err(err) => {
-            //                 println!("Error from peer {:?}", err);
-            //             }
-            //         },
-            //         Ok(UiResponse::EndResponse) => {
-            //             break;
-            //         }
-            //         Ok(some_other_response) => {
-            //             println!("Got unexpected response {:?}", some_other_response);
-            //         }
-            //         Err(e) => {
-            //             println!("Error from WS server {:?}", e);
-            //             break;
-            //         }
-            //     }
-            // }
+            let client = Client::new(cli.ui_address.parse()?).await?;
+            let mut responses = client
+                .files(harddrive_party::ui_messages::FilesQuery {
+                    peer_name,
+                    query: IndexQuery {
+                        path: peer_path,
+                        searchterm,
+                        recursive: recursive.unwrap_or(true),
+                    },
+                })
+                .await?;
+
+            while let Some(response) = responses.next().await {
+                match response {
+                    Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
+                        LsResponse::Success(entries) => {
+                            for entry in entries {
+                                if entry.is_dir {
+                                    println!(
+                                        "{} {} bytes",
+                                        format!("[{}/{}]", peer_name, entry.name).blue(),
+                                        entry.size
+                                    );
+                                } else {
+                                    println!("{}/{} {}", peer_name, entry.name, entry.size);
+                                }
+                            }
+                        }
+                        LsResponse::Err(err) => {
+                            println!("Error from peer {:?}", err);
+                        }
+                    },
+                    Ok(some_other_response) => {
+                        println!("Got unexpected response {:?}", some_other_response);
+                    }
+                    Err(e) => {
+                        println!("Error from WS server {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Shares {
             path,
             searchterm,
             recursive,
         } => {
-            // let mut responses = harddrive_party::ws::single_client_command(
-            //     ui_addr,
-            //     Command::Shares(IndexQuery {
-            //         path,
-            //         searchterm,
-            //         recursive: recursive.unwrap_or(true),
-            //     }),
-            // )
-            // .await?;
-            // while let Some(response) = responses.recv().await {
-            //     match response {
-            //         Ok(UiResponse::Shares(ls_response)) => match ls_response {
-            //             LsResponse::Success(entries) => {
-            //                 for entry in entries {
-            //                     if entry.is_dir {
-            //                         println!(
-            //                             "{} {} bytes",
-            //                             format!("[{}]", entry.name).blue(),
-            //                             entry.size
-            //                         );
-            //                     } else {
-            //                         println!("{} {}", entry.name, entry.size);
-            //                     }
-            //                 }
-            //             }
-            //             LsResponse::Err(err) => {
-            //                 println!("Error from peer {:?}", err);
-            //             }
-            //         },
-            //         Ok(UiResponse::EndResponse) => {
-            //             break;
-            //         }
-            //         Ok(some_other_response) => {
-            //             println!("Got unexpected response {:?}", some_other_response);
-            //         }
-            //         Err(e) => {
-            //             println!("Error from WS server {:?}", e);
-            //             break;
-            //         }
-            //     }
-            // }
+            let client = Client::new(cli.ui_address.parse()?).await?;
+            let mut responses = client
+                .shares(IndexQuery {
+                    path,
+                    searchterm,
+                    recursive: recursive.unwrap_or(true),
+                })
+                .await?;
+
+            while let Some(response) = responses.next().await {
+                match response {
+                    Ok(ls_response) => match ls_response {
+                        LsResponse::Success(entries) => {
+                            for entry in entries {
+                                if entry.is_dir {
+                                    println!(
+                                        "{} {} bytes",
+                                        format!("[{}]", entry.name).blue(),
+                                        entry.size
+                                    );
+                                } else {
+                                    println!("{} {}", entry.name, entry.size);
+                                }
+                            }
+                        }
+                        LsResponse::Err(err) => {
+                            println!("Error from peer {:?}", err);
+                        }
+                    },
+                    Err(e) => {
+                        println!("Error from server {:?}", e);
+                        break;
+                    }
+                }
+            }
         }
         CliCommand::Download { path } => {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            // let mut responses = single_client_command(
-            //     ui_addr,
-            //     Command::Download {
-            //         path: peer_path,
-            //         peer_name: peer_name.unwrap_or_default(),
-            //     },
-            // )
-            // .await?;
-            //
-            // while let Some(response) = responses.recv().await {
-            //     match response {
-            //         Ok(UiResponse::Download(download_response)) => {
-            //             println!("Downloaded {}", download_response);
-            //         }
-            //         Ok(UiResponse::EndResponse) => {
-            //             break;
-            //         }
-            //         Ok(some_other_response) => {
-            //             println!("Got unexpected response {:?}", some_other_response);
-            //         }
-            //         Err(e) => {
-            //             println!("Error from WS server {:?}", e);
-            //             break;
-            //         }
-            //     }
-            // }
+            let mut client = Client::new(cli.ui_address.parse()?).await?;
+            let request_id = client
+                .download(
+                    peer_path,
+                    peer_name.ok_or(anyhow!("Peer name must be given"))?,
+                )
+                .await?;
+            while let Some(event) = client.next().await {
+                if let Ok(UiEvent::Download(download_event)) = event {
+                    if download_event.request_id == request_id {
+                        println!("{download_event:?}");
+                        if let DownloadInfo::Completed(_) = download_event.download_info {
+                            break;
+                        }
+                    }
+                }
+            }
         }
         CliCommand::Read { path, start, end } => {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            // let mut responses = harddrive_party::ws::single_client_command(
-            //     ui_addr,
-            //     Command::Read(
-            //         ReadQuery {
-            //             path: peer_path,
-            //             start,
-            //             end,
-            //         },
-            //         peer_name.unwrap_or_default(),
-            //     ),
-            // )
-            // .await?;
-            // while let Some(response) = responses.recv().await {
-            //     match response {
-            //         Ok(UiResponse::Read(data)) => {
-            //             print!("{}", std::str::from_utf8(&data).unwrap_or_default());
-            //         }
-            //         Ok(UiResponse::EndResponse) => {
-            //             break;
-            //         }
-            //         Ok(some_other_response) => {
-            //             println!("Got unexpected response {:?}", some_other_response);
-            //             break;
-            //         }
-            //         Err(e) => {
-            //             println!("Error from WS server {:?}", e);
-            //             break;
-            //         }
-            //     }
-            // }
+            let client = Client::new(cli.ui_address.parse()?).await?;
+            let mut stream = client
+                .read(
+                    peer_name.ok_or(anyhow!("Incomplete peer path"))?,
+                    ReadQuery {
+                        path: peer_path,
+                        start,
+                        end,
+                    },
+                )
+                .await?;
+
+            while let Some(res) = stream.next().await {
+                let data = res?;
+                print!("{}", std::str::from_utf8(&data).unwrap_or_default());
+            }
         }
         CliCommand::Connect { announce_address } => {
-            // let mut responses = harddrive_party::ws::single_client_command(
-            //     ui_addr,
-            //     Command::ConnectDirect(announce_address),
-            // )
-            // .await?;
-            // // TODO could add a timeout here
-            // while let Some(response) = responses.recv().await {
-            //     match response {
-            //         Ok(UiResponse::EndResponse) => {
-            //             println!("Successfully connected");
-            //             break;
-            //         }
-            //         Ok(some_other_response) => {
-            //             println!("Got unexpected response {:?}", some_other_response);
-            //         }
-            //         Err(e) => {
-            //             println!("Error when connecting {:?}", e);
-            //             break;
-            //         }
+            let client = Client::new(cli.ui_address.parse()?).await?;
+            client.connect(announce_address).await?;
+
+            // TODO we need to get peer name from announce address to check this
+            // while let Some(event) = client.next().await {
+            //     match event? {
+            //         UiEvent::PeerConnected(name) => { break; }
+            //         UiEvent::PeerConnectionFailed(name, error) => { return Err(anyhow!("{error}")); }
             //     }
             // }
         }

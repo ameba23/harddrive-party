@@ -4,7 +4,7 @@ use self::{
     mdns::MdnsServer,
     stun::stun_test,
 };
-use crate::{api::UiServerErrorWrapper, peer::Peer, wire_messages::AnnounceAddress};
+use crate::{errors::UiServerErrorWrapper, peer::Peer, wire_messages::AnnounceAddress};
 use harddrive_party_shared::{ui_messages::UiServerError, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
@@ -73,6 +73,7 @@ impl PeerDiscovery {
         use_mdns: bool,
         public_key: [u8; 32],
         peers: Arc<Mutex<HashMap<String, Peer>>>,
+        port: Option<u16>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
@@ -81,7 +82,17 @@ impl PeerDiscovery {
         let (peer_announce_tx, mut peer_announce_rx) = channel(1024);
 
         let my_local_ip = local_ip()?;
-        let raw_socket = UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
+
+        let raw_socket = if let Some(given_port) = port {
+            // If we get an error with a given port try again with the port set to 0
+            if let Ok(socket) = UdpSocket::bind(SocketAddr::new(my_local_ip, given_port)).await {
+                socket
+            } else {
+                UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
+            }
+        } else {
+            UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
+        };
 
         // Get our public address and NAT type from a STUN server
         // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
@@ -132,7 +143,7 @@ impl PeerDiscovery {
         let own_announce_address = peer_discovery.announce_address.clone();
         let peers = peer_discovery.peers.clone();
 
-        // In a separate task, loop over gossiped peer announcements
+        // In a separate task, loop over peer announcements
         tokio::spawn(async move {
             while let Some(peer_connect) = peer_announce_rx.recv().await {
                 let result = handle_peer_announcement(
@@ -162,6 +173,7 @@ impl PeerDiscovery {
         if let Ok(mut connections) = self.pending_peer_connections.write() {
             connections.remove(socket_address)
         } else {
+            // TODO can clear poison
             error!("Poisoned RwLock pending_peer_connections");
             None
         }

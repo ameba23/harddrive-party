@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    hdp::get_timestamp,
+    connections::get_timestamp,
     ui_messages::{DownloadEvent, DownloadInfo, UiEvent},
     wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
@@ -13,6 +13,7 @@ use crate::{
 use anyhow::anyhow;
 use bincode::serialize;
 use futures::{pin_mut, StreamExt};
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 use key_to_animal::key_to_name;
 use log::{debug, error, warn};
 use quinn::{Connection, RecvStream};
@@ -25,7 +26,7 @@ use tokio::{
 
 // Maybe this is too big - not sure if it matters as this is only allocated
 // once per download
-const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
+pub const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
 // How often (in bytes) to update the UI on process during downloading
 const UPDATE_EVERY: u64 = 10 * 1024;
@@ -37,6 +38,8 @@ pub struct Peer {
     pub connection: Connection,
     /// The peer's public ed25519 key
     pub public_key: [u8; 32],
+    /// The peer's public connection details if known
+    pub announce_address: Option<AnnounceAddress>,
 }
 
 impl Peer {
@@ -46,6 +49,7 @@ impl Peer {
         download_dir: PathBuf,
         public_key: [u8; 32],
         wishlist: WishList,
+        announce_address: Option<AnnounceAddress>,
     ) -> Self {
         let connection_clone = connection.clone();
 
@@ -69,6 +73,7 @@ impl Peer {
         Self {
             connection,
             public_key,
+            announce_address,
         }
     }
 }

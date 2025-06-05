@@ -1,10 +1,9 @@
 use futures::StreamExt;
 use harddrive_party::{
-    client::Client,
-    hdp::{Hdp, SharedState},
-    http::http_server,
-    ui_messages::{FilesQuery, UiEvent, UiResponse},
+    ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiResponse},
+    ui_server::{client::Client, http_server},
     wire_messages::{Entry, IndexQuery, LsResponse},
+    Hdp, SharedState,
 };
 use std::{collections::HashSet, net::SocketAddr};
 use tempfile::TempDir;
@@ -38,7 +37,7 @@ async fn basic() {
 
     // Wait until they connect to each other using mDNS
     while let Ok(event) = bob_rx.recv().await {
-        if let UiEvent::PeerConnected { name, peer_type: _ } = event {
+        if let UiEvent::PeerConnected { name } = event {
             if name == alice.name {
                 break;
             }
@@ -46,8 +45,8 @@ async fn basic() {
     }
 
     // Create clients
-    let alice_client = Client::new(alice_socket_address);
-    let bob_client = Client::new(bob_socket_address);
+    let alice_client = Client::new(alice_socket_address).await.unwrap();
+    let mut bob_client = Client::new(bob_socket_address).await.unwrap();
 
     // Do a share query on alice
     let mut response_stream = alice_client
@@ -60,7 +59,7 @@ async fn basic() {
 
     let mut response_entries = HashSet::new();
     while let Some(item) = response_stream.next().await {
-        if let UiResponse::Shares(LsResponse::Success(entries)) = item.unwrap() {
+        if let LsResponse::Success(entries) = item.unwrap() {
             for entry in entries {
                 response_entries.insert(entry);
             }
@@ -90,8 +89,19 @@ async fn basic() {
     }
     assert_eq!(response_entries, create_test_entries());
 
+    let _request_id = bob_client
+        .download("test-data/somefile".to_string(), alice.name)
+        .await
+        .unwrap();
+
+    while let Some(event) = bob_client.next().await {
+        if let Ok(UiEvent::Download(download_event)) = event {
+            if let DownloadInfo::Completed(_) = download_event.download_info {
+                break;
+            }
+        }
+    }
     // TODO read
-    // TODO download - and check requests state
     // TODO close connection
 }
 

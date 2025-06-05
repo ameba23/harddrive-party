@@ -1,26 +1,28 @@
-//! Main program loop handling connections to/from peers and messages to/from the UI
+//! Main program loop handling connections to/from peers
+pub mod discovery;
+pub mod quic;
+pub mod rpc;
 
 use crate::{
-    api::UiServerErrorWrapper,
-    discovery::{DiscoveredPeer, DiscoveryMethod, PeerConnect, PeerDiscovery},
-    peer::Peer,
-    quic::{
-        generate_certificate, get_certificate_from_connection, make_server_endpoint,
-        make_server_endpoint_basic_socket,
+    connections::{
+        discovery::{DiscoveredPeer, DiscoveryMethod, PeerDiscovery},
+        quic::{
+            generate_certificate, get_certificate_from_connection, make_server_endpoint,
+            make_server_endpoint_basic_socket,
+        },
+        rpc::Rpc,
     },
-    rpc::Rpc,
-    shares::Shares,
+    errors::UiServerErrorWrapper,
+    peer::Peer,
+    subtree_names::CONFIG,
     ui_messages::{UiEvent, UiServerError},
-    wire_messages::{AnnounceAddress, AnnouncePeer, Entry, Request},
-    wishlist::WishList,
+    wire_messages::{AnnouncePeer, Entry, Request},
+    SharedState,
 };
-use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
-use bincode::serialize;
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
-use harddrive_party_shared::ui_messages::PeerRemoteOrSelf;
 use log::{debug, error, info, warn};
 use lru::LruCache;
-use quinn::{Endpoint, RecvStream};
+use quinn::Endpoint;
 use rustls::Certificate;
 use std::{
     collections::HashMap,
@@ -28,113 +30,22 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
-use thiserror::Error;
 use tokio::{
     select,
-    sync::{
-        broadcast,
-        mpsc::{channel, Sender},
-        oneshot, Mutex,
-    },
+    sync::{mpsc::channel, Mutex},
 };
 
 /// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
-/// The maximum bytes transfered at a time when downloading
-const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 /// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
 /// This saves making subsequent requests with a duplicate query
 const CACHE_SIZE: usize = 256;
 /// The size in bytes of a public key (certificate hash)
 const PUBLIC_KEY_LENGTH: usize = 32;
 
-/// Key-value store sub-tree names
-const CONFIG: &[u8; 1] = b"c";
-pub const REQUESTS: &[u8; 1] = b"r";
-pub const REQUESTS_BY_TIMESTAMP: &[u8; 1] = b"R";
-pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
-pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
-pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
-
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 /// The cache for index requests
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
-
-#[derive(Clone)]
-pub struct SharedState {
-    /// A map of peernames to peer connections
-    pub peers: Arc<Mutex<HashMap<String, Peer>>>,
-    /// The index of shared files
-    pub shares: Shares,
-    /// Cache for remote peer's file index
-    pub ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
-    /// Maintains lists of requested/downloaded files
-    pub wishlist: WishList,
-    /// Channel for sending events to the UI
-    pub event_broadcaster: broadcast::Sender<UiEvent>,
-    /// Channel for announcing peers to connect to
-    peer_announce_tx: Sender<PeerConnect>,
-    /// Download directory
-    pub download_dir: PathBuf,
-    /// A name derived from our public key
-    pub name: String,
-    /// Our own connection details
-    pub announce_address: AnnounceAddress,
-}
-
-impl SharedState {
-    /// Send an event to the UI
-    pub async fn send_event(&self, event: UiEvent) {
-        if self.event_broadcaster.send(event).is_err() {
-            warn!("UI response channel closed");
-        }
-    }
-
-    /// Open a request stream and write a request to the given peer
-    pub async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let peers = self.peers.lock().await;
-        let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        Self::request_peer(request, peer).await
-    }
-
-    pub async fn request_peer(request: Request, peer: &Peer) -> Result<RecvStream, RequestError> {
-        let (mut send, recv) = peer.connection.open_bi().await?;
-        let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
-        debug!("message serialized, writing...");
-        send.write_all(&buf).await?;
-        send.finish().await?;
-        debug!("message sent");
-        Ok(recv)
-    }
-
-    pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
-        let bytes = self.announce_address.to_bytes();
-        Ok(BASE64_STANDARD_NO_PAD.encode(&bytes))
-    }
-
-    pub async fn connect_to_peer(
-        &self,
-        announce_address: AnnounceAddress,
-    ) -> Result<(), UiServerErrorWrapper> {
-        let discovery_method = DiscoveryMethod::Direct {
-            announce_address: announce_address.clone(),
-        };
-
-        let (response_tx, response_rx) = oneshot::channel();
-        let peer_connect = PeerConnect {
-            discovery_method,
-            response_tx: Some(response_tx),
-        };
-        self.peer_announce_tx
-            .send(peer_connect)
-            .await
-            .map_err(|_| {
-                UiServerError::PeerDiscovery("Peer announce channel closed".to_string())
-            })?;
-
-        response_rx.await?
-    }
-}
 
 /// A harddrive-party instance
 pub struct Hdp {
@@ -164,8 +75,6 @@ impl Hdp {
         let mut db_dir = storage.as_ref().to_owned();
         db_dir.push("db");
         let db = sled::open(db_dir)?;
-        let shares = Shares::new(db.clone(), share_dirs).await?;
-
         let config_db = db.open_tree(CONFIG)?;
 
         // Attempt to get keypair / certificate from storage, and otherwise generate them and store
@@ -188,22 +97,43 @@ impl Hdp {
         // Derive a human-readable name from the public key
         let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
 
-        // Set home dir - this is used in the UI as a placeholder when choosing a directory to
-        // share
-        // TODO for cross platform support we should use the `home` crate
-        let os_home_dir = match std::env::var_os("HOME") {
-            Some(o) => o.to_str().map(|s| s.to_string()),
-            None => None,
-        };
-
         let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
+
+        // Read the port from storage
+        // We attempt to use the same port as last time if possible, so that if the process is
+        // stopped and restarted, peers can reconnect without needing to exchange details again
+        let port = config_db
+            .get(b"port")
+            .ok()
+            .flatten()
+            .and_then(|bytes| bytes.to_vec().try_into().ok())
+            .map(u16::from_be_bytes);
 
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(use_mdns, pk_hash, peers.clone()).await?;
+            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port).await?;
+
+        // Setup shared state used by UI server
+        let shared_state = SharedState::new(
+            db,
+            share_dirs,
+            download_dir,
+            name,
+            peer_discovery.peer_announce_tx.clone(),
+            peers,
+            peer_discovery.announce_address.clone(),
+        )
+        .await?;
 
         let server_connection = match socket_option {
             Some(socket) => {
+                // Get the port we are bound to:
+                if let Ok(port) = socket.get_port() {
+                    // Write port to config
+                    let port_bytes = port.to_be_bytes();
+                    config_db.insert(b"port", &port_bytes)?;
+                }
+
                 // Create QUIC endpoint
                 ServerConnection::WithEndpoint(
                     make_server_endpoint(socket, cert_der, priv_key_der).await?,
@@ -218,37 +148,11 @@ impl Hdp {
             }
         };
 
-        // Setup db for downloads/requests
-        let wishlist = WishList::new(&db)?;
-
-        let (event_broadcaster, _rx) = broadcast::channel(65536);
-
-        let shared_state = SharedState {
-            wishlist,
-            shares: shares.clone(),
-            peers,
-            ls_cache: Default::default(),
-            event_broadcaster: event_broadcaster.clone(),
-            peer_announce_tx: peer_discovery.peer_announce_tx.clone(),
-            download_dir,
-            name: name.clone(),
-            announce_address: peer_discovery.announce_address.clone(),
-        };
-
-        // Notify the UI of our own details
-        event_broadcaster.send(UiEvent::PeerConnected {
-            name,
-            peer_type: PeerRemoteOrSelf::Me {
-                os_home_dir,
-                announce_address: shared_state.get_ui_announce_address()?,
-            },
-        })?;
-
         Ok(Self {
             shared_state: shared_state.clone(),
             rpc: Rpc::new(
-                shares,
-                event_broadcaster,
+                shared_state.shares,
+                shared_state.event_broadcaster,
                 peer_discovery.peer_announce_tx.clone(),
             ),
             server_connection,
@@ -256,7 +160,7 @@ impl Hdp {
         })
     }
 
-    /// Loop handling incoming peer connections, commands from the UI, and discovered peers
+    /// Loop handling incoming peer connections, and discovered peers
     pub async fn run(&mut self) {
         let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
@@ -275,21 +179,30 @@ impl Hdp {
             select! {
                 // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
-                    self.handle_incoming_connection(incoming_conn).await;
+                    let discovery_method = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
+                    let announce_address = discovery_method.as_ref().and_then(|d| d.get_announce_address());
+
+                    if let Err(err) = self.handle_incoming_connection(discovery_method, incoming_conn).await {
+                        error!("Error when handling incoming peer connection {:?}", err);
+                         if let Some (announce_address) = announce_address {
+                            let name = key_to_animal::key_to_name(&announce_address.public_key);
+                             self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                        }
+                    }
                 }
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
+                    let public_key = peer.public_key;
+
                     if let Err(err) = self.connect_to_peer(peer).await {
                         error!("Cannot connect to discovered peer {:?}", err);
+                        let name = key_to_animal::key_to_name(&public_key);
+                        self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                     };
                 }
             }
         }
-    }
-
-    pub fn get_announce_address(&self) -> anyhow::Result<String> {
-        self.shared_state.get_ui_announce_address()
     }
 
     /// Handle a QUIC connection from/to another peer
@@ -306,29 +219,7 @@ impl Hdp {
             self.shared_state.name, peer_name
         );
 
-        let discovery_method = if let Some(discovery_method) = discovery_method {
-            Some(discovery_method)
-        } else {
-            self.peer_discovery.get_pending_peer(&conn.remote_address())
-        };
-
         let announce_address = if let Some(discovery_method) = discovery_method {
-            // If we have a request id we should send a UI response that the peer has
-            // successfully connected
-            // Ideally if we encounter a problem we should send an error response
-            // TODO this should be a oneshot
-            // if self
-            //     .response_tx
-            //     .send(UiServerMessage::Response {
-            //         id,
-            //         response: Ok(UiResponse::EndResponse),
-            //     })
-            //     .await
-            //     .is_err()
-            // {
-            //     warn!("Response channel closed");
-            // }
-
             // If we know their announce address, check if it matches the certificate
             if let Some(announce_address) = discovery_method.get_announce_address() {
                 if announce_address.public_key == peer_public_key {
@@ -357,22 +248,35 @@ impl Hdp {
                     shared_state.download_dir.clone(),
                     peer_public_key,
                     shared_state.wishlist.clone(),
+                    announce_address.clone(),
                 );
-                // TODO here we should check our wishlist and make any outstanding requests to this
-                // peer
                 let mut peers = shared_state.peers.lock().await;
 
                 if let Some(announce_address) = announce_address {
                     let announce_peer = AnnouncePeer { announce_address };
 
                     // Send their annouce details to other peers who we are connected to
-                    for peer in peers.values() {
+                    for other_peer in peers.values() {
                         let request = Request::AnnouncePeer(announce_peer.clone());
-                        if let Err(err) = SharedState::request_peer(request, peer).await {
-                            error!("Failed to send announce message to {peer:?} - {err:?}");
+                        if let Err(err) = SharedState::request_peer(request, other_peer).await {
+                            error!("Failed to send announce message to {other_peer:?} - {err:?}");
+                        }
+
+                        // We must also send the announce details of these other peers to this peer
+                        if let Some(ref announce_address_other) = peer.announce_address {
+                            let announce_other_peer = AnnouncePeer {
+                                announce_address: announce_address_other.clone(),
+                            };
+                            let request = Request::AnnouncePeer(announce_other_peer);
+                            if let Err(err) = SharedState::request_peer(request, &peer).await {
+                                error!("Failed to send announce message to {peer:?} - {err:?}");
+                            }
                         }
                     }
                 }
+
+                // TODO here we should check our wishlist and make any outstanding requests to this
+                // peer
 
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
@@ -384,7 +288,6 @@ impl Hdp {
             shared_state
                 .send_event(UiEvent::PeerConnected {
                     name: peer_name.clone(),
-                    peer_type: PeerRemoteOrSelf::Remote,
                 })
                 .await;
 
@@ -416,31 +319,30 @@ impl Hdp {
     }
 
     /// Handle an incoming connection from a remote peer
-    async fn handle_incoming_connection(&mut self, incoming_conn: quinn::Connecting) {
-        match incoming_conn.await {
-            Ok(conn) => {
+    async fn handle_incoming_connection(
+        &mut self,
+        discovery_method: Option<DiscoveryMethod>,
+        incoming_conn: quinn::Connecting,
+    ) -> Result<(), UiServerErrorWrapper> {
+        let conn = incoming_conn.await?;
+        debug!(
+            "Incoming QUIC connection accepted {}",
+            conn.remote_address()
+        );
+
+        if let Some(i) = conn.handshake_data() {
+            if let Ok(handshake_data) = i.downcast::<quinn::crypto::rustls::HandshakeData>() {
                 debug!(
-                    "incoming QUIC connection accepted {}",
-                    conn.remote_address()
+                    "Server name of connecting peer {:?}",
+                    handshake_data.server_name
                 );
-
-                if let Some(i) = conn.handshake_data() {
-                    if let Ok(handshake_data) = i.downcast::<quinn::crypto::rustls::HandshakeData>()
-                    {
-                        debug!("Server name {:?}", handshake_data.server_name);
-                    }
-                }
-
-                if let Ok(remote_cert) = get_certificate_from_connection(&conn) {
-                    self.handle_connection(conn, true, None, remote_cert).await;
-                } else {
-                    warn!("Peer attempted to connect with bad or missing certificate");
-                }
-            }
-            Err(err) => {
-                warn!("Incoming QUIC connection failed {:?}", err);
             }
         }
+
+        let remote_cert = get_certificate_from_connection(&conn)?;
+        self.handle_connection(conn, true, discovery_method, remote_cert)
+            .await;
+        Ok(())
     }
 
     /// Initiate a Quic connection to a remote peer
@@ -500,30 +402,6 @@ async fn accept_incoming_request(
     let (send, mut recv) = conn.accept_bi().await?;
     let buf = recv.read_to_end(MAX_REQUEST_SIZE).await?;
     Ok((send, buf))
-}
-
-/// Error on making a request to a given remote peer
-#[derive(Error, Debug, PartialEq)]
-pub enum RequestError {
-    #[error("Peer not found")]
-    PeerNotFound,
-    #[error(transparent)]
-    ConnectionError(#[from] quinn::ConnectionError),
-    #[error("Cannot serialize message")]
-    SerializationError,
-    #[error(transparent)]
-    WriteError(#[from] quinn::WriteError),
-}
-
-/// Error on handling a UI command
-#[derive(Error, Debug)]
-pub enum HandleUiCommandError {
-    #[error("User closed connection")]
-    ConnectionClosed,
-    #[error("Channel closed - could not send response")]
-    ChannelClosed,
-    #[error("Db error")]
-    DbError,
 }
 
 #[derive(Clone)]

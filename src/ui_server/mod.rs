@@ -1,21 +1,30 @@
 //! Http server for serving web-ui as well as static locally available files
+pub mod api;
+pub mod client;
+pub mod ws;
+
 use crate::{
-    api::{post_connect, post_files, post_shares},
-    hdp::SharedState,
-    ws::handle_socket,
+    ui_server::{
+        api::{
+            delete_shares, get_info, get_request, get_requests, post_connect, post_download,
+            post_files, post_read, post_shares, put_shares,
+        },
+        ws::handle_socket,
+    },
+    SharedState,
 };
 use axum::{
     body::Body,
-    extract::{ws::WebSocketUpgrade, ConnectInfo, FromRequest, Path, Request, State},
+    extract::{ws::WebSocketUpgrade, FromRequest, Path, Request, State},
     http::{Response, StatusCode},
     response::IntoResponse,
-    routing::{any, get, post},
+    routing::{any, delete, get, post, put},
     Router,
 };
 use log::error;
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use std::net::SocketAddr;
 use tower_http::services::ServeDir;
 
@@ -30,13 +39,16 @@ pub async fn http_server(
         )
         .route("/connect", post(post_connect))
         .route("/files", post(post_files))
-        // .route("/download", post(download))
+        .route("/download", post(post_download))
         .route("/shares", post(post_shares))
-        // .route("/shares", put(put_shares))
-        // .route("/shares", delete(delete_shares))
+        .route("/info", get(get_info))
+        .route("/read", post(post_read))
+        .route("/shares", put(put_shares))
+        .route("/shares", delete(delete_shares))
         // .route("/connect", delete(delete_connect))
-        // .route("/requests", get(requests))
-        // .route("/request", get(request))
+        .route("/requests", get(get_requests))
+        .route("/request", get(get_request))
+        // .route("/request", delete(delete_request))
         .route("/ws", any(ws_handler))
         .route("/{path}", get(static_handler))
         .with_state(shared_state);
@@ -56,9 +68,8 @@ pub async fn http_server(
 async fn ws_handler(
     State(shared_state): State<SharedState>,
     ws: WebSocketUpgrade,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(shared_state, socket, addr))
+    ws.on_upgrade(move |socket| handle_socket(shared_state, socket))
 }
 
 /// For statically serving the front end embedded in the binary
@@ -109,5 +120,25 @@ where
         })?;
 
         Ok(Bincode(obj))
+    }
+}
+
+impl<T> IntoResponse for Bincode<T>
+where
+    T: Serialize,
+{
+    fn into_response(self) -> Response<Body> {
+        match bincode::serialize(&self.0) {
+            Ok(bytes) => (
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                bytes,
+            )
+                .into_response(),
+            Err(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize response",
+            )
+                .into_response(),
+        }
     }
 }

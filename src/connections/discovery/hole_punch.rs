@@ -80,6 +80,10 @@ impl PunchingUdpSocket {
             },
         ))
     }
+
+    pub fn get_port(&self) -> anyhow::Result<u16> {
+        Ok(self.socket.local_addr()?.port())
+    }
 }
 
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {

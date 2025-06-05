@@ -1,5 +1,5 @@
 //! Peer discovery on local network using mDNS
-use crate::discovery::{DiscoveredPeer, DiscoveryMethod};
+use super::{DiscoveredPeer, DiscoveryMethod};
 use anyhow::anyhow;
 use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};

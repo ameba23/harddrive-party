@@ -16,30 +16,21 @@ pub struct FilesQuery {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
     /// A peer has connected
-    PeerConnected {
-        name: String,
-        /// Is the peer me? This is used to pass our own details to the UI
-        peer_type: PeerRemoteOrSelf,
-    },
+    PeerConnected { name: String },
     /// A peer has disconnected
     PeerDisconnected { name: String },
+    /// A peer connection failed
+    PeerConnectionFailed { name: String, error: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
     /// Download
     Download(DownloadEvent),
 }
 
-/// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
-/// remote peer.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum PeerRemoteOrSelf {
-    /// A remote peer
-    Remote,
-    /// Ourself, with the path of our home directory
-    Me {
-        os_home_dir: Option<String>,
-        announce_address: String,
-    },
+pub struct Info {
+    pub os_home_dir: Option<String>,
+    pub announce_address: String,
 }
 
 /// A request to download a file from a particular peer
@@ -96,8 +87,8 @@ pub enum UiResponse {
 pub enum UiServerError {
     #[error("Cannot connect: {0}")]
     ConnectionError(String),
-    #[error("Request error")]
-    RequestError, // TODO
+    #[error("Request error: {0}")]
+    RequestError(String),
     #[error("Error when updating shared directory")]
     ShareError(String),
     #[error("Serialization: {0}")]
@@ -106,6 +97,10 @@ pub enum UiServerError {
     PeerDiscovery(String),
     #[error("Poisoned lock")]
     Poison,
+    #[error("Database: {0}")]
+    Db(String),
+    #[error("Error adding directory to share: {0}")]
+    AddShare(String),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

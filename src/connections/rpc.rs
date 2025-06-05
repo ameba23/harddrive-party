@@ -1,12 +1,12 @@
 //! Remote procedure call for share index queries and file uploading
 
 use crate::{
-    discovery::{DiscoveryMethod, PeerConnect},
+    connections::discovery::{DiscoveryMethod, PeerConnect},
     shares::{EntryParseError, Shares},
     ui_messages::{UiEvent, UploadInfo},
 };
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{AnnouncePeer, IndexQuery, ReadQuery, Request};
+use harddrive_party_shared::wire_messages::{IndexQuery, ReadQuery, Request};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;

@@ -1,10 +1,13 @@
 //! Configuration for QUIC connections to remote peers
 use anyhow::anyhow;
+use harddrive_party_shared::ui_messages::UiServerError;
 use log::{debug, warn};
 use quinn::{AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
 use rustls::{Certificate, SignatureScheme};
 use std::{sync::Arc, time::Duration};
+
+use crate::errors::UiServerErrorWrapper;
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -55,18 +58,21 @@ pub async fn make_server_endpoint_basic_socket(
 }
 
 /// Given a Quic connection, get the TLS certificate
-pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+pub fn get_certificate_from_connection(
+    conn: &Connection,
+) -> Result<Certificate, UiServerErrorWrapper> {
     let identity = conn
         .peer_identity()
-        .ok_or_else(|| anyhow!("No peer certificate"))?;
+        .ok_or_else(|| UiServerError::ConnectionError("No peer certificate".to_string()))?;
 
     let remote_cert = identity
         .downcast::<Vec<Certificate>>()
-        .map_err(|_| anyhow!("No certificate"))?;
-    remote_cert
+        .map_err(|_| UiServerError::ConnectionError("No certificate".to_string()))?;
+
+    Ok(remote_cert
         .first()
-        .ok_or_else(|| anyhow!("No certificate"))
-        .cloned()
+        .ok_or_else(|| UiServerError::ConnectionError("No peer certificate".to_string()))?
+        .clone())
 }
 
 /// Returns default server configuration along with its certificate.

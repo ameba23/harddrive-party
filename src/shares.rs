@@ -1,15 +1,14 @@
 //! Index shared directories
-use crate::wire_messages::{Entry, LsResponse};
+use crate::{
+    subtree_names::{DIRS, FILES, SHARE_NAMES},
+    wire_messages::{Entry, LsResponse},
+};
 use async_walkdir::WalkDir;
 use futures::stream::StreamExt;
 use log::{debug, info, warn};
 use sled::IVec;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR};
 use thiserror::Error;
-
-const FILES: &[u8; 1] = b"f";
-const DIRS: &[u8; 1] = b"d";
-const SHARE_NAMES: &[u8; 1] = b"s";
 
 /// The maximum number of query results we can store in a single message
 pub const MAX_ENTRIES_PER_MESSAGE: usize = 64;
