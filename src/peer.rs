@@ -36,7 +36,7 @@ const UPDATE_EVERY: u64 = 10 * 1024;
 
 /// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
 /// This saves making subsequent requests with a duplicate query
-const CACHE_SIZE: usize = 256;
+const CACHE_SIZE: usize = 64;
 
 /// The cache for index requests
 type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;

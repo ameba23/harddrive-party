@@ -111,13 +111,18 @@ pub async fn post_files(
         tokio::spawn(async move {
             pin_mut!(ls_response_stream);
             let mut cached_entries = Vec::new();
+            let mut cache_full = false;
 
             // TODO handle error
             while let Some(Ok(ls_response)) = ls_response_stream.next().await {
                 // If it is not an err, add it to the local
                 // cache
                 if let LsResponse::Success(ref entries) = ls_response {
-                    cached_entries.push(entries.clone());
+                    if cached_entries.len() > 65536 {
+                        cache_full = true;
+                    } else {
+                        cached_entries.push(entries.clone());
+                    }
                 }
                 if let Ok(serialized_res) = bincode::serialize(&Ok::<UiResponse, UiServerError>(
                     UiResponse::Ls(ls_response, peer_name_clone.to_string()),
@@ -132,7 +137,7 @@ pub async fn post_files(
                     break;
                 }
             }
-            if !cached_entries.is_empty() {
+            if !cached_entries.is_empty() && !cache_full {
                 let peers = shared_state.peers.lock().await;
                 if let Some(peer) = peers.get(&peer_name) {
                     if let Ok(mut cache) = peer.index_cache.lock() {
