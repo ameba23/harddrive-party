@@ -7,7 +7,7 @@ use crate::{
     ui_messages::{FilesQuery, UiResponse, UiServerError},
     ui_server::Bincode,
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, Request},
-    SharedState,
+    RequestError, SharedState,
 };
 use axum::{
     body::Body,
@@ -45,7 +45,7 @@ pub async fn post_files(
     State(shared_state): State<SharedState>,
     Bincode(files_query): Bincode<FilesQuery>,
 ) -> Result<(StatusCode, Body), UiServerErrorWrapper> {
-    let (response_tx, response_rx) = mpsc::channel(256);
+    let (mut response_tx, response_rx) = mpsc::channel(256);
 
     // If no name given send the query to all connected peers
     let requests = match files_query.peer_name {
@@ -67,58 +67,57 @@ pub async fn post_files(
     };
     debug!("Making request to {} peers", requests.len());
 
-    // If there is no request to make (no peers), end the response
-    // if requests.is_empty() {
-    //     return Ok(StatusCode::OK);
-    // }
-
     for (request, peer_name) in requests {
-        // // First check the local cache for an existing response
-        // let mut cache = self.ls_cache.lock().await;
-        //
-        // if let hash_map::Entry::Occupied(mut peer_cache_entry) = cache.entry(peer_name.clone()) {
-        //     let peer_cache = peer_cache_entry.get_mut();
-        //     if let Some(responses) = peer_cache.get(&request) {
-        //         debug!("Found existing responses in cache");
-        //         for entries in responses.iter() {
-        //             if self
-        //                 .response_tx
-        //                 .send(UiServerMessage::Response {
-        //                     id,
-        //                     response: Ok(UiResponse::Ls(
-        //                         LsResponse::Success(entries.to_vec()),
-        //                         peer_name.to_string(),
-        //                     )),
-        //                 })
-        //                 .await
-        //                 .is_err()
-        //             {
-        //                 warn!("Response channel closed");
-        //                 break;
-        //             }
-        //         }
-        //         continue;
-        //     }
-        // }
+        {
+            let cache = {
+                let peers = shared_state.peers.lock().await;
+                let peer = peers.get(&peer_name).ok_or(RequestError::PeerNotFound)?;
+                peer.index_cache.clone()
+            };
 
+            // First check the local cache for an existing response
+            let mut cache = cache.lock()?;
+            if let Some(responses) = cache.get(&request) {
+                debug!("Found existing responses in cache");
+                for entries in responses.iter() {
+                    let ls_response = LsResponse::Success(entries.to_vec());
+                    if let Ok(serialized_res) =
+                        bincode::serialize(&Ok::<UiResponse, UiServerError>(UiResponse::Ls(
+                            ls_response,
+                            peer_name.to_string(),
+                        )))
+                    {
+                        let serialized_res = create_length_prefixed_message(&serialized_res);
+                        if response_tx.try_send(serialized_res).is_err() {
+                            warn!("Response channel closed");
+                            break;
+                        }
+                    } else {
+                        warn!("Could not serialize response");
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
         debug!("Sending ls query to {}", peer_name);
         let peer_name_clone = peer_name.clone();
 
-        let recv = shared_state.request(request, &peer_name).await?;
-        // let ls_cache = self.ls_cache.clone();
+        let recv = shared_state.request(request.clone(), &peer_name).await?;
         let ls_response_stream = process_length_prefix(recv).await?;
 
         let mut response_tx = response_tx.clone();
+        let shared_state = shared_state.clone();
         tokio::spawn(async move {
-            // TODO handle error
             pin_mut!(ls_response_stream);
-
             let mut cached_entries = Vec::new();
+
+            // TODO handle error
             while let Some(Ok(ls_response)) = ls_response_stream.next().await {
                 // If it is not an err, add it to the local
                 // cache
-                if let LsResponse::Success(entries) = ls_response.clone() {
-                    cached_entries.push(entries);
+                if let LsResponse::Success(ref entries) = ls_response {
+                    cached_entries.push(entries.clone());
                 }
                 if let Ok(serialized_res) = bincode::serialize(&Ok::<UiResponse, UiServerError>(
                     UiResponse::Ls(ls_response, peer_name_clone.to_string()),
@@ -133,15 +132,15 @@ pub async fn post_files(
                     break;
                 }
             }
-            // if !cached_entries.is_empty() {
-            //     debug!("Writing ls cache {}", cached_entries.len());
-            //     let mut cache = ls_cache.lock().await;
-            //     let peer_cache = cache.entry(peer_name_clone.clone()).or_insert(
-            //         // Unwrap ok here becasue CACHE_SIZE is non-zero
-            //         LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
-            //     );
-            //     peer_cache.put(req_clone, cached_entries);
-            // }
+            if !cached_entries.is_empty() {
+                let peers = shared_state.peers.lock().await;
+                if let Some(peer) = peers.get(&peer_name) {
+                    if let Ok(mut cache) = peer.index_cache.lock() {
+                        debug!("Writing {} items to index cache", cached_entries.len());
+                        cache.put(request, cached_entries);
+                    }
+                }
+            }
         });
     }
 

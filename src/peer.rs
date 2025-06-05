@@ -1,5 +1,6 @@
 //! Representation of remote peer, and download handling
 use std::{
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -13,11 +14,13 @@ use crate::{
 use anyhow::anyhow;
 use bincode::serialize;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::wire_messages::{AnnounceAddress, Entry};
 use key_to_animal::key_to_name;
 use log::{debug, error, warn};
+use lru::LruCache;
 use quinn::{Connection, RecvStream};
 use speedometer::Speedometer;
+use std::sync::{Arc, Mutex};
 use tokio::{
     fs::{create_dir_all, File, OpenOptions},
     io::AsyncWriteExt,
@@ -31,6 +34,13 @@ pub const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 // How often (in bytes) to update the UI on process during downloading
 const UPDATE_EVERY: u64 = 10 * 1024;
 
+/// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
+/// This saves making subsequent requests with a duplicate query
+const CACHE_SIZE: usize = 256;
+
+/// The cache for index requests
+type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
+
 /// Representation of a remote peer
 #[derive(Debug)]
 pub struct Peer {
@@ -40,6 +50,8 @@ pub struct Peer {
     pub public_key: [u8; 32],
     /// The peer's public connection details if known
     pub announce_address: Option<AnnounceAddress>,
+    /// Cache for peer's file index, to avoid making duplicate requests
+    pub index_cache: Arc<Mutex<IndexCache>>,
 }
 
 impl Peer {
@@ -74,6 +86,9 @@ impl Peer {
             connection,
             public_key,
             announce_address,
+            index_cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(CACHE_SIZE).expect("Cache size to be non-zero"),
+            ))),
         }
     }
 }

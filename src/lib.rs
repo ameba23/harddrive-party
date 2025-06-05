@@ -50,8 +50,6 @@ pub struct SharedState {
     pub peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// The index of shared files
     pub shares: Shares,
-    /// Cache for remote peer's file index
-    // pub ls_cache: Arc<Mutex<HashMap<String, IndexCache>>>,
     /// Maintains lists of requested/downloaded files
     pub wishlist: WishList,
     /// Channel for sending events to the UI

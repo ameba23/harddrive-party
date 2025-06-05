@@ -16,12 +16,11 @@ use crate::{
     peer::Peer,
     subtree_names::CONFIG,
     ui_messages::{UiEvent, UiServerError},
-    wire_messages::{AnnouncePeer, Entry, Request},
+    wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use log::{debug, error, info, warn};
-use lru::LruCache;
 use quinn::Endpoint;
 use rustls::Certificate;
 use std::{
@@ -37,15 +36,11 @@ use tokio::{
 
 /// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
-/// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
-/// This saves making subsequent requests with a duplicate query
-const CACHE_SIZE: usize = 256;
+
 /// The size in bytes of a public key (certificate hash)
 const PUBLIC_KEY_LENGTH: usize = 32;
 
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
-/// The cache for index requests
-type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 /// A harddrive-party instance
 pub struct Hdp {
