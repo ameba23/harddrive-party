@@ -89,11 +89,13 @@ async fn basic() {
     }
     assert_eq!(response_entries, create_test_entries());
 
-    let _request_id = bob_client
+    // Download a file
+    let request_id = bob_client
         .download("test-data/somefile".to_string(), alice.name)
         .await
         .unwrap();
 
+    // Check it dowloads - using the download events
     while let Some(event) = bob_client.next().await {
         if let Ok(UiEvent::Download(download_event)) = event {
             if let DownloadInfo::Completed(_) = download_event.download_info {
@@ -101,6 +103,13 @@ async fn basic() {
             }
         }
     }
+
+    // Check we can query the request with its ID
+    let mut requested_files = bob_client.requested_files(request_id).await.unwrap();
+    let requested_file = requested_files.next().await.unwrap().unwrap();
+    assert_eq!(requested_file[0].path, "test-data/somefile");
+
+    // TODO download a directory
     // TODO read
     // TODO close connection
 }

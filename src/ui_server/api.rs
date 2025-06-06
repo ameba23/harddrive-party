@@ -166,6 +166,9 @@ pub async fn post_shares(
     stream_response::<LsResponse>(response_iterator).await
 }
 
+/// Download a file
+/// POST `/download`
+/// Responds with a request ID as a utf-8 string
 pub async fn post_download(
     State(shared_state): State<SharedState>,
     // TODO use UI peerpath type
@@ -180,6 +183,9 @@ pub async fn post_download(
     Ok((StatusCode::OK, id.to_string()))
 }
 
+/// Get requested files associated with a given request ID
+/// GET `/request`
+/// Request ID given as a query string 'id'
 pub async fn get_request(
     State(shared_state): State<SharedState>,
     Query(params): Query<HashMap<String, String>>,

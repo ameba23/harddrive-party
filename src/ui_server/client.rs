@@ -3,7 +3,7 @@ use bincode::{deserialize, serialize};
 use bytes::{Buf, Bytes, BytesMut};
 use futures::stream::SplitStream;
 use futures::{Stream, StreamExt};
-use harddrive_party_shared::ui_messages::{FilesQuery, UiEvent, UiResponse};
+use harddrive_party_shared::ui_messages::{FilesQuery, Info, UiEvent, UiRequestedFile, UiResponse};
 use harddrive_party_shared::wire_messages::{LsResponse, ReadQuery};
 use reqwest::Response;
 use serde::de::DeserializeOwned;
@@ -123,9 +123,35 @@ impl Client {
         Ok(stream)
     }
 
-    pub async fn info(&self) -> anyhow::Result<()> {
-        todo!()
+    pub async fn info(&self) -> anyhow::Result<Info> {
+        let res = self
+            .http_client
+            .get(format!("http://{}/info", self.ui_address))
+            .send()
+            .await?;
+
+        Ok(bincode::deserialize(&res.bytes().await?)?)
     }
+
+    pub async fn requested_files(
+        &self,
+        id: u32,
+    ) -> anyhow::Result<impl Stream<Item = Result<Vec<UiRequestedFile>, UiServerError>>> {
+        let res = self
+            .http_client
+            .get(format!("http://{}/request", self.ui_address))
+            .query(&[("id", id.to_string())])
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            eprintln!("Request failed with status: {}", res.status());
+            return Err(anyhow::anyhow!("Request failed"));
+        }
+
+        Ok(LengthPrefixedStream::new(res))
+    }
+
     // TODO put /shares
     // TODO delete /shares
     // TODO get /requests
