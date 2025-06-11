@@ -1,7 +1,7 @@
 //! Http server for serving web-ui as well as static locally available files
 pub mod api;
-pub mod client;
 pub mod ws;
+pub use harddrive_party_shared::client;
 
 use crate::{
     ui_server::{
@@ -50,6 +50,7 @@ pub async fn http_server(
         .route("/request", get(get_request))
         // .route("/request", delete(delete_request))
         .route("/ws", any(ws_handler))
+        .route("/", get(index))
         .route("/{path}", get(static_handler))
         .with_state(shared_state);
 
@@ -76,6 +77,10 @@ async fn ws_handler(
 #[derive(RustEmbed)]
 #[folder = "dist"]
 struct WebUi;
+
+async fn index() -> impl IntoResponse {
+    static_handler(Path("index.html".to_string())).await
+}
 
 /// Statically serve the front end
 async fn static_handler(Path(file_path): Path<String>) -> impl IntoResponse {

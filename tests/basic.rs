@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiResponse},
+    ui_messages::{DownloadInfo, FilesQuery, UiEvent},
     ui_server::{client::Client, http_server},
     wire_messages::{Entry, IndexQuery, LsResponse},
     Hdp, SharedState,
@@ -46,7 +46,7 @@ async fn basic() {
 
     // Create clients
     let alice_client = Client::new(alice_socket_address).await.unwrap();
-    let mut bob_client = Client::new(bob_socket_address).await.unwrap();
+    let bob_client = Client::new(bob_socket_address).await.unwrap();
 
     // Do a share query on alice
     let mut response_stream = alice_client
@@ -79,7 +79,7 @@ async fn basic() {
 
     let mut response_entries = HashSet::new();
     while let Some(item) = response_stream.next().await {
-        if let UiResponse::Ls(LsResponse::Success(entries), peer_name) = item.unwrap() {
+        if let (LsResponse::Success(entries), peer_name) = item.unwrap() {
             if peer_name == alice.name {
                 for entry in entries {
                     response_entries.insert(entry);
@@ -95,8 +95,9 @@ async fn basic() {
         .await
         .unwrap();
 
+    let mut bob_events = bob_client.event_stream().await.unwrap();
     // Check it dowloads - using the download events
-    while let Some(event) = bob_client.next().await {
+    while let Some(event) = bob_events.next().await {
         if let Ok(UiEvent::Download(download_event)) = event {
             if let DownloadInfo::Completed(_) = download_event.download_info {
                 break;

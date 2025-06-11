@@ -1,14 +1,16 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
-    hdp::{display_bytes, Entry, RequesterSetter},
-    ui_messages::{Command, UiDownloadRequest},
-    FilesSignal, PeerPath,
+    hdp::{display_bytes, Entry},
+    ui_messages::{FilesQuery, UiDownloadRequest},
+    FilesSignal, PeerPath, ShareQuerySetter,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
     either::{Either, EitherOf4, EitherOf5},
     prelude::*,
+    task::spawn_local,
 };
+use log::debug;
 use std::ops::Bound::Excluded;
 use thaw::*;
 
@@ -74,17 +76,17 @@ pub enum FileDisplayContext {
 
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
-    let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    let set_shares_query = use_context::<ShareQuerySetter>().unwrap().0;
     let set_files = use_context::<FilesSignal>().unwrap().1;
     let (file_name, _set_file_name) = signal(file.name);
     let peer_name = file.peer_name.clone();
 
     let download_request = move |_| {
-        let download = Command::Download {
-            path: file_name.get().to_string(),
-            peer_name: peer_name.clone(),
-        };
-        set_requester.update(|requester| requester.make_request(download));
+        // let download = Command::Download {
+        //     path: file_name.get().to_string(),
+        //     peer_name: peer_name.clone(),
+        // };
+        // set_requester.update(|requester| requester.make_request(download));
     };
 
     // Only display download button if we dont have it requested, and it is not our share
@@ -139,13 +141,17 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     searchterm: None,
                     recursive: false,
                 };
-                let command = if is_shared {
-                    Command::Shares(query)
-                } else {
-                    Command::Ls(query, Some(peer_name.clone()))
-                };
+                debug!("is_shared {}", is_shared);
 
-                set_requester.update(|requester| requester.make_request(command));
+                if is_shared {
+                    // crate::shares_query(
+                    //     query
+                    // );
+                } else {
+                    // let peer_name = Some(peer_name.clone());
+                    // client.files(FilesQuery { query, peer_name });
+                }
+
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
                 // state
                 file.is_expanded.set(true);

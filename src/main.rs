@@ -3,12 +3,13 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, UiEvent, UiResponse},
+    ui_messages::{DownloadInfo, UiEvent},
     ui_server::{client::Client, http_server},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
     Hdp,
 };
-use std::{env, net::SocketAddr, path::PathBuf};
+use reqwest::Url;
+use std::{env, path::PathBuf};
 use tokio::fs::create_dir_all;
 
 #[derive(Parser, Debug, Clone)]
@@ -134,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
 
             let shared_state = hdp.shared_state.clone();
 
-            let ui_address: SocketAddr = cli.ui_address.parse()?;
+            let ui_address: std::net::SocketAddr = cli.ui_address.parse()?;
             let addr = http_server(shared_state, ui_address).await?;
 
             println!("Web UI served on http://{}", addr);
@@ -160,7 +161,7 @@ async fn main() -> anyhow::Result<()> {
                 None => (None, None),
             };
 
-            let client = Client::new(cli.ui_address.parse()?).await?;
+            let client = Client::new(cli.ui_address.parse()?);
             let mut responses = client
                 .files(harddrive_party::ui_messages::FilesQuery {
                     peer_name,
@@ -174,7 +175,7 @@ async fn main() -> anyhow::Result<()> {
 
             while let Some(response) = responses.next().await {
                 match response {
-                    Ok(UiResponse::Ls(ls_response, peer_name)) => match ls_response {
+                    Ok((ls_response, peer_name)) => match ls_response {
                         LsResponse::Success(entries) => {
                             for entry in entries {
                                 if entry.is_dir {
@@ -192,9 +193,6 @@ async fn main() -> anyhow::Result<()> {
                             println!("Error from peer {:?}", err);
                         }
                     },
-                    Ok(some_other_response) => {
-                        println!("Got unexpected response {:?}", some_other_response);
-                    }
                     Err(e) => {
                         println!("Error from WS server {:?}", e);
                         break;
@@ -207,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
             searchterm,
             recursive,
         } => {
-            let client = Client::new(cli.ui_address.parse()?).await?;
+            let client = Client::new(cli.ui_address.parse()?);
             let mut responses = client
                 .shares(IndexQuery {
                     path,
@@ -247,14 +245,15 @@ async fn main() -> anyhow::Result<()> {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            let mut client = Client::new(cli.ui_address.parse()?).await?;
+            let client = Client::new(cli.ui_address.parse()?);
             let request_id = client
                 .download(
                     peer_path,
                     peer_name.ok_or(anyhow!("Peer name must be given"))?,
                 )
                 .await?;
-            while let Some(event) = client.next().await {
+            let mut event_stream = client.event_stream().await?;
+            while let Some(event) = event_stream.next().await {
                 if let Ok(UiEvent::Download(download_event)) = event {
                     if download_event.request_id == request_id {
                         println!("{download_event:?}");
@@ -269,7 +268,7 @@ async fn main() -> anyhow::Result<()> {
             // Split path into peername and path components
             let (peer_name, peer_path) = path_to_peer_path(path)?;
 
-            let client = Client::new(cli.ui_address.parse()?).await?;
+            let client = Client::new(cli.ui_address.parse()?);
             let mut stream = client
                 .read(
                     peer_name.ok_or(anyhow!("Incomplete peer path"))?,
@@ -287,7 +286,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         CliCommand::Connect { announce_address } => {
-            let client = Client::new(cli.ui_address.parse()?).await?;
+            let client = Client::new(cli.ui_address.parse()?);
             client.connect(announce_address).await?;
 
             // TODO we need to get peer name from announce address to check this

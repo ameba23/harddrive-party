@@ -1,6 +1,6 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::wire_messages::{IndexQuery, LsResponse};
+use crate::wire_messages::IndexQuery;
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
@@ -29,6 +29,7 @@ pub enum UiEvent {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Info {
+    pub name: String,
     pub os_home_dir: Option<String>,
     pub announce_address: String,
 }
@@ -68,18 +69,6 @@ pub struct UploadInfo {
     pub bytes_read: u64,
     pub speed: usize,
     pub peer_name: String,
-}
-
-/// Response to a UI command
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum UiResponse {
-    Read(Vec<u8>),
-    Ls(LsResponse, String),
-    Shares(LsResponse),
-    AddShare(u32),
-    RemoveShare,
-    Requests(Vec<UiDownloadRequest>),
-    RequestedFiles(Vec<UiRequestedFile>),
 }
 
 /// An error in response to a UI command

@@ -4,7 +4,7 @@ use crate::{
     errors::UiServerErrorWrapper,
     peer::DOWNLOAD_BLOCK_SIZE,
     process_length_prefix,
-    ui_messages::{FilesQuery, UiResponse, UiServerError},
+    ui_messages::{FilesQuery, UiServerError},
     ui_server::Bincode,
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, Request},
     RequestError, SharedState,
@@ -82,7 +82,7 @@ pub async fn post_files(
                 for entries in responses.iter() {
                     let ls_response = LsResponse::Success(entries.to_vec());
                     if let Ok(serialized_res) =
-                        bincode::serialize(&Ok::<UiResponse, UiServerError>(UiResponse::Ls(
+                        bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
                             ls_response,
                             peer_name.to_string(),
                         )))
@@ -124,9 +124,12 @@ pub async fn post_files(
                         cached_entries.push(entries.clone());
                     }
                 }
-                if let Ok(serialized_res) = bincode::serialize(&Ok::<UiResponse, UiServerError>(
-                    UiResponse::Ls(ls_response, peer_name_clone.to_string()),
-                )) {
+                if let Ok(serialized_res) =
+                    bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
+                        ls_response,
+                        peer_name_clone.to_string(),
+                    )))
+                {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
                     if response_tx.try_send(serialized_res).is_err() {
                         warn!("Response channel closed");
@@ -211,6 +214,7 @@ pub async fn get_info(
     Ok((
         StatusCode::OK,
         Bincode(Info {
+            name: shared_state.name.clone(),
             announce_address: shared_state.get_ui_announce_address(),
             os_home_dir: shared_state.os_home_dir,
         }),

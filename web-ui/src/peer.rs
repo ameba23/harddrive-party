@@ -1,8 +1,7 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    ui_messages::Command,
-    FilesSignal, PeerPath, RequesterSetter,
+    FilesSignal, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
 use std::collections::{HashMap, HashSet};
@@ -12,17 +11,12 @@ use thaw::*;
 #[derive(Clone, Debug)]
 pub struct Peer {
     pub name: String,
-    pub files: HashSet<String>,
     pub is_self: bool,
 }
 
 impl Peer {
     pub fn new(name: String, is_self: bool) -> Self {
-        Self {
-            name,
-            files: HashSet::new(),
-            is_self,
-        }
+        Self { name, is_self }
     }
 }
 
@@ -63,7 +57,6 @@ pub fn Peer(peer: Peer) -> impl IntoView {
             .collect::<Vec<File>>()
     };
 
-    // provide_context(PeerName(peer_signal));
     view! {
         <div>
             <Flex vertical=true>
@@ -89,7 +82,6 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                                 }
                             }
                         />
-
                     </TableBody>
                 </Table>
             </Flex>
@@ -116,7 +108,7 @@ pub fn Peers(
                 <div>
                     <For
                         each=move || peers.get()
-                        key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
+                        key=|(name, _)| name.clone()
                         children=move |(_peer_name, peer)| view! { <Peer peer /> }
                     />
                 </div>
@@ -140,15 +132,15 @@ pub fn Peers(
         }
     };
 
-    let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    // let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_value = RwSignal::new(String::new());
 
     let add_peer = move |_| {
         let announce_payload = input_value.get();
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
-            let add = Command::ConnectDirect(announce_payload.to_string());
-            set_requester.update(|requester| requester.make_request(add));
+            // let add = Command::ConnectDirect(announce_payload.to_string());
+            // set_requester.update(|requester| requester.make_request(add));
             set_pending_peers.update(|pending_peers| {
                 pending_peers.insert(announce_payload.to_string());
             });
