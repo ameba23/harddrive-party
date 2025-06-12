@@ -1,22 +1,22 @@
-use crate::{display_bytes, peer::Peer, FilesSignal, PeerPath};
+use crate::{display_bytes, FilesSignal, PeerPath};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use thaw::*;
 
 #[component]
 pub fn HdpHeader(
-    peers: ReadSignal<HashMap<String, Peer>>,
-    shares: ReadSignal<Option<Peer>>,
+    peers: ReadSignal<HashSet<String>>,
+    own_name: ReadSignal<Option<String>>,
 ) -> impl IntoView {
     let selected_value = RwSignal::new("peers".to_string());
 
     let files = use_context::<FilesSignal>().unwrap().0;
 
-    let shared_files_size = move || match shares.get() {
+    let shared_files_size = move || match own_name.get() {
         Some(me) => {
             match files.get().get(&PeerPath {
-                peer_name: me.name,
+                peer_name: me,
                 path: "".to_string(),
             }) {
                 Some(file) => display_bytes(file.size.unwrap_or_default()),

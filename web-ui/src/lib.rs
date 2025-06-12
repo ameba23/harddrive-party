@@ -33,22 +33,21 @@ pub fn App() -> impl IntoView {
 }
 
 pub fn shares_query(
-    origin: String,
+    ui_url: url::Url,
     query: IndexQuery,
-    own_name: ReadSignal<Option<String>>,
+    own_name: Option<String>,
     set_files: WriteSignal<BTreeMap<PeerPath, File>>,
 ) {
     spawn_local(async move {
-        let client = Client::new(origin.parse().unwrap());
+        let client = Client::new(ui_url);
         let mut shares_stream = client.shares(query).await.unwrap();
-
+        debug!("Making shares query {own_name:?}");
         while let Some(response) = shares_stream.next().await {
             match response {
                 Ok(ls_response) => match ls_response {
                     LsResponse::Success(entries) => {
-                        debug!("processing entrys");
-                        let entries_clone = entries.clone();
-                        if let Some(own_name) = own_name.get() {
+                        debug!("processing entries");
+                        if let Some(ref own_name) = own_name {
                             set_files.update(|files| {
                                 for entry in entries {
                                     let peer_path = PeerPath {

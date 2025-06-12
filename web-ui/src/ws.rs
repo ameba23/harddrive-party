@@ -1,15 +1,14 @@
 use crate::AppError;
-use bincode::{deserialize, serialize};
+use bincode::deserialize;
 use futures::{
-    channel::mpsc::{channel, Receiver, Sender},
+    channel::mpsc::{channel, Receiver},
     SinkExt, StreamExt,
 };
 use harddrive_party_shared::ui_messages::UiEvent;
 use leptos::prelude::*;
 use log::{debug, error, warn};
-use rand::{rngs::StdRng, Rng, SeedableRng};
 use reqwasm::websocket::{futures::WebSocket, Message};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use wasm_bindgen_futures::spawn_local;
 
 #[derive(Clone, Debug)]
@@ -17,12 +16,15 @@ pub struct WebsocketService;
 
 impl WebsocketService {
     pub fn new(
-        url: &str,
+        url: url::Url,
         set_error_message: WriteSignal<HashSet<AppError>>,
     ) -> anyhow::Result<(Self, Receiver<UiEvent>)> {
-        let ws = WebSocket::open(url)?;
+        let mut url = url.join("ws")?;
+        url.set_scheme("ws").unwrap();
+        debug!("Connecting to ws {}", url.to_string());
+        let ws = WebSocket::open(&url.to_string())?;
 
-        let (mut write, mut read) = ws.split();
+        let (_write, mut read) = ws.split();
 
         let (mut out_tx, out_rx) = channel::<UiEvent>(1024);
 

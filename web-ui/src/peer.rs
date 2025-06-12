@@ -8,28 +8,28 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Bound::Included;
 use thaw::*;
 
-#[derive(Clone, Debug)]
-pub struct Peer {
-    pub name: String,
-    pub is_self: bool,
-}
-
-impl Peer {
-    pub fn new(name: String, is_self: bool) -> Self {
-        Self { name, is_self }
-    }
-}
+// #[derive(Clone, Debug)]
+// pub struct Peer {
+//     pub name: String,
+//     pub is_self: bool,
+// }
+//
+// impl Peer {
+//     pub fn new(name: String, is_self: bool) -> Self {
+//         Self { name, is_self }
+//     }
+// }
 
 #[component]
-pub fn Peer(peer: Peer) -> impl IntoView {
+pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     let files = use_context::<FilesSignal>().unwrap().0;
     // This signal is used below to provide context to File
-    let (peer_signal, _set_peer) = signal((peer.name.clone(), peer.is_self));
+    let (peer_signal, _set_peer) = signal((name.clone(), is_self));
 
     // This should probably be in a closure
     let root_size = display_bytes(
         match files.get().get(&PeerPath {
-            peer_name: peer.name,
+            peer_name: name,
             path: "".to_string(),
         }) {
             Some(file) => file.size.unwrap_or_default(),
@@ -76,7 +76,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                                 view! {
                                     <File
                                         file
-                                        is_shared=peer.is_self
+                                        is_shared=is_self
                                         context=FileDisplayContext::Peer
                                     />
                                 }
@@ -91,7 +91,7 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 
 #[component]
 pub fn Peers(
-    peers: ReadSignal<HashMap<String, Peer>>,
+    peers: ReadSignal<HashSet<String>>,
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
     set_pending_peers: WriteSignal<HashSet<String>>,
@@ -108,8 +108,8 @@ pub fn Peers(
                 <div>
                     <For
                         each=move || peers.get()
-                        key=|(name, _)| name.clone()
-                        children=move |(_peer_name, peer)| view! { <Peer peer /> }
+                        key=|name| name.clone()
+                        children=move |name| view! { <Peer name is_self=false /> }
                     />
                 </div>
             })

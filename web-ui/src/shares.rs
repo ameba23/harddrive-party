@@ -1,17 +1,16 @@
-use crate::{peer::Peer, ErrorMessage, SuccessMessage};
-use leptos::{either::EitherOf3, prelude::*};
+use crate::{AppContext, ErrorMessage, Peer, SuccessMessage};
+use leptos::{
+    either::{Either, EitherOf3},
+    prelude::*,
+};
 use thaw::*;
 
 #[component]
 pub fn Shares(
-    own_name: ReadSignal<Option<String>>,
-    peers: ReadSignal<HashMap<String, Peer>>,
     add_or_remove_share_message: ReadSignal<Option<Result<String, String>>>,
     home_dir: ReadSignal<Option<String>>,
 ) -> impl IntoView {
-    let peer = move || peers.get().get(own_name.get());
-
-    // let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    let app_context = use_context::<AppContext>().unwrap();
 
     let home_dir_if_exists = move || {
         let home_dir_option = home_dir.get();
@@ -77,8 +76,13 @@ pub fn Shares(
                     None => EitherOf3::C(view! { <span></span> }),
                 }
             }}
-
-                    view! { <Peer peer /> }
+            { move || {
+                     match app_context.own_name.get() {
+                              Some(name) => {
+                                  Either::Left(view! { <Peer name is_self=true />}) },
+                             None => Either::Right(view! { <span />}),
+                                }
+                      }}
         </Flex>
     }
 }

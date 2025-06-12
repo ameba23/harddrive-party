@@ -1,14 +1,13 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
-    hdp::{display_bytes, Entry},
-    ui_messages::{FilesQuery, UiDownloadRequest},
-    FilesSignal, PeerPath, ShareQuerySetter,
+    hdp::{display_bytes, AppContext, Entry},
+    ui_messages::UiDownloadRequest,
+    FilesSignal, PeerPath,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
     either::{Either, EitherOf4, EitherOf5},
     prelude::*,
-    task::spawn_local,
 };
 use log::debug;
 use std::ops::Bound::Excluded;
@@ -76,7 +75,7 @@ pub enum FileDisplayContext {
 
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
-    let set_shares_query = use_context::<ShareQuerySetter>().unwrap().0;
+    let app_context = use_context::<AppContext>().unwrap();
     let set_files = use_context::<FilesSignal>().unwrap().1;
     let (file_name, _set_file_name) = signal(file.name);
     let peer_name = file.peer_name.clone();
@@ -144,9 +143,12 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 debug!("is_shared {}", is_shared);
 
                 if is_shared {
-                    // crate::shares_query(
-                    //     query
-                    // );
+                    crate::shares_query(
+                        app_context.ui_url.get(),
+                        query,
+                        app_context.own_name.get(),
+                        set_files,
+                    );
                 } else {
                     // let peer_name = Some(peer_name.clone());
                     // client.files(FilesQuery { query, peer_name });

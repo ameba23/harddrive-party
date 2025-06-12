@@ -4,7 +4,7 @@ pub use harddrive_party_shared::wire_messages;
 use crate::{
     components::header::HdpHeader,
     file::{DownloadStatus, File},
-    peer::{Peer, Peers},
+    peer::Peers,
     requests::Requests,
     shares::Shares,
     transfers::Transfers,
@@ -19,15 +19,18 @@ use leptos_router::{
     components::{Redirect, Route, Routes},
     path,
 };
-use log::{debug, info, warn};
+use log::{debug, info};
 use pretty_bytes_rust::pretty_bytes;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use thaw::*;
 use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
 
 #[derive(Clone)]
-pub struct ShareQuerySetter(pub WriteSignal<IndexQuery>);
+pub struct AppContext {
+    pub ui_url: ReadSignal<url::Url>,
+    pub own_name: ReadSignal<Option<String>>,
+}
 
 #[derive(Clone)]
 pub struct FilesSignal(
@@ -52,19 +55,20 @@ pub fn HdpUi() -> impl IntoView {
         None => ("No location".to_string(), "No hostname".to_string()),
     };
     info!("Origin: {}", origin);
-    let (origin, _) = signal(origin);
-    // let origin_url: reqwest::Url = origin.parse().unwrap();
+    let ui_url: url::Url = if cfg!(feature = "dev") {
+        "http://127.0.0.1:3030".parse().unwrap()
+    } else {
+        origin.parse().unwrap()
+    };
+    let (ui_url, _) = signal(ui_url);
 
     let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
-    let ws_url = format!("ws://{}:3030/ws", hostname);
-    let (ws_service, mut ws_rx) = WebsocketService::new(&ws_url, set_error_message).unwrap();
+    let (ws_service, mut ws_rx) = WebsocketService::new(ui_url.get(), set_error_message).unwrap();
 
     // Setup signals
-    // let (requester, set_requester) = signal(Requester::new(ws_service));
-    let (peers, set_peers) = signal(HashMap::<String, Peer>::new());
+    let (peers, set_peers) = signal(HashSet::<String>::new());
     let (pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
-    let (shares, set_shares) = signal(Option::<Peer>::None);
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
 
@@ -82,32 +86,24 @@ pub fn HdpUi() -> impl IntoView {
         recursive: false,
     });
 
-    let info_resource = LocalResource::new(move || {
+    spawn_local(async move {
         let set_announce_address = set_announce_address.clone();
         let set_home_dir = set_home_dir.clone();
-        let set_shares = set_shares.clone();
-        let set_files = set_files.clone();
-        let own_name = own_name.clone();
         let set_own_name = set_own_name.clone();
-        let shares = shares.clone();
-        let client = Client::new(origin.get().parse().unwrap());
-        async move {
-            let info = client.info().await.unwrap();
-            set_announce_address.update(|address| *address = Some(info.announce_address));
-            set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
-            set_own_name.update(|own_name| *own_name = Some(info.name));
-            // set_shares.update(|shares| match shares {
-            //     Some(_) => {}
-            //     None => *shares = Some(Peer::new(info.name, true)),
-            // });
+        let client = Client::new(ui_url.get());
+        let info = client.info().await.unwrap();
+        set_announce_address.update(|address| *address = Some(info.announce_address));
+        set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
+        set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+    });
 
-            let index_query = IndexQuery {
-                path: Default::default(),
-                searchterm: None,
-                recursive: false,
-            };
-            crate::shares_query(origin.get(), index_query, own_name, set_files);
-        }
+    Effect::new(move || {
+        let index_query = IndexQuery {
+            path: Default::default(),
+            searchterm: None,
+            recursive: false,
+        };
+        crate::shares_query(ui_url.get(), index_query, own_name.get(), set_files);
     });
 
     // let (client, set_client) = signal(UiClient {
@@ -120,7 +116,7 @@ pub fn HdpUi() -> impl IntoView {
     //     shares,
     // });
 
-    provide_context(ShareQuerySetter(set_shares_query));
+    provide_context(AppContext { ui_url, own_name });
     provide_context(FilesSignal(files, set_files));
 
     spawn_local(async move {
@@ -498,7 +494,7 @@ pub fn HdpUi() -> impl IntoView {
         <Layout>
             <div id="root" class="main">
                 <nav>
-                    <HdpHeader peers shares />
+                    <HdpHeader peers own_name />
                     {error_message_display}
                 </nav>
                 <main>
@@ -513,7 +509,7 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("shares")
                                 view=move || {
-                                    view! { <Shares shares add_or_remove_share_message home_dir /> }
+                                    view! { <Shares add_or_remove_share_message home_dir /> }
                                 }
                             />
 
