@@ -18,7 +18,7 @@ use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
 use bytes::{BufMut, BytesMut};
 use futures::{channel::mpsc, pin_mut, StreamExt};
 use harddrive_party_shared::{
-    ui_messages::{Info, UiDownloadRequest, UiRequestedFile},
+    ui_messages::{Info, PeerPath, UiDownloadRequest, UiRequestedFile},
     wire_messages::ReadQuery,
 };
 use log::{debug, error, warn};
@@ -174,10 +174,9 @@ pub async fn post_shares(
 /// Responds with a request ID as a utf-8 string
 pub async fn post_download(
     State(shared_state): State<SharedState>,
-    // TODO use UI peerpath type
-    Bincode((path, peer_name)): Bincode<(String, String)>,
+    Bincode(peer_path): Bincode<PeerPath>,
 ) -> Result<(StatusCode, String), UiServerErrorWrapper> {
-    let id = shared_state.download(peer_name, path).await?;
+    let id = shared_state.download(peer_path).await?;
     // TODO consider replacing this reponse with a DownloadResponse struct with timestamp
     //         response: Ok(UiResponse::Download(DownloadResponse {
     //             download_info: DownloadInfo::Requested(get_timestamp()),

@@ -140,3 +140,12 @@ impl fmt::Display for DownloadEvent {
         }
     }
 }
+
+/// Represents a remote file
+#[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PeerPath {
+    /// The name of the peer who holds the file
+    pub peer_name: String,
+    /// The path to the remote file
+    pub path: String,
+}

@@ -1,14 +1,14 @@
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, FilesQuery, UiEvent},
+    ui_messages::{DownloadInfo, FilesQuery, PeerPath, UiEvent},
     ui_server::{client::Client, http_server},
     wire_messages::{Entry, IndexQuery, LsResponse},
     Hdp, SharedState,
 };
-use std::{collections::HashSet, net::SocketAddr};
+use std::collections::HashSet;
 use tempfile::TempDir;
 
-async fn setup_peer(share_dirs: Vec<String>) -> (SharedState, SocketAddr) {
+async fn setup_peer(share_dirs: Vec<String>) -> (SharedState, reqwest::Url) {
     let storage = TempDir::new().unwrap();
     let downloads = storage.path().to_path_buf();
     let mut hdp = Hdp::new(storage, share_dirs, downloads, true)
@@ -24,15 +24,15 @@ async fn setup_peer(share_dirs: Vec<String>) -> (SharedState, SocketAddr) {
     let http_server_addr = http_server(shared_state.clone(), "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
-
-    (shared_state, http_server_addr)
+    let url = format!("http://{}", http_server_addr).parse().unwrap();
+    (shared_state, url)
 }
 
 #[tokio::test]
 async fn basic() {
-    let (alice, alice_socket_address) = setup_peer(vec!["tests/test-data".to_string()]).await;
+    let (alice, alice_url) = setup_peer(vec!["tests/test-data".to_string()]).await;
 
-    let (bob, bob_socket_address) = setup_peer(vec![]).await;
+    let (bob, bob_url) = setup_peer(vec![]).await;
     let mut bob_rx = bob.event_broadcaster.subscribe();
 
     // Wait until they connect to each other using mDNS
@@ -45,8 +45,8 @@ async fn basic() {
     }
 
     // Create clients
-    let alice_client = Client::new(alice_socket_address).await.unwrap();
-    let bob_client = Client::new(bob_socket_address).await.unwrap();
+    let alice_client = Client::new(alice_url);
+    let bob_client = Client::new(bob_url);
 
     // Do a share query on alice
     let mut response_stream = alice_client
@@ -91,7 +91,10 @@ async fn basic() {
 
     // Download a file
     let request_id = bob_client
-        .download("test-data/somefile".to_string(), alice.name)
+        .download(&PeerPath {
+            path: "test-data/somefile".to_string(),
+            peer_name: alice.name,
+        })
         .await
         .unwrap();
 

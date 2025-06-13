@@ -3,12 +3,11 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, UiEvent},
+    ui_messages::{DownloadInfo, PeerPath, UiEvent},
     ui_server::{client::Client, http_server},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
     Hdp,
 };
-use reqwest::Url;
 use std::{env, path::PathBuf};
 use tokio::fs::create_dir_all;
 
@@ -247,10 +246,10 @@ async fn main() -> anyhow::Result<()> {
 
             let client = Client::new(cli.ui_address.parse()?);
             let request_id = client
-                .download(
-                    peer_path,
-                    peer_name.ok_or(anyhow!("Peer name must be given"))?,
-                )
+                .download(&PeerPath {
+                    path: peer_path,
+                    peer_name: peer_name.ok_or(anyhow!("Peer name must be given"))?,
+                })
                 .await?;
             let mut event_stream = client.event_stream().await?;
             while let Some(event) = event_stream.next().await {

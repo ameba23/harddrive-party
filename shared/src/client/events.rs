@@ -1,8 +1,8 @@
 use crate::ui_messages::UiEvent;
+use anyhow::anyhow;
 use bincode::deserialize;
 use futures::{stream::SplitStream, Stream, StreamExt};
 use reqwest::Url;
-use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio_tungstenite::{connect_async, WebSocketStream};
@@ -15,7 +15,9 @@ pub struct EventStream(
 #[cfg(feature = "native")]
 impl EventStream {
     pub async fn new(mut ui_url: Url) -> anyhow::Result<Self> {
-        ui_url.set_scheme("ws");
+        ui_url
+            .set_scheme("ws")
+            .map_err(|_| anyhow!("Invalid URL"))?;
         ui_url.set_path("ws");
         let (ws_stream, _) = connect_async(ui_url).await?;
         let (_write, read) = ws_stream.split();

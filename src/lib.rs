@@ -14,7 +14,7 @@ use crate::{
     errors::UiServerErrorWrapper,
     peer::Peer,
     shares::Shares,
-    ui_messages::{UiEvent, UiServerError},
+    ui_messages::{PeerPath, UiEvent, UiServerError},
     wire_messages::{AnnounceAddress, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
@@ -157,14 +157,10 @@ impl SharedState {
         response_rx.await?
     }
 
-    pub async fn download(
-        &self,
-        peer_name: String,
-        path: String,
-    ) -> Result<u32, UiServerErrorWrapper> {
+    pub async fn download(&self, peer_path: PeerPath) -> Result<u32, UiServerErrorWrapper> {
         // Get details of the file / dir
         let ls_request = Request::Ls(IndexQuery {
-            path: Some(path.clone()),
+            path: Some(peer_path.path.clone()),
             searchterm: None,
             recursive: true,
         });
@@ -186,10 +182,13 @@ impl SharedState {
         //             //     }
         //             // }
         //
-        let recv = self.request(ls_request, &peer_name).await.unwrap();
+        let recv = self
+            .request(ls_request, &peer_path.peer_name)
+            .await
+            .unwrap();
         let peer_public_key = {
             let peers = self.peers.lock().await;
-            match peers.get(&peer_name) {
+            match peers.get(&peer_path.peer_name) {
                 Some(peer) => peer.public_key,
                 None => {
                     warn!("Handling request to download a file from a peer who is not connected");
@@ -208,7 +207,7 @@ impl SharedState {
         while let Some(Ok(ls_response)) = ls_response_stream.next().await {
             if let LsResponse::Success(entries) = ls_response {
                 for entry in entries.iter() {
-                    if entry.name == path {
+                    if entry.name == peer_path.path {
                         if let Err(err) = self.wishlist.add_request(&DownloadRequest::new(
                             entry.name.clone(),
                             entry.size,

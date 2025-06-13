@@ -1,24 +1,12 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    FilesSignal, PeerPath,
+    AppContext, FilesSignal, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
-
-// #[derive(Clone, Debug)]
-// pub struct Peer {
-//     pub name: String,
-//     pub is_self: bool,
-// }
-//
-// impl Peer {
-//     pub fn new(name: String, is_self: bool) -> Self {
-//         Self { name, is_self }
-//     }
-// }
 
 #[component]
 pub fn Peer(name: String, is_self: bool) -> impl IntoView {
@@ -96,6 +84,8 @@ pub fn Peers(
     pending_peers: ReadSignal<HashSet<String>>,
     set_pending_peers: WriteSignal<HashSet<String>>,
 ) -> impl IntoView {
+    let app_context = use_context::<AppContext>().unwrap();
+
     let show_peers = move || {
         if peers.get().is_empty() {
             Either::Left(view! {
@@ -139,8 +129,7 @@ pub fn Peers(
         let announce_payload = input_value.get();
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
-            // let add = Command::ConnectDirect(announce_payload.to_string());
-            // set_requester.update(|requester| requester.make_request(add));
+            app_context.connect(announce_payload.to_string());
             set_pending_peers.update(|pending_peers| {
                 pending_peers.insert(announce_payload.to_string());
             });

@@ -1,4 +1,5 @@
 pub use harddrive_party_shared::ui_messages;
+use harddrive_party_shared::ui_messages::PeerPath;
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
@@ -11,6 +12,7 @@ use crate::{
     ui_messages::{DownloadInfo, FilesQuery, UiDownloadRequest, UiEvent, UiServerError},
     wire_messages::IndexQuery,
     ws::WebsocketService,
+    AppContext,
 };
 use futures::StreamExt;
 use harddrive_party_shared::client::Client;
@@ -27,44 +29,29 @@ use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
 
 #[derive(Clone)]
-pub struct AppContext {
-    pub ui_url: ReadSignal<url::Url>,
-    pub own_name: ReadSignal<Option<String>>,
-}
-
-#[derive(Clone)]
 pub struct FilesSignal(
     pub ReadSignal<BTreeMap<PeerPath, File>>,
     pub WriteSignal<BTreeMap<PeerPath, File>>,
 );
 
-/// Represents a remote file
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct PeerPath {
-    /// The name of the peer who holds the file
-    pub peer_name: String,
-    /// The path to the remote file
-    pub path: String,
-}
-
 #[component]
 pub fn HdpUi() -> impl IntoView {
-    // Use document.location as hostname for ws server to connect to
-    let (origin, hostname) = match document().location() {
-        Some(loc) => (loc.origin().unwrap(), loc.hostname().unwrap()),
-        None => ("No location".to_string(), "No hostname".to_string()),
-    };
-    info!("Origin: {}", origin);
+    // Use document.location as hostname for api server server to connect to - unless 'dev' feature
     let ui_url: url::Url = if cfg!(feature = "dev") {
         "http://127.0.0.1:3030".parse().unwrap()
     } else {
+        let origin = match document().location() {
+            Some(loc) => loc.origin().unwrap(),
+            None => "http://127.0.0.1:3030".to_string(),
+        };
         origin.parse().unwrap()
     };
-    let (ui_url, _) = signal(ui_url);
+    // let (ui_url, _) = signal(ui_url);
 
     let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
-    let (ws_service, mut ws_rx) = WebsocketService::new(ui_url.get(), set_error_message).unwrap();
+    let (_ws_service, mut ws_rx) =
+        WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
 
     // Setup signals
     let (peers, set_peers) = signal(HashSet::<String>::new());
@@ -72,63 +59,56 @@ pub fn HdpUi() -> impl IntoView {
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
 
-    let (own_name, set_own_name) = signal(Option::<String>::None);
+    // let (own_name, set_own_name) = signal(Option::<String>::None);
     let (requests, set_requests) = signal(Requests::new());
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
+    let (own_name, set_own_name) = signal(Option::<String>::None);
+    let app_context = AppContext::new(ui_url, own_name, set_peers.clone());
 
-    let (shares_query, set_shares_query) = signal(IndexQuery {
-        path: Default::default(),
-        searchterm: None,
-        recursive: false,
-    });
-
+    // Get initial info
+    let client = app_context.client.get_untracked();
     spawn_local(async move {
         let set_announce_address = set_announce_address.clone();
         let set_home_dir = set_home_dir.clone();
         let set_own_name = set_own_name.clone();
-        let client = Client::new(ui_url.get());
         let info = client.info().await.unwrap();
         set_announce_address.update(|address| *address = Some(info.announce_address));
         set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
         set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
     });
+    {
+        let app_context = app_context.clone();
+        Effect::new(move || {
+            let index_query = IndexQuery {
+                path: Default::default(),
+                searchterm: None,
+                recursive: false,
+            };
+            app_context.shares_query(index_query.clone(), own_name.get(), set_files);
 
-    Effect::new(move || {
-        let index_query = IndexQuery {
-            path: Default::default(),
-            searchterm: None,
-            recursive: false,
-        };
-        crate::shares_query(ui_url.get(), index_query, own_name.get(), set_files);
-    });
+            // On startup do a files query to see what peers are connected
+            app_context.files(
+                FilesQuery {
+                    query: index_query,
+                    peer_name: None,
+                },
+                set_files,
+            );
+        });
+    }
+    app_context.requests(set_requests);
 
-    // let (client, set_client) = signal(UiClient {
-    //     inner: Client::new(origin.parse().unwrap()),
-    //     set_peers,
-    //     set_shares,
-    //     set_home_dir,
-    //     set_announce_address,
-    //     set_files,
-    //     shares,
-    // });
-
-    provide_context(AppContext { ui_url, own_name });
+    provide_context(app_context.clone());
     provide_context(FilesSignal(files, set_files));
 
     spawn_local(async move {
         // Loop over messages from server
         while let Some(msg) = ws_rx.next().await {
             match msg {
-                //     match response {
-                //         Ok(UiResponse::Read(read_response)) => {
-                //             // This is not currently used but could be used for previewing a
-                //             // portion of a file without downloading it
-                //             debug!("Got read response {:?}", read_response);
-                //         }
                 //         Ok(UiResponse::Download(download_response)) => {
                 //             debug!("Got download response {:?}", download_response);
                 //             // TODO check if we already have the associated request
@@ -252,12 +232,7 @@ pub fn HdpUi() -> impl IntoView {
                 //         }
                 //         Ok(UiResponse::EndResponse) => {
                 //             if let Some(Command::ConnectDirect(announce_address)) = request {
-                //                 set_pending_peers.update(|pending_peers| {
-                //                     pending_peers.remove(announce_address);
-                //                 })
                 //             }
-                //
-                //             remove_request(&id);
                 //         }
                 //         Ok(UiResponse::AddShare(number_of_shares)) => {
                 //             debug!("Got add share response");
@@ -289,137 +264,27 @@ pub fn HdpUi() -> impl IntoView {
                 //             set_requester
                 //                 .update(|requester| requester.make_request(share_query_request));
                 //         }
-                //         Ok(UiResponse::Requests(new_requests)) => {
-                //             set_requests.update(|requests| {
-                //                 for request in new_requests.iter() {
-                //                     requests.insert(&request);
-                //                 }
-                //             });
-                //             let new_requests_clone = new_requests.clone();
-                //             set_files.update(|files| {
-                //                 for request in new_requests_clone {
-                //                     let download_status = if request.progress == request.total_size
-                //                     {
-                //                         DownloadStatus::Downloaded(request.request_id)
-                //                     } else {
-                //                         DownloadStatus::Requested(request.request_id)
-                //                     };
-                //                     let peer_path = PeerPath {
-                //                         peer_name: request.peer_name.clone(),
-                //                         path: request.path.clone(),
-                //                     };
-                //                     files
-                //                         .entry(peer_path.clone())
-                //                         .and_modify(|file| {
-                //                             file.request.set(Some(request.clone()));
-                //                         })
-                //                         .or_insert(File {
-                //                             name: request.path.clone(),
-                //                             peer_name: request.peer_name.clone(),
-                //                             size: Some(request.total_size),
-                //                             download_status: RwSignal::new(download_status.clone()),
-                //                             request: RwSignal::new(Some(request.clone())),
-                //                             is_dir: None,
-                //                             is_expanded: RwSignal::new(true),
-                //                             is_visible: RwSignal::new(true),
-                //                         });
-                //
-                //                     let mut upper_bound = peer_path.path.clone();
-                //                     upper_bound.push_str("~");
-                //                     for (_, file) in files.range_mut(
-                //                         peer_path.clone()..PeerPath {
-                //                             peer_name: peer_path.peer_name.clone(),
-                //                             path: upper_bound,
-                //                         },
-                //                     ) {
-                //                         // TODO only set this to requested if...
-                //                         file.download_status.set(download_status.clone());
-                //                     }
-                //                 }
-                //             });
-                //             for request in new_requests {
-                //                 set_requester.update(|requester| {
-                //                     requester
-                //                         .make_request(Command::RequestedFiles(request.request_id))
-                //                 });
-                //             }
-                //         }
-                //         Ok(UiResponse::RequestedFiles(requested_files)) => {
-                //             if let Some(Command::RequestedFiles(request_id)) = request {
-                //                 // Now find the request and get peer_name
-                //                 if let Some(peer_path) = requests.get().get_by_id(*request_id) {
-                //                     set_files.update(|files| {
-                //                         let is_dir_request = requested_files.len() > 0;
-                //                         for requested_file in requested_files {
-                //                             let download_status = if requested_file.downloaded {
-                //                                 DownloadStatus::Downloaded(*request_id)
-                //                             } else {
-                //                                 DownloadStatus::Requested(*request_id)
-                //                             };
-                //                             files
-                //                                 .entry(PeerPath {
-                //                                     peer_name: peer_path.peer_name.clone(),
-                //                                     path: requested_file.path.clone(),
-                //                                 })
-                //                                 .and_modify(|file| {
-                //                                     // TODO this should not clobber if file is in
-                //                                     // downloading state
-                //                                     file.download_status
-                //                                         .set(download_status.clone());
-                //                                     file.size = Some(requested_file.size);
-                //                                 })
-                //                                 .or_insert(File {
-                //                                     name: requested_file.path,
-                //                                     peer_name: peer_path.peer_name.clone(),
-                //                                     size: Some(requested_file.size),
-                //                                     download_status: RwSignal::new(download_status),
-                //                                     request: RwSignal::new(None),
-                //                                     is_dir: Some(false),
-                //                                     is_expanded: RwSignal::new(true),
-                //                                     is_visible: RwSignal::new(true),
-                //                                 });
-                //                         }
-                //                         // TODO here we should set the state of the parent request
-                //                         // - if request_files > 1 (or 0?) is_dir = Some(true) else
-                //                         // Some(false)
-                //                         files.entry(peer_path.clone()).and_modify(|file| {
-                //                             if file.is_dir.is_none() {
-                //                                 file.is_dir = Some(is_dir_request);
-                //                             }
-                //                         });
-                //                     });
-                //                 }
-                //             }
-                //         }
-                //     }
                 // }
                 UiEvent::PeerConnected { name } => {
-                    // If a new peer connects check their files
-                    // or check our own files
                     debug!("Connected to {}", name);
-                    // let request = if let PeerRemoteOrSelf::Me {
-                    //     os_home_dir,
-                    //     announce_address,
-                    // } = peer_type
-                    // {
-                    //     set_home_dir.update(|home_dir| *home_dir = os_home_dir);
-                    //     set_announce_address.update(|address| *address = Some(announce_address));
-                    //     Command::Shares(IndexQuery {
-                    //         path: Default::default(),
-                    //         searchterm: None,
-                    //         recursive: false,
-                    //     })
-                    // } else {
-                    //     Command::Ls(
-                    //         IndexQuery {
-                    //             path: Default::default(),
-                    //             searchterm: None,
-                    //             recursive: false,
-                    //         },
-                    //         Default::default(),
-                    //     )
-                    // };
-                    // set_requester.update(|requester| requester.make_request(request));
+                    set_peers.update(|peers| {
+                        peers.insert(name.clone());
+                    });
+                    app_context.files(
+                        FilesQuery {
+                            query: IndexQuery {
+                                path: Default::default(),
+                                searchterm: None,
+                                recursive: false,
+                            },
+                            peer_name: Some(name),
+                        },
+                        set_files,
+                    )
+                    //TODO remove from pending_peers
+                    // set_pending_peers.update(|pending_peers| {
+                    //     pending_peers.remove(announce_address);
+                    // })
                 }
                 UiEvent::PeerDisconnected { name } => {
                     debug!("{} disconnected", name);
@@ -432,6 +297,13 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiEvent::PeerConnectionFailed { name, error } => {
                     debug!("Peer connection failed {} {}", name, error);
+                    // set_pending_peers.update(|pending_peers| {
+                    //     pending_peers.remove(announce_address);
+                    // })
+                    //
+                    set_peers.update(|peers| {
+                        peers.remove(&name);
+                    });
                 }
                 UiEvent::Download(_download_info) => {}
             }
@@ -443,11 +315,6 @@ pub fn HdpUi() -> impl IntoView {
     // // On startup GET /info
     // let info = client.info();
     //
-    // // On startup do a files query to see what peers are connected
-    // client.files(FilesQuery {
-    //     query: index_query.clone(),
-    //     peer_name: None,
-    // });
     // // On startup do a shares query to get our own files
     // client.shares(index_query);
 

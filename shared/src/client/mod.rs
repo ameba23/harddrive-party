@@ -5,7 +5,7 @@ mod events;
 pub use events::EventStream;
 
 use crate::{
-    ui_messages::{FilesQuery, Info, UiDownloadRequest, UiRequestedFile, UiServerError},
+    ui_messages::{FilesQuery, Info, PeerPath, UiDownloadRequest, UiRequestedFile, UiServerError},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
 };
 use bincode::{deserialize, serialize};
@@ -19,6 +19,7 @@ use std::task::{Context, Poll};
 /// A result for which the error is UiServerError
 type UiResult<T> = Result<T, UiServerError>;
 
+#[derive(Clone)]
 pub struct Client {
     http_client: reqwest::Client,
     ui_url: Url,
@@ -76,11 +77,11 @@ impl Client {
         Ok(LengthPrefixedStream::new(res))
     }
 
-    pub async fn download(&self, path: String, peer_name: String) -> anyhow::Result<u32> {
+    pub async fn download(&self, peer_path: &PeerPath) -> anyhow::Result<u32> {
         let res = self
             .http_client
             .post(self.ui_url.join("download")?)
-            .body(serialize(&(path, peer_name))?)
+            .body(serialize(peer_path)?)
             .send()
             .await?;
 

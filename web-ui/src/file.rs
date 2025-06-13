@@ -1,8 +1,8 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
-    hdp::{display_bytes, AppContext, Entry},
-    ui_messages::UiDownloadRequest,
-    FilesSignal, PeerPath,
+    hdp::{display_bytes, Entry},
+    ui_messages::{FilesQuery, UiDownloadRequest},
+    AppContext, FilesSignal, PeerPath,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
@@ -143,15 +143,10 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 debug!("is_shared {}", is_shared);
 
                 if is_shared {
-                    crate::shares_query(
-                        app_context.ui_url.get(),
-                        query,
-                        app_context.own_name.get(),
-                        set_files,
-                    );
+                    app_context.shares_query(query, app_context.own_name.get(), set_files);
                 } else {
-                    // let peer_name = Some(peer_name.clone());
-                    // client.files(FilesQuery { query, peer_name });
+                    let peer_name = Some(peer_name.clone());
+                    app_context.files(FilesQuery { query, peer_name }, set_files);
                 }
 
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
