@@ -51,7 +51,6 @@ speedometer = "0.2.2"
 stunclient = "0.4.1"
 lru = "0.10.0"
 async-stream = "0.3.4"
-base64 = "0.22.1"
 axum = { version = "0.8.4", features = ["ws"] }
 tower-http = { version = "0.6.4", features = ["fs"] }
 rust-embed = "8.7.2"
