@@ -102,6 +102,7 @@ fn create_service_info(
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = HashMap::new();
+    // TODO here we could replace hex-encoded public key with announce address
     properties.insert(
         PUBLIC_KEY_PROPERTY_NAME.to_string(),
         hex::encode(public_key),

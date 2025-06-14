@@ -121,8 +121,10 @@ impl AnnounceAddress {
             name: name.to_string(),
         })
     }
+}
 
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for AnnounceAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut type_value = match self.connection_details {
             PeerConnectionDetails::NoNat(_) => 0,
             PeerConnectionDetails::Symmetric(_) => 1,
@@ -155,7 +157,8 @@ impl AnnounceAddress {
         connection_details.extend_from_slice(&ip);
         let connection_details_string = BASE64_STANDARD_NO_PAD.encode(&connection_details);
 
-        format!(
+        write!(
+            f,
             "{}{}{}",
             self.name,
             connection_details_string,
