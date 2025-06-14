@@ -22,17 +22,21 @@ impl AnnounceAddress {
             .parse()
             .unwrap();
 
-        let length_chars = (6 * 8 + 5) / 6;
-        let truncated_string =
-            input_string[input_string.len() - 1 - length_chars..input_string.len() - 1].to_string();
-        dbg!(&truncated_string);
+        let suffux_length_bytes = match type_value {
+            0 => 4 + 2,
+            1 => 4,
+            2 => 4 + 2,
+            3 => 16 + 2,
+            4 => 16,
+            5 => 16 + 2,
+            _ => panic!("Bad type value"),
+        };
+        let suffix_length_chars = ((suffux_length_bytes * 8) + 5) / 6;
+        let truncated_string = input_string
+            [input_string.len() - 1 - suffix_length_chars..input_string.len() - 1]
+            .to_string();
         let input = BASE64_STANDARD_NO_PAD.decode(truncated_string).unwrap();
-        let name = &input_string[..input_string.len() - 1 - length_chars].to_string();
-        dbg!(&name);
-        // if input.len() < 33 {
-        //     return Err(AnnounceAddressDecodeError::BadLength);
-        // }
-        // let public_key = &input[..32];
+        let name = &input_string[..input_string.len() - 1 - suffix_length_chars].to_string();
         let (type_value, ip, port) = if type_value > 2 {
             if input.len() < 16 {
                 return Err(AnnounceAddressDecodeError::BadLength);
@@ -46,14 +50,14 @@ impl AnnounceAddress {
             );
             let ip = IpAddr::V6(Ipv6Addr::from_bits(ip_u128));
 
-            let type_value = type_value - 2;
+            let type_value = type_value - 3;
             let port = if type_value == 1 {
                 None
             } else {
                 if input.len() < 16 + 2 {
                     return Err(AnnounceAddressDecodeError::BadLength);
                 }
-                let port_bytes = &input[input.len() - 16 - 8..input.len() - 16];
+                let port_bytes = &input[input.len() - 16 - 2..input.len() - 16];
 
                 Some(u16::from_be_bytes(
                     port_bytes
@@ -67,7 +71,6 @@ impl AnnounceAddress {
             if input.len() < 4 {
                 return Err(AnnounceAddressDecodeError::BadLength);
             }
-            dbg!(&input);
             let ip_bytes = &input[input.len() - 4..];
             let ip_u32 = u32::from_be_bytes(
                 ip_bytes
@@ -75,7 +78,6 @@ impl AnnounceAddress {
                     .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
             );
             let ip = IpAddr::V4(Ipv4Addr::from_bits(ip_u32));
-            dbg!(ip);
 
             let port = if type_value == 1 {
                 None
@@ -204,6 +206,7 @@ mod tests {
     #[test]
     fn announce_address_encoding() {
         let announce_addresses = vec![
+            // IPV4
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::NoNat("127.0.0.1:3000".parse().unwrap()),
                 name: "foobar".to_string(),
@@ -218,11 +221,29 @@ mod tests {
                 ),
                 name: "wagglingWallaby".to_string(),
             },
+            // IPV6
+            AnnounceAddress {
+                connection_details: PeerConnectionDetails::NoNat(
+                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
+                ),
+                name: "foobar".to_string(),
+            },
+            AnnounceAddress {
+                connection_details: PeerConnectionDetails::Symmetric(
+                    "2001:db8:85a3::8a2e:370:7334".parse().unwrap(),
+                ),
+                name: "angryOstrich".to_string(),
+            },
+            AnnounceAddress {
+                connection_details: PeerConnectionDetails::Asymmetric(
+                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
+                ),
+                name: "wagglingWallaby".to_string(),
+            },
         ];
 
         for announce_address in announce_addresses {
             let string = announce_address.to_string();
-            dbg!(&string);
             let announce_address_2 = AnnounceAddress::from_string(string).unwrap();
             assert_eq!(announce_address, announce_address_2);
         }
