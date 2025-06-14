@@ -32,15 +32,15 @@ pub mod stun;
 pub struct DiscoveredPeer {
     pub socket_address: SocketAddr,
     pub socket_option: Option<UdpSocket>,
-    pub public_key: [u8; 32],
     pub discovery_method: DiscoveryMethod,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DiscoveryMethod {
     Direct { announce_address: AnnounceAddress },
     Gossip { announce_address: AnnounceAddress },
-    Mdns,
+    // TODO this should also be announce address - and move announce address out of this enum
+    Mdns { public_key: [u8; 32] },
 }
 
 impl DiscoveryMethod {
@@ -128,7 +128,7 @@ impl PeerDiscovery {
 
         let announce_address = AnnounceAddress {
             connection_details: local_connection_details.clone(),
-            public_key,
+            name: key_to_animal::key_to_name(&public_key),
         };
 
         let peer_discovery = Self {
@@ -213,8 +213,7 @@ pub async fn handle_peer_announcement(
     }
 
     // Check that we are not already connected to this peer
-    let name = key_to_animal::key_to_name(&announce_address.public_key);
-    if peers.lock().await.contains_key(&name) {
+    if peers.lock().await.contains_key(&announce_address.name) {
         return Err(
             UiServerError::PeerDiscovery("Already connected to this peer".to_string()).into(),
         );
@@ -301,7 +300,6 @@ pub async fn handle_peer(
                                         discovery_method,
                                         socket_address,
                                         socket_option: None,
-                                        public_key: announce_address.public_key,
                                     }),
                                     socket_address,
                                 )
@@ -322,7 +320,6 @@ pub async fn handle_peer(
                             discovery_method,
                             socket_address,
                             socket_option: Some(socket),
-                            public_key: announce_address.public_key,
                         }),
                         socket_address,
                     ))
@@ -345,7 +342,6 @@ pub async fn handle_peer(
                                 discovery_method,
                                 socket_address,
                                 socket_option: None,
-                                public_key: announce_address.public_key,
                             }),
                             socket_address,
                         )
@@ -362,7 +358,6 @@ pub async fn handle_peer(
                             discovery_method,
                             socket_address,
                             socket_option: Some(socket),
-                            public_key: announce_address.public_key,
                         }),
                         socket_address,
                     ))
@@ -372,7 +367,6 @@ pub async fn handle_peer(
                         discovery_method,
                         socket_address,
                         socket_option: None,
-                        public_key: announce_address.public_key,
                     }),
                     socket_address,
                 )),

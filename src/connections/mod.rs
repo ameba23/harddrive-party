@@ -180,7 +180,7 @@ impl Hdp {
                     if let Err(err) = self.handle_incoming_connection(discovery_method, incoming_conn).await {
                         error!("Error when handling incoming peer connection {:?}", err);
                          if let Some (announce_address) = announce_address {
-                            let name = key_to_animal::key_to_name(&announce_address.public_key);
+                            let name = announce_address.name;
                              self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                         }
                     }
@@ -188,12 +188,13 @@ impl Hdp {
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
-                    let public_key = peer.public_key;
+                    let name = peer.discovery_method.get_announce_address().map(|a| a.name);
 
                     if let Err(err) = self.connect_to_peer(peer).await {
                         error!("Cannot connect to discovered peer {:?}", err);
-                        let name = key_to_animal::key_to_name(&public_key);
-                        self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                        if let Some(name) = name {
+                            self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                        }
                     };
                 }
             }
@@ -217,7 +218,7 @@ impl Hdp {
         let announce_address = if let Some(discovery_method) = discovery_method {
             // If we know their announce address, check if it matches the certificate
             if let Some(announce_address) = discovery_method.get_announce_address() {
-                if announce_address.public_key == peer_public_key {
+                if announce_address.name == key_to_animal::key_to_name(&peer_public_key) {
                     debug!("Public key matches");
                 } else {
                     // TODO there should be some consequences here - eg: return

@@ -19,7 +19,6 @@ use crate::{
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use async_stream::try_stream;
-use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
 use bincode::serialize;
 use futures::{pin_mut, StreamExt};
 use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
@@ -128,8 +127,7 @@ impl SharedState {
     }
 
     pub fn get_ui_announce_address(&self) -> String {
-        let bytes = self.announce_address.to_bytes();
-        BASE64_STANDARD_NO_PAD.encode(&bytes)
+        self.announce_address.to_string()
     }
 
     pub async fn connect_to_peer(

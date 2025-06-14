@@ -63,10 +63,11 @@ impl MdnsServer {
                                     if us > them
                                         && peers_tx
                                             .send(DiscoveredPeer {
-                                                discovery_method: DiscoveryMethod::Mdns,
+                                                discovery_method: DiscoveryMethod::Mdns {
+                                                    public_key: their_public_key,
+                                                },
                                                 socket_address: their_addr,
                                                 socket_option: None,
-                                                public_key: their_public_key,
                                             })
                                             .await
                                             .is_err()
@@ -180,6 +181,11 @@ mod tests {
 
         let discovered_peer = bob_peers_rx.recv().await.unwrap();
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
-        assert_eq!(discovered_peer.public_key, [0; 32]);
+        assert_eq!(
+            discovered_peer.discovery_method,
+            DiscoveryMethod::Mdns {
+                public_key: [0; 32]
+            }
+        );
     }
 }

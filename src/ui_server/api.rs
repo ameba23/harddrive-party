@@ -14,7 +14,6 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
 };
-use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
 use bytes::{BufMut, BytesMut};
 use futures::{channel::mpsc, pin_mut, StreamExt};
 use harddrive_party_shared::{
@@ -33,8 +32,7 @@ pub async fn post_connect(
     State(shared_state): State<SharedState>,
     announce_payload: String,
 ) -> Result<StatusCode, UiServerErrorWrapper> {
-    let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload).unwrap();
-    let announce_address = AnnounceAddress::from_bytes(announce_address_bytes).unwrap();
+    let announce_address = AnnounceAddress::from_string(announce_payload).unwrap();
 
     shared_state.connect_to_peer(announce_address).await?;
     Ok(StatusCode::OK)
