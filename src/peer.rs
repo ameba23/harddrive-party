@@ -231,7 +231,7 @@ async fn download(
                                         .measure()
                                         .unwrap_or_default()
                                         .try_into()
-                                        .unwrap(),
+                                        .unwrap_or_default(),
                                 },
                             }))
                             .is_err()
@@ -248,7 +248,7 @@ async fn download(
                         .measure()
                         .unwrap_or_default()
                         .try_into()
-                        .unwrap();
+                        .unwrap_or_default();
                     break;
                 }
                 Err(error) => {
@@ -258,7 +258,7 @@ async fn download(
                         .measure()
                         .unwrap_or_default()
                         .try_into()
-                        .unwrap();
+                        .unwrap_or_default();
                     break;
                 }
             }

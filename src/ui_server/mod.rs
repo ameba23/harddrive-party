@@ -88,10 +88,13 @@ async fn static_handler(Path(file_path): Path<String>) -> impl IntoResponse {
         Some(content) => {
             let body = content.data.into_owned();
             let mime = from_path(file_path).first_or_octet_stream();
-            Response::builder()
+            match Response::builder()
                 .header("Content-Type", mime.as_ref())
                 .body(body.into())
-                .unwrap()
+            {
+                Ok(res) => res,
+                Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
