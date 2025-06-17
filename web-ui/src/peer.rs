@@ -1,7 +1,7 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    AppContext, FilesSignal, PeerPath,
+    AppContext, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
 use std::collections::HashSet;
@@ -10,7 +10,9 @@ use thaw::*;
 
 #[component]
 pub fn Peer(name: String, is_self: bool) -> impl IntoView {
-    let files = use_context::<FilesSignal>().unwrap().0;
+    let app_context = use_context::<AppContext>().unwrap();
+    let files = app_context.get_files;
+
     // This signal is used below to provide context to File
     let (peer_signal, _set_peer) = signal((name.clone(), is_self));
 

@@ -2,7 +2,7 @@
 use crate::{
     hdp::{display_bytes, Entry},
     ui_messages::{FilesQuery, UiDownloadRequest},
-    AppContext, FilesSignal, PeerPath,
+    AppContext, PeerPath,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
@@ -76,16 +76,16 @@ pub enum FileDisplayContext {
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
-    let set_files = use_context::<FilesSignal>().unwrap().1;
+    let set_files = app_context.set_files;
     let (file_name, _set_file_name) = signal(file.name);
     let peer_name = file.peer_name.clone();
 
+    let app_context_1 = app_context.clone();
     let download_request = move |_| {
-        // let download = Command::Download {
-        //     path: file_name.get().to_string(),
-        //     peer_name: peer_name.clone(),
-        // };
-        // set_requester.update(|requester| requester.make_request(download));
+        app_context_1.download(PeerPath {
+            path: file_name.get().to_string(),
+            peer_name: peer_name.clone(),
+        });
     };
 
     // Only display download button if we dont have it requested, and it is not our share
@@ -146,7 +146,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     app_context.shares_query(query, app_context.own_name.get(), set_files);
                 } else {
                     let peer_name = Some(peer_name.clone());
-                    app_context.files(FilesQuery { query, peer_name }, set_files);
+                    app_context.files(FilesQuery { query, peer_name });
                 }
 
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose

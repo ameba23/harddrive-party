@@ -8,6 +8,7 @@ pub mod transfers;
 pub mod ws;
 
 use crate::{file::File, peer::Peer, ui_messages::FilesQuery};
+use file::DownloadStatus;
 use futures::StreamExt;
 use harddrive_party_shared::{client::Client, ui_messages::PeerPath, wire_messages::IndexQuery};
 pub use hdp::*;
@@ -17,6 +18,7 @@ use log::{debug, warn};
 use requests::Requests;
 use std::collections::{BTreeMap, HashSet};
 use thaw::*;
+use ui_messages::UiDownloadRequest;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -34,6 +36,9 @@ pub struct AppContext {
     pub client: ReadSignal<Client>,
     pub own_name: ReadSignal<Option<String>>,
     pub set_peers: WriteSignal<HashSet<String>>,
+    pub get_files: ReadSignal<BTreeMap<PeerPath, File>>,
+    pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
+    pub set_requests: WriteSignal<Requests>,
 }
 
 impl AppContext {
@@ -41,12 +46,18 @@ impl AppContext {
         ui_url: url::Url,
         own_name: ReadSignal<Option<String>>,
         set_peers: WriteSignal<HashSet<String>>,
+        get_files: ReadSignal<BTreeMap<PeerPath, File>>,
+        set_files: WriteSignal<BTreeMap<PeerPath, File>>,
+        set_requests: WriteSignal<Requests>,
     ) -> Self {
-        let (client, set_client) = signal(Client::new(ui_url));
+        let (client, _set_client) = signal(Client::new(ui_url));
         Self {
             client,
             own_name,
             set_peers,
+            get_files,
+            set_files,
+            set_requests,
         }
     }
 
@@ -97,10 +108,59 @@ impl AppContext {
 
     pub fn download(&self, peer_path: PeerPath) {
         let client = self.client.get_untracked();
+        let set_requests = self.set_requests.clone();
+        let set_files = self.set_files.clone();
+        let files = self.get_files.clone();
         spawn_local(async move {
             match client.download(&peer_path).await {
                 Ok(id) => {
                     debug!("Download requested with id: {}", id);
+                    let total_size = files
+                        .get()
+                        .get(&peer_path)
+                        .map_or(0, |file| file.size.unwrap_or_default());
+                    let request = UiDownloadRequest {
+                        path: peer_path.path.clone(),
+                        peer_name: peer_path.peer_name.clone(),
+                        progress: 0,
+                        total_size,
+                        request_id: id,
+                        timestamp: std::time::Duration::from_secs(0), // TODO
+                    };
+                    set_requests.update(|requests| {
+                        if requests.get_by_id(id).is_none() {
+                            requests.insert(&request);
+                        }
+                    });
+                    set_files.update(|files| {
+                        files
+                            .entry(peer_path.clone())
+                            .and_modify(|file| {
+                                file.request.set(Some(request.clone()));
+                            })
+                            .or_insert(File {
+                                name: request.path.clone(),
+                                peer_name: request.peer_name.clone(),
+                                size: None,
+                                download_status: RwSignal::new(DownloadStatus::Requested(id)),
+                                request: RwSignal::new(Some(request.clone())),
+                                is_dir: None,
+                                is_expanded: RwSignal::new(true),
+                                is_visible: RwSignal::new(true),
+                            });
+                        // Mark all files below this one in the dir heirarchy as
+                        // requested
+                        let mut upper_bound = peer_path.path.clone();
+                        upper_bound.push_str("~");
+                        for (_, file) in files.range_mut(
+                            peer_path.clone()..PeerPath {
+                                peer_name: peer_path.peer_name.clone(),
+                                path: upper_bound,
+                            },
+                        ) {
+                            file.download_status.set(DownloadStatus::Requested(id));
+                        }
+                    })
                 }
                 Err(e) => {
                     warn!("Download request failed {:?}", e);
@@ -123,9 +183,10 @@ impl AppContext {
         });
     }
 
-    pub fn files(&self, query: FilesQuery, set_files: WriteSignal<BTreeMap<PeerPath, File>>) {
+    pub fn files(&self, query: FilesQuery) {
         let client = self.client.get_untracked();
         let set_peers = self.set_peers.clone();
+        let set_files = self.set_files.clone();
         spawn_local(async move {
             let mut files_stream = client.files(query).await.unwrap();
 
@@ -165,8 +226,11 @@ impl AppContext {
             }
         });
     }
+
     pub fn requests(&self, set_requests: WriteSignal<Requests>) {
         let client = self.client.get_untracked();
+        let set_files = self.set_files.clone();
+        let self_clone = self.clone();
         debug!("Requests");
         spawn_local(async move {
             let mut requests_stream = client.requests().await.unwrap();
@@ -176,117 +240,142 @@ impl AppContext {
                         requests.insert(request);
                     }
                 });
+                let new_requests_clone = new_requests.clone();
+                set_files.update(|files| {
+                    for request in new_requests_clone {
+                        let download_status = if request.progress == request.total_size {
+                            DownloadStatus::Downloaded(request.request_id)
+                        } else {
+                            DownloadStatus::Requested(request.request_id)
+                        };
+                        let peer_path = PeerPath {
+                            peer_name: request.peer_name.clone(),
+                            path: request.path.clone(),
+                        };
+                        files
+                            .entry(peer_path.clone())
+                            .and_modify(|file| {
+                                file.request.set(Some(request.clone()));
+                            })
+                            .or_insert(File {
+                                name: request.path.clone(),
+                                peer_name: request.peer_name.clone(),
+                                size: Some(request.total_size),
+                                download_status: RwSignal::new(download_status.clone()),
+                                request: RwSignal::new(Some(request.clone())),
+                                is_dir: None, // We don't know whether it is a dir or a file
+                                is_expanded: RwSignal::new(true),
+                                is_visible: RwSignal::new(true),
+                            });
+
+                        // Now set all child files to the same download status
+                        let mut upper_bound = peer_path.path.clone();
+                        upper_bound.push_str("~");
+                        for (_, file) in files.range_mut(
+                            peer_path.clone()..PeerPath {
+                                peer_name: peer_path.peer_name.clone(),
+                                path: upper_bound,
+                            },
+                        ) {
+                            // TODO only set this to requested if...
+                            file.download_status.set(download_status.clone());
+                        }
+                    }
+                });
+
+                // For each request, get the requested files
+                for request in new_requests {
+                    self_clone.requested_files(request);
+                    // set_requester.update(|requester| {
+                    //     requester.make_request(Command::RequestedFiles(request.request_id))
+                    // });
+                }
             }
-            //             let new_requests_clone = new_requests.clone();
-            //             set_files.update(|files| {
-            //                 for request in new_requests_clone {
-            //                     let download_status = if request.progress == request.total_size
-            //                     {
-            //                         DownloadStatus::Downloaded(request.request_id)
-            //                     } else {
-            //                         DownloadStatus::Requested(request.request_id)
-            //                     };
-            //                     let peer_path = PeerPath {
-            //                         peer_name: request.peer_name.clone(),
-            //                         path: request.path.clone(),
-            //                     };
-            //                     files
-            //                         .entry(peer_path.clone())
-            //                         .and_modify(|file| {
-            //                             file.request.set(Some(request.clone()));
-            //                         })
-            //                         .or_insert(File {
-            //                             name: request.path.clone(),
-            //                             peer_name: request.peer_name.clone(),
-            //                             size: Some(request.total_size),
-            //                             download_status: RwSignal::new(download_status.clone()),
-            //                             request: RwSignal::new(Some(request.clone())),
-            //                             is_dir: None,
-            //                             is_expanded: RwSignal::new(true),
-            //                             is_visible: RwSignal::new(true),
-            //                         });
-            //
-            //                     let mut upper_bound = peer_path.path.clone();
-            //                     upper_bound.push_str("~");
-            //                     for (_, file) in files.range_mut(
-            //                         peer_path.clone()..PeerPath {
-            //                             peer_name: peer_path.peer_name.clone(),
-            //                             path: upper_bound,
-            //                         },
-            //                     ) {
-            //                         // TODO only set this to requested if...
-            //                         file.download_status.set(download_status.clone());
-            //                     }
-            //                 }
-            //             });
-            //             for request in new_requests {
-            //                 set_requester.update(|requester| {
-            //                     requester
-            //                         .make_request(Command::RequestedFiles(request.request_id))
-            //                 });
-            //             }
-            //         }
         });
     }
 
-    //         Ok(UiResponse::RequestedFiles(requested_files)) => {
-    //             if let Some(Command::RequestedFiles(request_id)) = request {
-    //                 // Now find the request and get peer_name
-    //                 if let Some(peer_path) = requests.get().get_by_id(*request_id) {
-    //                     set_files.update(|files| {
-    //                         let is_dir_request = requested_files.len() > 0;
-    //                         for requested_file in requested_files {
-    //                             let download_status = if requested_file.downloaded {
-    //                                 DownloadStatus::Downloaded(*request_id)
-    //                             } else {
-    //                                 DownloadStatus::Requested(*request_id)
-    //                             };
-    //                             files
-    //                                 .entry(PeerPath {
-    //                                     peer_name: peer_path.peer_name.clone(),
-    //                                     path: requested_file.path.clone(),
-    //                                 })
-    //                                 .and_modify(|file| {
-    //                                     // TODO this should not clobber if file is in
-    //                                     // downloading state
-    //                                     file.download_status
-    //                                         .set(download_status.clone());
-    //                                     file.size = Some(requested_file.size);
-    //                                 })
-    //                                 .or_insert(File {
-    //                                     name: requested_file.path,
-    //                                     peer_name: peer_path.peer_name.clone(),
-    //                                     size: Some(requested_file.size),
-    //                                     download_status: RwSignal::new(download_status),
-    //                                     request: RwSignal::new(None),
-    //                                     is_dir: Some(false),
-    //                                     is_expanded: RwSignal::new(true),
-    //                                     is_visible: RwSignal::new(true),
-    //                                 });
-    //                         }
-    //                         // TODO here we should set the state of the parent request
-    //                         // - if request_files > 1 (or 0?) is_dir = Some(true) else
-    //                         // Some(false)
-    //                         files.entry(peer_path.clone()).and_modify(|file| {
-    //                             if file.is_dir.is_none() {
-    //                                 file.is_dir = Some(is_dir_request);
-    //                             }
-    //                         });
-    //                     });
-    //                 }
-    //             }
+    pub fn requested_files(&self, request: UiDownloadRequest) {
+        let client = self.client.get_untracked();
+        let set_files = self.set_files.clone();
+        spawn_local(async move {
+            let mut stream = client.requested_files(request.request_id).await.unwrap();
+            while let Some(Ok(requested_files)) = stream.next().await {
+                set_files.update(|files| {
+                    let is_dir_request = requested_files.len() > 0;
+                    for requested_file in requested_files {
+                        let download_status = if requested_file.downloaded {
+                            DownloadStatus::Downloaded(request.request_id)
+                        } else {
+                            DownloadStatus::Requested(request.request_id)
+                        };
+                        files
+                            .entry(PeerPath {
+                                peer_name: request.peer_name.clone(),
+                                path: requested_file.path.clone(),
+                            })
+                            .and_modify(|file| {
+                                // TODO this should not clobber if file is in
+                                // downloading state
+                                file.download_status.set(download_status.clone());
+                                file.size = Some(requested_file.size);
+                            })
+                            .or_insert(File {
+                                name: requested_file.path,
+                                peer_name: request.peer_name.clone(),
+                                size: Some(requested_file.size),
+                                download_status: RwSignal::new(download_status),
+                                request: RwSignal::new(None),
+                                is_dir: Some(false),
+                                is_expanded: RwSignal::new(true),
+                                is_visible: RwSignal::new(true),
+                            });
+                    }
+                    // TODO here we should set the state of the parent request
+                    // - if request_files > 1 (or 0?) is_dir = Some(true) else
+                    // Some(false)
+                    let peer_path = PeerPath {
+                        peer_name: request.peer_name.clone(),
+                        path: request.path.clone(),
+                    };
+                    files.entry(peer_path).and_modify(|file| {
+                        if file.is_dir.is_none() {
+                            file.is_dir = Some(is_dir_request);
+                        }
+                    });
+                });
+            }
+        });
+    }
+    //
+    //         Ok(UiResponse::AddShare(number_of_shares)) => {
+    //             debug!("Got add share response");
+    //             set_add_or_remove_share_message.update(|message| {
+    //                 *message = Some(Ok(format!("Added {} shares", number_of_shares)))
+    //             });
+    //
+    //             // Re-query shares to reflect changes
+    //             let share_query_request = Command::Shares(IndexQuery {
+    //                 path: Default::default(),
+    //                 searchterm: None,
+    //                 recursive: true,
+    //             });
+    //             set_requester
+    //                 .update(|requester| requester.make_request(share_query_request));
     //         }
-    //     }
+    //         Ok(UiResponse::RemoveShare) => {
+    //             debug!("Got remove share response");
+    //             set_add_or_remove_share_message.update(|message| {
+    //                 *message = Some(Ok("No longer sharing".to_string()))
+    //             });
+    //
+    //             // Re-query shares to reflect changes
+    //             let share_query_request = Command::Shares(IndexQuery {
+    //                 path: Default::default(),
+    //                 searchterm: None,
+    //                 recursive: true,
+    //             });
+    //             set_requester
+    //                 .update(|requester| requester.make_request(share_query_request));
+    //         }
+    // }
 }
-
-// pub struct UiClient {
-//     pub inner: Client,
-//     pub set_peers: WriteSignal<HashMap<String, Peer>>,
-//     pub shares: ReadSignal<Option<Peer>>,
-//     pub set_shares: WriteSignal<Option<Peer>>,
-//     pub set_home_dir: WriteSignal<Option<String>>,
-//     pub set_announce_address: WriteSignal<Option<String>>,
-//     pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
-//     // pending peers? // HashSet<String>
-// }
-//

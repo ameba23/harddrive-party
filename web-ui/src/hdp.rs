@@ -9,30 +9,23 @@ use crate::{
     requests::Requests,
     shares::Shares,
     transfers::Transfers,
-    ui_messages::{DownloadInfo, FilesQuery, UiDownloadRequest, UiEvent, UiServerError},
+    ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
     wire_messages::IndexQuery,
     ws::WebsocketService,
     AppContext,
 };
 use futures::StreamExt;
-use harddrive_party_shared::client::Client;
 use leptos::prelude::*;
 use leptos_router::{
     components::{Redirect, Route, Routes},
     path,
 };
-use log::{debug, info};
+use log::debug;
 use pretty_bytes_rust::pretty_bytes;
 use std::collections::{BTreeMap, HashSet};
 use thaw::*;
 use wasm_bindgen_futures::spawn_local;
 pub use wire_messages::{Entry, LsResponse};
-
-#[derive(Clone)]
-pub struct FilesSignal(
-    pub ReadSignal<BTreeMap<PeerPath, File>>,
-    pub WriteSignal<BTreeMap<PeerPath, File>>,
-);
 
 #[component]
 pub fn HdpUi() -> impl IntoView {
@@ -67,7 +60,14 @@ pub fn HdpUi() -> impl IntoView {
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
     let (own_name, set_own_name) = signal(Option::<String>::None);
-    let app_context = AppContext::new(ui_url, own_name, set_peers.clone());
+    let app_context = AppContext::new(
+        ui_url,
+        own_name,
+        set_peers.clone(),
+        files.clone(),
+        set_files.clone(),
+        set_requests.clone(),
+    );
 
     // Get initial info
     let client = app_context.client.get_untracked();
@@ -91,200 +91,40 @@ pub fn HdpUi() -> impl IntoView {
             app_context.shares_query(index_query.clone(), own_name.get(), set_files);
 
             // On startup do a files query to see what peers are connected
-            app_context.files(
-                FilesQuery {
-                    query: index_query,
-                    peer_name: None,
-                },
-                set_files,
-            );
+            app_context.files(FilesQuery {
+                query: index_query,
+                peer_name: None,
+            });
         });
     }
     app_context.requests(set_requests);
 
     provide_context(app_context.clone());
-    provide_context(FilesSignal(files, set_files));
 
     spawn_local(async move {
         // Loop over messages from server
         while let Some(msg) = ws_rx.next().await {
             match msg {
-                //         Ok(UiResponse::Download(download_response)) => {
-                //             debug!("Got download response {:?}", download_response);
-                //             // TODO check if we already have the associated request
-                //             match download_response.download_info {
-                //                 DownloadInfo::Requested(timestamp) => {
-                //                     let peer_path = PeerPath {
-                //                         peer_name: download_response.peer_name.clone(),
-                //                         path: download_response.path.clone(),
-                //                     };
-                //                     let total_size = files
-                //                         .get()
-                //                         .get(&peer_path)
-                //                         .map_or(0, |file| file.size.unwrap_or_default());
-                //                     let request = UiDownloadRequest {
-                //                         path: download_response.path.clone(),
-                //                         peer_name: download_response.peer_name.clone(),
-                //                         progress: 0,
-                //                         total_size,
-                //                         request_id: id,
-                //                         timestamp,
-                //                     };
-                //                     set_requests.update(|requests| {
-                //                         if requests.get_by_id(id).is_none() {
-                //                             requests.insert(&request);
-                //                         }
-                //                     });
-                //                     set_files.update(|files| {
-                //                         files
-                //                             .entry(peer_path.clone())
-                //                             .and_modify(|file| {
-                //                                 file.request.set(Some(request.clone()));
-                //                             })
-                //                             .or_insert(File {
-                //                                 name: request.path.clone(),
-                //                                 peer_name: request.peer_name.clone(),
-                //                                 size: None,
-                //                                 download_status: RwSignal::new(
-                //                                     DownloadStatus::Requested(id),
-                //                                 ),
-                //                                 request: RwSignal::new(Some(request.clone())),
-                //                                 is_dir: None,
-                //                                 is_expanded: RwSignal::new(true),
-                //                                 is_visible: RwSignal::new(true),
-                //                             });
-                //                         // Mark all files below this one in the dir heirarchy as
-                //                         // requested
-                //                         let mut upper_bound = download_response.path.clone();
-                //                         upper_bound.push_str("~");
-                //                         for (_, file) in files.range_mut(
-                //                             PeerPath {
-                //                                 peer_name: download_response.peer_name.clone(),
-                //                                 path: download_response.path.clone(),
-                //                             }
-                //                                 ..PeerPath {
-                //                                     peer_name: download_response.peer_name.clone(),
-                //                                     path: upper_bound,
-                //                                 },
-                //                         ) {
-                //                             file.download_status.set(DownloadStatus::Requested(id));
-                //                         }
-                //                     })
-                //                 }
-                //                 DownloadInfo::Downloading {
-                //                     path,
-                //                     bytes_read,
-                //                     total_bytes_read: _,
-                //                     speed: _,
-                //                 } => {
-                //                     set_files.update(|files| {
-                //                         files
-                //                             .entry(PeerPath {
-                //                                 peer_name: download_response.peer_name.clone(),
-                //                                 path: path.clone(),
-                //                             })
-                //                             .and_modify(|file| {
-                //                                 let download_status = if bytes_read
-                //                                     == file.size.unwrap_or_default()
-                //                                 {
-                //                                     DownloadStatus::Downloaded(id)
-                //                                 } else {
-                //                                     DownloadStatus::Downloading {
-                //                                         bytes_read,
-                //                                         request_id: id,
-                //                                     }
-                //                                 };
-                //                                 file.download_status.set(download_status);
-                //                             })
-                //                             .or_insert(File::from_downloading_file(
-                //                                 path,
-                //                                 download_response.peer_name.clone(),
-                //                                 DownloadStatus::Downloading {
-                //                                     bytes_read,
-                //                                     request_id: id,
-                //                                 },
-                //                             ));
-                //                     });
-                //
-                //                     set_requests.update(|_requests| {
-                //                         // TODO Find request with this request id
-                //                         // update the total_bytes_read
-                //                     });
-                //                 }
-                //                 DownloadInfo::Completed(_timestamp) => {
-                //                     // TODO Mark all files below this one in the dir heirarchy as
-                //                     // completed
-                //                     // TODO update requests to have progress = total_size
-                //                     set_files.update(|files| {
-                //                         files
-                //                             .entry(PeerPath {
-                //                                 peer_name: download_response.peer_name.clone(),
-                //                                 path: download_response.path.clone(),
-                //                             })
-                //                             .and_modify(|file| {
-                //                                 file.download_status
-                //                                     .set(DownloadStatus::Downloaded(id));
-                //                             });
-                //                         // TODO do we need or_insert?
-                //                     })
-                //                 }
-                //             }
-                //         }
-                //         Ok(UiResponse::EndResponse) => {
-                //             if let Some(Command::ConnectDirect(announce_address)) = request {
-                //             }
-                //         }
-                //         Ok(UiResponse::AddShare(number_of_shares)) => {
-                //             debug!("Got add share response");
-                //             set_add_or_remove_share_message.update(|message| {
-                //                 *message = Some(Ok(format!("Added {} shares", number_of_shares)))
-                //             });
-                //
-                //             // Re-query shares to reflect changes
-                //             let share_query_request = Command::Shares(IndexQuery {
-                //                 path: Default::default(),
-                //                 searchterm: None,
-                //                 recursive: true,
-                //             });
-                //             set_requester
-                //                 .update(|requester| requester.make_request(share_query_request));
-                //         }
-                //         Ok(UiResponse::RemoveShare) => {
-                //             debug!("Got remove share response");
-                //             set_add_or_remove_share_message.update(|message| {
-                //                 *message = Some(Ok("No longer sharing".to_string()))
-                //             });
-                //
-                //             // Re-query shares to reflect changes
-                //             let share_query_request = Command::Shares(IndexQuery {
-                //                 path: Default::default(),
-                //                 searchterm: None,
-                //                 recursive: true,
-                //             });
-                //             set_requester
-                //                 .update(|requester| requester.make_request(share_query_request));
-                //         }
-                // }
                 UiEvent::PeerConnected { name } => {
                     debug!("Connected to {}", name);
                     set_peers.update(|peers| {
                         peers.insert(name.clone());
                     });
-                    app_context.files(
-                        FilesQuery {
-                            query: IndexQuery {
-                                path: Default::default(),
-                                searchterm: None,
-                                recursive: false,
-                            },
-                            peer_name: Some(name),
+                    app_context.files(FilesQuery {
+                        query: IndexQuery {
+                            path: Default::default(),
+                            searchterm: None,
+                            recursive: false,
                         },
-                        set_files,
-                    )
-                    //TODO remove from pending_peers
-                    // set_pending_peers.update(|pending_peers| {
-                    //     pending_peers.remove(announce_address);
-                    // })
+                        peer_name: Some(name.clone()),
+                    });
+                    set_pending_peers.update(|pending_peers| {
+                        if let Some(announce_address) =
+                            pending_peers.clone().iter().find(|&a| a.starts_with(&name))
+                        {
+                            pending_peers.remove(announce_address);
+                        }
+                    });
                 }
                 UiEvent::PeerDisconnected { name } => {
                     debug!("{} disconnected", name);
@@ -297,15 +137,80 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiEvent::PeerConnectionFailed { name, error } => {
                     debug!("Peer connection failed {} {}", name, error);
-                    // set_pending_peers.update(|pending_peers| {
-                    //     pending_peers.remove(announce_address);
-                    // })
-                    //
+
+                    set_pending_peers.update(|pending_peers| {
+                        if let Some(announce_address) =
+                            pending_peers.clone().iter().find(|&a| a.starts_with(&name))
+                        {
+                            pending_peers.remove(announce_address);
+                        }
+                    });
                     set_peers.update(|peers| {
                         peers.remove(&name);
                     });
                 }
-                UiEvent::Download(_download_info) => {}
+                UiEvent::Download(download_event) => {
+                    match download_event.download_info {
+                        DownloadInfo::Downloading {
+                            path,
+                            bytes_read,
+                            total_bytes_read: _,
+                            speed: _,
+                        } => {
+                            set_files.update(|files| {
+                                files
+                                    .entry(PeerPath {
+                                        peer_name: download_event.peer_name.clone(),
+                                        path: path.clone(),
+                                    })
+                                    .and_modify(|file| {
+                                        let download_status = if bytes_read
+                                            == file.size.unwrap_or_default()
+                                        {
+                                            DownloadStatus::Downloaded(download_event.request_id)
+                                        } else {
+                                            DownloadStatus::Downloading {
+                                                bytes_read,
+                                                request_id: download_event.request_id,
+                                            }
+                                        };
+                                        file.download_status.set(download_status);
+                                    })
+                                    .or_insert(File::from_downloading_file(
+                                        path,
+                                        download_event.peer_name.clone(),
+                                        DownloadStatus::Downloading {
+                                            bytes_read,
+                                            request_id: download_event.request_id,
+                                        },
+                                    ));
+                            });
+
+                            set_requests.update(|_requests| {
+                                // TODO Find request with this request id
+                                // update the total_bytes_read
+                            });
+                        }
+                        DownloadInfo::Completed(_timestamp) => {
+                            // TODO Mark all files below this one in the dir heirarchy as
+                            // completed
+                            // TODO update requests to have progress = total_size
+                            set_files.update(|files| {
+                                files
+                                    .entry(PeerPath {
+                                        peer_name: download_event.peer_name.clone(),
+                                        path: download_event.path.clone(),
+                                    })
+                                    .and_modify(|file| {
+                                        file.download_status.set(DownloadStatus::Downloaded(
+                                            download_event.request_id,
+                                        ));
+                                    });
+                                // TODO do we need or_insert?
+                            })
+                        }
+                    }
+                }
             }
         }
         debug!("ws closed");

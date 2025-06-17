@@ -1,4 +1,4 @@
-use crate::{display_bytes, FilesSignal, PeerPath};
+use crate::{display_bytes, AppContext, PeerPath};
 use leptos::prelude::*;
 use leptos_router::hooks::use_navigate;
 use std::collections::HashSet;
@@ -11,7 +11,7 @@ pub fn HdpHeader(
 ) -> impl IntoView {
     let selected_value = RwSignal::new("peers".to_string());
 
-    let files = use_context::<FilesSignal>().unwrap().0;
+    let files = use_context::<AppContext>().unwrap().get_files;
 
     let shared_files_size = move || match own_name.get() {
         Some(me) => {
