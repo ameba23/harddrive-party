@@ -12,7 +12,6 @@ repository = "https://gitlab.com/pegpeg/harddrive-party"
 thiserror = "1.0.37"
 serde = { version = "1.0", features = ["derive"] }
 futures = "0.3.25"
-anyhow = "1.0.28"
 bincode = "1.3.3"
 reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
 bytes= "1.10.1"

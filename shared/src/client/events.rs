@@ -1,5 +1,4 @@
-use crate::ui_messages::UiEvent;
-use anyhow::anyhow;
+use crate::{client::ClientError, ui_messages::UiEvent};
 use bincode::deserialize;
 use futures::{stream::SplitStream, Stream, StreamExt};
 use reqwest::Url;
@@ -14,12 +13,14 @@ pub struct EventStream(
 
 #[cfg(feature = "native")]
 impl EventStream {
-    pub async fn new(mut ui_url: Url) -> anyhow::Result<Self> {
+    pub async fn new(mut ui_url: Url) -> Result<Self, ClientError> {
         ui_url
             .set_scheme("ws")
-            .map_err(|_| anyhow!("Invalid URL"))?;
+            .map_err(|_| ClientError::InvalidUrl)?;
         ui_url.set_path("ws");
-        let (ws_stream, _) = connect_async(ui_url).await?;
+        let (ws_stream, _) = connect_async(ui_url)
+            .await
+            .map_err(|err| ClientError::ConnectionError(err.to_string()))?;
         let (_write, read) = ws_stream.split();
         Ok(Self(read))
     }
@@ -28,7 +29,7 @@ impl EventStream {
 /// Gives a stream of events from the websocket server
 #[cfg(feature = "native")]
 impl Stream for EventStream {
-    type Item = anyhow::Result<UiEvent>;
+    type Item = Result<UiEvent, ClientError>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.0.poll_next_unpin(cx) {
@@ -36,14 +37,11 @@ impl Stream for EventStream {
             Poll::Ready(Some(message_result)) => Poll::Ready(Some(match message_result {
                 Ok(message) => match message {
                     tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                        match deserialize(&bytes) {
-                            Ok(event) => Ok(event),
-                            Err(_) => Err(anyhow::anyhow!("Cannot deserialize event")),
-                        }
+                        Ok(deserialize(&bytes)?)
                     }
-                    _ => Err(anyhow::anyhow!("Unexpected message type - expected binary")),
+                    _ => Err(ClientError::UnexpectedMessageType),
                 },
-                Err(error) => Err(error.into()),
+                Err(error) => Err(ClientError::ConnectionError(error.to_string())),
             })),
             Poll::Ready(None) => Poll::Ready(None),
         }

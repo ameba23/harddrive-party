@@ -13,8 +13,9 @@ use bytes::{Buf, Bytes, BytesMut};
 use futures::Stream;
 use reqwest::{Response, Url};
 use serde::de::DeserializeOwned;
-use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::{num::ParseIntError, pin::Pin};
+use thiserror::Error;
 
 /// A result for which the error is UiServerError
 type UiResult<T> = Result<T, UiServerError>;
@@ -35,24 +36,31 @@ impl Client {
     }
 
     #[cfg(feature = "native")]
-    pub async fn event_stream(&self) -> anyhow::Result<EventStream> {
+    pub async fn event_stream(&self) -> Result<EventStream, ClientError> {
         EventStream::new(self.ui_url.clone()).await
     }
 
     pub async fn shares(
         &self,
         query: IndexQuery,
-    ) -> anyhow::Result<impl Stream<Item = Result<LsResponse, UiServerError>>> {
+    ) -> Result<impl Stream<Item = Result<LsResponse, UiServerError>>, ClientError> {
         let res = self
             .http_client
-            .post(self.ui_url.join("shares")?)
+            .post(
+                self.ui_url
+                    .join("shares")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .body(serialize(&query)?)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -61,48 +69,70 @@ impl Client {
     pub async fn files(
         &self,
         query: FilesQuery,
-    ) -> anyhow::Result<impl Stream<Item = UiResult<(LsResponse, String)>>> {
+    ) -> Result<impl Stream<Item = UiResult<(LsResponse, String)>>, ClientError> {
         let res = self
             .http_client
-            .post(self.ui_url.join("files")?)
+            .post(
+                self.ui_url
+                    .join("files")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .body(serialize(&query)?)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
 
         Ok(LengthPrefixedStream::new(res))
     }
 
-    pub async fn download(&self, peer_path: &PeerPath) -> anyhow::Result<u32> {
+    pub async fn download(&self, peer_path: &PeerPath) -> Result<u32, ClientError> {
         let res = self
             .http_client
-            .post(self.ui_url.join("download")?)
+            .post(
+                self.ui_url
+                    .join("download")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .body(serialize(peer_path)?)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
+
         Ok(res.text().await?.parse()?)
     }
 
-    pub async fn connect(&self, announce_address: String) -> anyhow::Result<()> {
+    pub async fn connect(&self, announce_address: String) -> Result<(), ClientError> {
         let res = self
             .http_client
-            .post(self.ui_url.join("connect")?)
+            .post(
+                self.ui_url
+                    .join("connect")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .body(announce_address)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
         Ok(())
     }
@@ -111,30 +141,49 @@ impl Client {
         &self,
         peer_name: String,
         read_query: ReadQuery,
-    ) -> anyhow::Result<impl Stream<Item = Result<Bytes, reqwest::Error>>> {
+    ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, ClientError> {
         // payload is (read_query, peer_name)
         let res = self
             .http_client
-            .post(self.ui_url.join("read")?)
+            .post(
+                self.ui_url
+                    .join("read")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .body(serialize(&(read_query, peer_name))?)
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
 
         let stream = res.bytes_stream();
         Ok(stream)
     }
 
-    pub async fn info(&self) -> anyhow::Result<Info> {
+    pub async fn info(&self) -> Result<Info, ClientError> {
         let res = self
             .http_client
-            .get(self.ui_url.join("info")?)
+            .get(
+                self.ui_url
+                    .join("info")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .send()
             .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
+        }
 
         Ok(bincode::deserialize(&res.bytes().await?)?)
     }
@@ -142,17 +191,24 @@ impl Client {
     pub async fn requested_files(
         &self,
         id: u32,
-    ) -> anyhow::Result<impl Stream<Item = Result<Vec<UiRequestedFile>, UiServerError>>> {
+    ) -> Result<impl Stream<Item = Result<Vec<UiRequestedFile>, UiServerError>>, ClientError> {
         let res = self
             .http_client
-            .get(self.ui_url.join("request")?)
+            .get(
+                self.ui_url
+                    .join("request")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .query(&[("id", id.to_string())])
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -160,16 +216,24 @@ impl Client {
 
     pub async fn requests(
         &self,
-    ) -> anyhow::Result<impl Stream<Item = Result<Vec<UiDownloadRequest>, UiServerError>>> {
+    ) -> Result<impl Stream<Item = Result<Vec<UiDownloadRequest>, UiServerError>>, ClientError>
+    {
         let res = self
             .http_client
-            .get(self.ui_url.join("requests")?)
+            .get(
+                self.ui_url
+                    .join("requests")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
             .send()
             .await?;
 
         if !res.status().is_success() {
-            eprintln!("Request failed with status: {}", res.status());
-            return Err(anyhow::anyhow!("Request failed"));
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -253,5 +317,34 @@ where
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+/// An error from the client
+#[derive(PartialEq, Debug, Error)]
+pub enum ClientError {
+    #[error("Cannot connect: {0}")]
+    ConnectionError(String),
+    #[error("Invalid Url")]
+    InvalidUrl,
+    #[error("Unexpected message type on websocket")]
+    UnexpectedMessageType,
+    #[error("Serialization or deserialization: {0}")]
+    Serialization(String),
+    #[error("HTTP client: {0}")]
+    HttpRequest(String),
+    #[error("Cannot parse integer: {0}")]
+    ParseInt(#[from] ParseIntError),
+}
+
+impl From<bincode::Error> for ClientError {
+    fn from(value: bincode::Error) -> Self {
+        ClientError::Serialization(value.to_string())
+    }
+}
+
+impl From<reqwest::Error> for ClientError {
+    fn from(value: reqwest::Error) -> Self {
+        ClientError::Serialization(value.to_string())
     }
 }
