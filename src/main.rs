@@ -5,7 +5,7 @@ use futures::StreamExt;
 use harddrive_party::{
     ui_messages::{DownloadInfo, PeerPath, UiEvent},
     ui_server::{client::Client, http_server},
-    wire_messages::{IndexQuery, LsResponse, ReadQuery},
+    wire_messages::{AnnounceAddress, IndexQuery, LsResponse, ReadQuery},
     Hdp,
 };
 use std::{env, path::PathBuf};
@@ -286,15 +286,26 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Connect { announce_address } => {
             let client = Client::new(cli.ui_address.parse()?);
+            let announce_address_parsed = AnnounceAddress::from_string(announce_address.clone())?;
+
             client.connect(announce_address).await?;
 
-            // TODO we need to get peer name from announce address to check this
-            // while let Some(event) = client.next().await {
-            //     match event? {
-            //         UiEvent::PeerConnected(name) => { break; }
-            //         UiEvent::PeerConnectionFailed(name, error) => { return Err(anyhow!("{error}")); }
-            //     }
-            // }
+            let mut event_stream = client.event_stream().await?;
+            while let Some(event) = event_stream.next().await {
+                match event? {
+                    UiEvent::PeerConnected { name } => {
+                        if announce_address_parsed.name == name {
+                            break;
+                        }
+                    }
+                    UiEvent::PeerConnectionFailed { name, error } => {
+                        if announce_address_parsed.name == name {
+                            return Err(anyhow!("{error}"));
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     };
     Ok(())
