@@ -180,10 +180,8 @@ impl SharedState {
         //             //     }
         //             // }
         //
-        let recv = self
-            .request(ls_request, &peer_path.peer_name)
-            .await
-            .unwrap();
+        let recv = self.request(ls_request, &peer_path.peer_name).await?;
+
         let peer_public_key = {
             let peers = self.peers.lock().await;
             match peers.get(&peer_path.peer_name) {
@@ -200,7 +198,7 @@ impl SharedState {
         let mut rng = OsRng;
         let id: u32 = rng.gen();
 
-        let ls_response_stream = process_length_prefix(recv).await.unwrap();
+        let ls_response_stream = process_length_prefix(recv).await?;
         pin_mut!(ls_response_stream);
         while let Some(Ok(ls_response)) = ls_response_stream.next().await {
             if let LsResponse::Success(entries) = ls_response {

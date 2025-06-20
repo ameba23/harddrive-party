@@ -1,6 +1,6 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::wire_messages::IndexQuery;
+use crate::{announce_address::AnnounceAddressDecodeError, wire_messages::IndexQuery};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
@@ -90,6 +90,8 @@ pub enum UiServerError {
     Db(String),
     #[error("Error adding directory to share: {0}")]
     AddShare(String),
+    #[error("Cannot decode announce address {0}")]
+    AnnounceAddressDecode(#[from] AnnounceAddressDecodeError),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]

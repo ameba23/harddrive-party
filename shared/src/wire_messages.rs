@@ -64,6 +64,8 @@ pub enum LsResponseError {
     DbError,
     #[error("Path not found")]
     PathNotFound,
+    #[error("Internal error: {0}")]
+    InternalServer(String),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug, Clone, Hash)]

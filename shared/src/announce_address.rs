@@ -17,10 +17,10 @@ impl AnnounceAddress {
         let type_value: u8 = input_string
             .chars()
             .last()
-            .unwrap()
+            .ok_or(AnnounceAddressDecodeError::BadLength)?
             .to_string()
             .parse()
-            .unwrap();
+            .map_err(|_| AnnounceAddressDecodeError::ParseInt)?;
 
         let suffux_length_bytes = match type_value {
             0 => 4 + 2,
@@ -35,7 +35,7 @@ impl AnnounceAddress {
         let truncated_string = input_string
             [input_string.len() - 1 - suffix_length_chars..input_string.len() - 1]
             .to_string();
-        let input = BASE64_STANDARD_NO_PAD.decode(truncated_string).unwrap();
+        let input = BASE64_STANDARD_NO_PAD.decode(truncated_string)?;
         let name = &input_string[..input_string.len() - 1 - suffix_length_chars].to_string();
         let (type_value, ip, port) = if type_value > 2 {
             if input.len() < 16 {
@@ -99,17 +99,19 @@ impl AnnounceAddress {
 
         let connection_details = match type_value {
             0 => {
+                let port = port.ok_or(AnnounceAddressDecodeError::NoPort)?;
                 let socket_addr = match ip {
-                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port.unwrap())),
-                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port.unwrap(), 0, 0)),
+                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port)),
+                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)),
                 };
                 PeerConnectionDetails::NoNat(socket_addr)
             }
             1 => PeerConnectionDetails::Symmetric(ip),
             2 => {
+                let port = port.ok_or(AnnounceAddressDecodeError::NoPort)?;
                 let socket_addr = match ip {
-                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port.unwrap())),
-                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port.unwrap(), 0, 0)),
+                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port)),
+                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)),
                 };
                 PeerConnectionDetails::Asymmetric(socket_addr)
             }
@@ -173,6 +175,18 @@ pub enum AnnounceAddressDecodeError {
     BadLength,
     #[error("Type value is invalid")]
     UnrecognizedTypeValue,
+    #[error("Cannot parse integer")]
+    ParseInt,
+    #[error("Bad base64")]
+    Base64(String),
+    #[error("No port given when one was expected")]
+    NoPort,
+}
+
+impl From<base64::DecodeError> for AnnounceAddressDecodeError {
+    fn from(error: base64::DecodeError) -> AnnounceAddressDecodeError {
+        AnnounceAddressDecodeError::Base64(error.to_string())
+    }
 }
 
 #[repr(u8)]

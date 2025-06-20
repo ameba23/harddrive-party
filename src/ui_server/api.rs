@@ -32,7 +32,10 @@ pub async fn post_connect(
     State(shared_state): State<SharedState>,
     announce_payload: String,
 ) -> Result<StatusCode, UiServerErrorWrapper> {
-    let announce_address = AnnounceAddress::from_string(announce_payload).unwrap();
+    let announce_address = AnnounceAddress::from_string(announce_payload).map_err(|e| {
+        let err: UiServerError = e.into();
+        err
+    })?;
 
     shared_state.connect_to_peer(announce_address).await?;
     Ok(StatusCode::OK)
@@ -190,11 +193,15 @@ pub async fn get_request(
     State(shared_state): State<SharedState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<(StatusCode, Body), UiServerErrorWrapper> {
-    let request_id = params.get("id").unwrap();
+    let request_id = params.get("id").ok_or(UiServerError::RequestError(
+        "Request id must be given with a parameter named `id`".to_string(),
+    ))?;
 
     let response_iterator = shared_state
         .wishlist
-        .requested_files(request_id.parse().unwrap())?;
+        .requested_files(request_id.parse().map_err(|_| {
+            UiServerError::RequestError("`id` parameter must be an integer".to_string())
+        })?)?;
     stream_response::<Vec<UiRequestedFile>>(response_iterator).await
 }
 

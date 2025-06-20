@@ -223,7 +223,10 @@ where
                 if this.buffer.len() >= 4 + msg_len {
                     this.buffer.advance(4); // discard the length prefix
                     let msg = this.buffer.split_to(msg_len);
-                    let res: UiResult<T> = deserialize(&msg).unwrap();
+                    let res: UiResult<T> = match deserialize(&msg) {
+                        Ok(res) => res,
+                        Err(err) => Err(UiServerError::Serialization(err.to_string())),
+                    };
                     return Poll::Ready(Some(res));
                 }
             }

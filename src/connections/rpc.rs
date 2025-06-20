@@ -6,7 +6,9 @@ use crate::{
     ui_messages::{UiEvent, UploadInfo},
 };
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{IndexQuery, ReadQuery, Request};
+use harddrive_party_shared::wire_messages::{
+    IndexQuery, LsResponse, LsResponseError, ReadQuery, Request,
+};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
@@ -77,12 +79,14 @@ impl Rpc {
                         searchterm,
                         recursive,
                     }) => {
-                        if let Ok(()) = self.ls(path, searchterm, recursive, output).await {};
-                        // TODO else
+                        if let Err(err) = self.ls(path, searchterm, recursive, output).await {
+                            warn!("Error handling incoming index query {err}");
+                        };
                     }
                     Request::Read(ReadQuery { path, start, end }) => {
-                        if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
-                        // TODO else
+                        if let Err(_) = self.read(path, start, end, output, peer_name).await {
+                            warn!("Could not send read request - channel closed");
+                        }
                     }
                     Request::AnnouncePeer(announce_peer) => {
                         log::info!(
@@ -91,13 +95,16 @@ impl Rpc {
                         let discovery_method = DiscoveryMethod::Gossip {
                             announce_address: announce_peer.announce_address,
                         };
-                        self.peer_announce_tx
+                        if let Err(_) = self
+                            .peer_announce_tx
                             .send(PeerConnect {
                                 discovery_method,
                                 response_tx: None,
                             })
                             .await
-                            .unwrap();
+                        {
+                            error!("Unable to announce peer - channel closed");
+                        }
                     }
                 }
             }
@@ -141,7 +148,7 @@ impl Rpc {
             }
             Err(error) => {
                 warn!("Error during share query {:?}", error);
-                send_error(
+                send_ls_error(
                     match error {
                         EntryParseError::PathNotFound => RpcError::PathNotFound,
                         _ => RpcError::DbError,
@@ -239,7 +246,7 @@ impl Uploader {
                 output.finish().await?;
                 Ok(())
             }
-            Err(rpc_error) => send_error(rpc_error, output).await,
+            Err(rpc_error) => send_read_error(rpc_error, output).await,
         }
     }
     // This is what write_all does internally:
@@ -298,10 +305,35 @@ impl Uploader {
     }
 }
 
-/// Respond with an error
-async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+/// Respond with an error to a read query
+// The issue here is that this is indistinguishable from actual output
+// A solution might be to send a fixed length error code, and only parse it in the case that the
+// stream ended prematurely
+async fn send_read_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
     // TODO send serialised version of the error
     output.write_all(&[0]).await?;
+    output.finish().await?;
+    Err(error)
+}
+
+/// Send an error response to an LS query
+async fn send_ls_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+    // For LS query this should be length prefixed LsResponse::Err(LsResponseError)
+    let response = LsResponse::Err(LsResponseError::InternalServer(error.to_string()));
+
+    let buf = serialize(&response).map_err(|e| {
+        error!("Cannot serialize query response {:?}", e);
+        RpcError::SerializeError
+    })?;
+
+    // Write the length prefix
+    let length: u32 = buf
+        .len()
+        .try_into()
+        .map_err(|_| RpcError::U64ConvertError)?;
+    output.write_all(&length.to_be_bytes()).await?;
+
+    output.write_all(&buf).await?;
     output.finish().await?;
     Err(error)
 }
