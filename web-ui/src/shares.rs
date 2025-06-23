@@ -20,34 +20,30 @@ pub fn Shares(
         }
     };
 
+    let add_share_value = RwSignal::new(home_dir_if_exists());
+    let context = app_context.clone();
+    let add_share = move |_| {
+        let dir_to_share = add_share_value.get();
+        let dir_to_share = dir_to_share.trim();
+        if !dir_to_share.is_empty() {
+            context.add_share(dir_to_share.to_string());
+        }
+        add_share_value.set(home_dir_if_exists());
+    };
+
     view! {
         <h2 class="text-xl">"Shared files"</h2>
         <Flex vertical=true>
             <div>
-                {move || {
-                    let add_share_value = RwSignal::new(home_dir_if_exists());
-                    let add_share = move |_| {
-                        let dir_to_share = add_share_value.get();
-                        let dir_to_share = dir_to_share.trim();
-                        if !dir_to_share.is_empty() {
-                            // let join = Command::AddShare(dir_to_share.to_string());
-                            // set_requester.update(|requester| requester.make_request(join));
-                        }
-                        add_share_value.set(home_dir_if_exists());
-                    };
-
-                    view! {
-                        <p>"Add a directory to share"</p>
-                        <Flex>
-                            <Input value=add_share_value>
-                                <InputPrefix slot>
-                                    <Icon icon=icondata::AiFolderAddOutlined />
-                                </InputPrefix>
-                            </Input>
-                            <Button on:click=add_share>"Add"</Button>
-                        </Flex>
-                    }
-                }}
+                <p>"Add a directory to share"</p>
+                <Flex>
+                    <Input value=add_share_value>
+                        <InputPrefix slot>
+                            <Icon icon=icondata::AiFolderAddOutlined />
+                        </InputPrefix>
+                    </Input>
+                    <Button on:click=add_share>"Add"</Button>
+                </Flex>
             </div>
 
             // TODO could use <Show> here

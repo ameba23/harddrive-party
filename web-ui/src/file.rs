@@ -143,7 +143,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 debug!("is_shared {}", is_shared);
 
                 if is_shared {
-                    app_context.shares_query(query, app_context.own_name.get(), set_files);
+                    app_context.shares_query(query);
                 } else {
                     let peer_name = Some(peer_name.clone());
                     app_context.files(FilesQuery { query, peer_name });

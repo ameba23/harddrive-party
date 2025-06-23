@@ -39,6 +39,7 @@ pub struct AppContext {
     pub get_files: ReadSignal<BTreeMap<PeerPath, File>>,
     pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
     pub set_requests: WriteSignal<Requests>,
+    pub set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
 }
 
 impl AppContext {
@@ -49,6 +50,7 @@ impl AppContext {
         get_files: ReadSignal<BTreeMap<PeerPath, File>>,
         set_files: WriteSignal<BTreeMap<PeerPath, File>>,
         set_requests: WriteSignal<Requests>,
+        set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
     ) -> Self {
         let (client, _set_client) = signal(Client::new(ui_url));
         Self {
@@ -58,16 +60,14 @@ impl AppContext {
             get_files,
             set_files,
             set_requests,
+            set_add_or_remove_share_message,
         }
     }
 
-    pub fn shares_query(
-        &self,
-        query: IndexQuery,
-        own_name: Option<String>,
-        set_files: WriteSignal<BTreeMap<PeerPath, File>>,
-    ) {
+    pub fn shares_query(&self, query: IndexQuery) {
         let client = self.client.get_untracked();
+        let set_files = self.set_files.clone();
+        let own_name = self.own_name.get_untracked();
         spawn_local(async move {
             let mut shares_stream = client.shares(query).await.unwrap();
             debug!("Making shares query {own_name:?}");
@@ -286,9 +286,6 @@ impl AppContext {
                 // For each request, get the requested files
                 for request in new_requests {
                     self_clone.requested_files(request);
-                    // set_requester.update(|requester| {
-                    //     requester.make_request(Command::RequestedFiles(request.request_id))
-                    // });
                 }
             }
         });
@@ -346,36 +343,53 @@ impl AppContext {
             }
         });
     }
-    //
-    //         Ok(UiResponse::AddShare(number_of_shares)) => {
-    //             debug!("Got add share response");
-    //             set_add_or_remove_share_message.update(|message| {
-    //                 *message = Some(Ok(format!("Added {} shares", number_of_shares)))
-    //             });
-    //
-    //             // Re-query shares to reflect changes
-    //             let share_query_request = Command::Shares(IndexQuery {
-    //                 path: Default::default(),
-    //                 searchterm: None,
-    //                 recursive: true,
-    //             });
-    //             set_requester
-    //                 .update(|requester| requester.make_request(share_query_request));
-    //         }
-    //         Ok(UiResponse::RemoveShare) => {
-    //             debug!("Got remove share response");
-    //             set_add_or_remove_share_message.update(|message| {
-    //                 *message = Some(Ok("No longer sharing".to_string()))
-    //             });
-    //
-    //             // Re-query shares to reflect changes
-    //             let share_query_request = Command::Shares(IndexQuery {
-    //                 path: Default::default(),
-    //                 searchterm: None,
-    //                 recursive: true,
-    //             });
-    //             set_requester
-    //                 .update(|requester| requester.make_request(share_query_request));
-    //         }
-    // }
+
+    pub fn add_share(&self, share_dir: String) {
+        let client = self.client.get_untracked();
+        let self_clone = self.clone();
+        spawn_local(async move {
+            match client.add_share(share_dir).await {
+                Ok(num_files_added) => {
+                    self_clone
+                        .set_add_or_remove_share_message
+                        .update(|message| {
+                            *message = Some(Ok(format!("Added {} files", num_files_added)))
+                        });
+
+                    // Re-query shares to reflect changes
+                    self_clone.shares_query(IndexQuery {
+                        path: Default::default(),
+                        searchterm: None,
+                        recursive: false,
+                    });
+                }
+                Err(err) => {}
+            }
+        });
+    }
+
+    pub fn remove_share(&self, share_dir: String) {
+        let client = self.client.get_untracked();
+        let self_clone = self.clone();
+        spawn_local(async move {
+            // client.remove_share(share_dir).await.unwrap();
+            // match client.remove_share(share_dir).await {
+            //     Ok(()) => {
+            //             set_add_or_remove_share_message.update(|message| {
+            //                 *message = Some(Ok("No longer sharing".to_string()))
+            //             });
+            //
+            //             // Re-query shares to reflect changes
+            //             let share_query_request = Command::Shares(IndexQuery {
+            //                 path: Default::default(),
+            //                 searchterm: None,
+            //                 recursive: true,
+            //             });
+            //             set_requester
+            //                 .update(|requester| requester.make_request(share_query_request));
+            // }
+            //     Err(err) => {}
+            // }
+        });
+    }
 }

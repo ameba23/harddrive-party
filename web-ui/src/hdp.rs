@@ -39,7 +39,6 @@ pub fn HdpUi() -> impl IntoView {
         };
         origin.parse().unwrap()
     };
-    // let (ui_url, _) = signal(ui_url);
 
     let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
@@ -67,6 +66,7 @@ pub fn HdpUi() -> impl IntoView {
         files.clone(),
         set_files.clone(),
         set_requests.clone(),
+        set_add_or_remove_share_message,
     );
 
     // Get initial info
@@ -88,7 +88,7 @@ pub fn HdpUi() -> impl IntoView {
                 searchterm: None,
                 recursive: false,
             };
-            app_context.shares_query(index_query.clone(), own_name.get(), set_files);
+            app_context.shares_query(index_query.clone());
 
             // On startup do a files query to see what peers are connected
             app_context.files(FilesQuery {
@@ -102,7 +102,7 @@ pub fn HdpUi() -> impl IntoView {
     provide_context(app_context.clone());
 
     spawn_local(async move {
-        // Loop over messages from server
+        // Loop over events from server
         while let Some(msg) = ws_rx.next().await {
             match msg {
                 UiEvent::PeerConnected { name } => {
@@ -215,13 +215,6 @@ pub fn HdpUi() -> impl IntoView {
         }
         debug!("ws closed");
     });
-
-    // let client = client.read();
-    // // On startup GET /info
-    // let info = client.info();
-    //
-    // // On startup do a shares query to get our own files
-    // client.shares(index_query);
 
     let error_message_display = move || {
         view! {
@@ -341,7 +334,6 @@ pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
         <div
-            class="flex p-4 my-4 text-sm text-green-800 border border-green-300 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400 dark:border-green-800"
             role="alert"
         >
             <div>

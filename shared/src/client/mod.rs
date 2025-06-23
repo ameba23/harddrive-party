@@ -239,7 +239,28 @@ impl Client {
         Ok(LengthPrefixedStream::new(res))
     }
 
-    // TODO put /shares
+    pub async fn add_share(&self, share_dir: String) -> Result<u32, ClientError> {
+        let res = self
+            .http_client
+            .put(
+                self.ui_url
+                    .join("shares")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .body(share_dir)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                res.status(),
+                res.text().await.unwrap_or_default()
+            )));
+        }
+
+        Ok(res.text().await?.parse()?)
+    }
     // TODO delete /shares
 }
 
