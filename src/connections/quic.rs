@@ -1,10 +1,17 @@
 //! Configuration for QUIC connections to remote peers
 use anyhow::anyhow;
+use harddrive_party_shared::ui_messages::UiServerError;
 use log::{debug, warn};
 use quinn::{AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
 use rustls::{Certificate, SignatureScheme};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+
+use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -24,8 +31,11 @@ pub async fn make_server_endpoint(
     socket: impl AsyncUdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
+    known_peers: Arc<RwLock<HashSet<String>>>,
+    client_verification: bool,
 ) -> anyhow::Result<Endpoint> {
-    let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
+    let (server_config, client_config) =
+        configure_server(cert_der, priv_key_der, known_peers, client_verification)?;
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         Default::default(),
@@ -41,8 +51,10 @@ pub async fn make_server_endpoint_basic_socket(
     socket: tokio::net::UdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
+    known_peers: Arc<RwLock<HashSet<String>>>,
 ) -> anyhow::Result<Endpoint> {
-    let (server_config, client_config) = configure_server(cert_der, priv_key_der)?;
+    let (server_config, client_config) =
+        configure_server(cert_der, priv_key_der, known_peers, true)?;
 
     let mut endpoint = quinn::Endpoint::new(
         Default::default(),
@@ -55,32 +67,42 @@ pub async fn make_server_endpoint_basic_socket(
 }
 
 /// Given a Quic connection, get the TLS certificate
-pub fn get_certificate_from_connection(conn: &Connection) -> anyhow::Result<Certificate> {
+pub fn get_certificate_from_connection(
+    conn: &Connection,
+) -> Result<Certificate, UiServerErrorWrapper> {
     let identity = conn
         .peer_identity()
-        .ok_or_else(|| anyhow!("No peer certificate"))?;
+        .ok_or_else(|| UiServerError::ConnectionError("No peer certificate".to_string()))?;
 
     let remote_cert = identity
         .downcast::<Vec<Certificate>>()
-        .map_err(|_| anyhow!("No certificate"))?;
-    remote_cert
+        .map_err(|_| UiServerError::ConnectionError("No certificate".to_string()))?;
+
+    Ok(remote_cert
         .first()
-        .ok_or_else(|| anyhow!("No certificate"))
-        .cloned()
+        .ok_or_else(|| UiServerError::ConnectionError("No peer certificate".to_string()))?
+        .clone())
 }
 
 /// Returns default server configuration along with its certificate.
 fn configure_server(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
+    known_peers: Arc<RwLock<HashSet<String>>>,
+    client_verification: bool,
 ) -> anyhow::Result<(ServerConfig, ClientConfig)> {
     let priv_key = rustls::PrivateKey(priv_key_der.clone());
     let cert_chain = vec![rustls::Certificate(cert_der)];
 
-    let crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_client_cert_verifier(SkipClientVerification::new())
-        .with_single_cert(cert_chain.clone(), priv_key)?;
+    let crypto = rustls::ServerConfig::builder().with_safe_defaults();
+
+    let crypto = if client_verification {
+        crypto.with_client_cert_verifier(ClientVerification::new(known_peers.clone()))
+    } else {
+        crypto.with_client_cert_verifier(SkipClientVerification::new())
+    };
+
+    let crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
@@ -91,7 +113,7 @@ fn configure_server(
 
     let client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
-        .with_custom_certificate_verifier(SkipServerVerification::new())
+        .with_custom_certificate_verifier(ServerVerification::new(known_peers))
         .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key_der));
 
     let client_config = ClientConfig::new(Arc::new(client_crypto));
@@ -99,26 +121,68 @@ fn configure_server(
     Ok((server_config, client_config))
 }
 
-struct SkipServerVerification;
+struct ServerVerification {
+    known_peers: Arc<RwLock<HashSet<String>>>,
+}
 
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self)
+impl ServerVerification {
+    fn new(known_peers: Arc<RwLock<HashSet<String>>>) -> Arc<Self> {
+        Arc::new(Self { known_peers })
     }
 }
 
-impl rustls::client::ServerCertVerifier for SkipServerVerification {
+impl rustls::client::ServerCertVerifier for ServerVerification {
     fn verify_server_cert(
         &self,
-        _end_entity: &rustls::Certificate,
+        end_entity: &rustls::Certificate,
         _intermediates: &[rustls::Certificate],
         _server_name: &rustls::ServerName,
         _scts: &mut dyn Iterator<Item = &[u8]>,
         _ocsp_response: &[u8],
         _now: std::time::SystemTime,
     ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        debug!("verifying {:?}", _server_name);
-        Ok(rustls::client::ServerCertVerified::assertion())
+        let (name, _) = certificate_to_name(end_entity.clone());
+        let known_peers = self.known_peers.read().unwrap();
+        if known_peers.contains(&name) {
+            Ok(rustls::client::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::UnknownIssuer,
+            ))
+        }
+    }
+}
+
+struct ClientVerification {
+    known_peers: Arc<RwLock<HashSet<String>>>,
+}
+
+impl ClientVerification {
+    fn new(known_peers: Arc<RwLock<HashSet<String>>>) -> Arc<Self> {
+        Arc::new(Self { known_peers })
+    }
+}
+
+impl rustls::server::ClientCertVerifier for ClientVerification {
+    fn client_auth_root_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
+        let (name, _) = certificate_to_name(end_entity.clone());
+        let known_peers = self.known_peers.read().unwrap();
+        if known_peers.contains(&name) {
+            Ok(rustls::server::ClientCertVerified::assertion())
+        } else {
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::UnknownIssuer,
+            ))
+        }
     }
 }
 
@@ -141,7 +205,6 @@ impl rustls::server::ClientCertVerifier for SkipClientVerification {
         _intermediates: &[rustls::Certificate],
         _now: std::time::SystemTime,
     ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
-        debug!("verifying client");
         Ok(rustls::server::ClientCertVerified::assertion())
     }
 }

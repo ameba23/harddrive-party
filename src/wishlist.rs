@@ -1,19 +1,22 @@
 //! Track requested and downloaded files
 use crate::{
-    hdp::{
+    shares::Chunker,
+    subtree_names::{
         REQUESTED_FILES_BY_PEER, REQUESTED_FILES_BY_REQUEST_ID, REQUESTS, REQUESTS_BY_TIMESTAMP,
         REQUESTS_PROGRESS,
     },
-    shares::Chunker,
     ui_messages::UiDownloadRequest,
 };
-use anyhow::anyhow;
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use harddrive_party_shared::ui_messages::UiRequestedFile;
 use key_to_animal::key_to_name;
 use log::warn;
-use std::time::{Duration, SystemTime};
+use std::{
+    str::Utf8Error,
+    time::{Duration, SystemTime},
+};
+use thiserror::Error;
 
 /// How many entries to send when updating the UI
 const MAX_ENTRIES_PER_MESSAGE: usize = 64;
@@ -58,13 +61,15 @@ impl DownloadRequest {
 
     /// Given a serialized db entry, make a DownloadRequest
     /// key: `<request_id>` value: `<timestamp><total_size><peer_public_key><requested_path>`
-    pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
+    pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
         if key.len() != 4 {
-            return Err(anyhow!("Unexpected key length (should be 4 bytes)"));
+            return Err(DbError::BadLength(
+                "Unexpected key length (should be 4 bytes)".to_string(),
+            ));
         }
         if value.len() < 8 + 8 + 32 {
-            return Err(anyhow!(
-                "Unexpected value length (should be at least 48 bytes)"
+            return Err(DbError::BadLength(
+                "Unexpected value length (should be at least 48 bytes)".to_string(),
             ));
         }
         let request_id_buf: [u8; 4] = key[0..4].try_into()?;
@@ -120,7 +125,7 @@ impl DownloadRequest {
     pub fn from_completed_requests_db_key_value(
         key: Vec<u8>,
         value: Vec<u8>,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, DbError> {
         let request_id_buf: [u8; 4] = key[..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
 
@@ -172,7 +177,7 @@ pub struct RequestedFile {
 impl RequestedFile {
     /// Given a serialized wishlist db entry, make a [RequestedFile]
     /// key: `<peer_public_key><timestamp><path>` value: `<request_id><size>`
-    fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
+    fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
         // TODO would it be useful to also return these?
         // let peer_public_key: [u8; 32] = key[0..32].try_into()?;
 
@@ -197,7 +202,7 @@ impl RequestedFile {
     }
 
     /// key2: `<requestid><path>` value2: `<size><downloaded>`
-    fn from_db_by_request_id_key_value(key: Vec<u8>, value: Vec<u8>) -> anyhow::Result<Self> {
+    fn from_db_by_request_id_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
         let request_id_buf: [u8; 4] = key[0..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
 
@@ -291,7 +296,7 @@ pub struct WishList {
 }
 
 impl WishList {
-    pub fn new(db: &sled::Db) -> anyhow::Result<Self> {
+    pub fn new(db: &sled::Db) -> Result<Self, DbError> {
         Ok(WishList {
             requests_by_request_id: db.open_tree(REQUESTS)?,
             requests_by_timestamp: db.open_tree(REQUESTS_BY_TIMESTAMP)?,
@@ -304,7 +309,7 @@ impl WishList {
     /// Get all requested items to send to UI
     pub fn requested(
         &self,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = Vec<UiDownloadRequest>> + Send + '_>> {
+    ) -> Result<Box<dyn Iterator<Item = Vec<UiDownloadRequest>> + Send>, DbError> {
         let wishlist = self.clone();
         let iter = self
             .requests_by_timestamp
@@ -338,7 +343,7 @@ impl WishList {
     pub fn requested_files(
         &self,
         request_id: u32,
-    ) -> anyhow::Result<Box<dyn Iterator<Item = Vec<UiRequestedFile>> + Send + '_>> {
+    ) -> Result<Box<dyn Iterator<Item = Vec<UiRequestedFile>> + Send>, DbError> {
         let request_id_buf = request_id.to_be_bytes();
         let iter = self
             .requested_files_by_request_id
@@ -401,7 +406,7 @@ impl WishList {
     }
 
     /// Add a download request
-    pub fn add_request(&self, download_request: &DownloadRequest) -> anyhow::Result<()> {
+    pub fn add_request(&self, download_request: &DownloadRequest) -> Result<(), DbError> {
         let ((key, value), (key2, value2)) = download_request.to_db_key_value();
         self.requests_by_request_id.insert(key, value)?;
         self.requests_by_timestamp.insert(key2, value2)?;
@@ -410,7 +415,7 @@ impl WishList {
 
     /// Add a download request for a particular file
     /// Should be called after add_request
-    pub fn add_requested_file(&self, requested_file: &RequestedFile) -> anyhow::Result<()> {
+    pub fn add_requested_file(&self, requested_file: &RequestedFile) -> Result<(), DbError> {
         let download_request = self.get_request(requested_file.request_id)?;
 
         let ((key, value), (key2, value2)) = requested_file
@@ -422,15 +427,15 @@ impl WishList {
     }
 
     /// Mark a particular requested file as completely downloaded
-    pub fn file_completed(&self, requested_file: RequestedFile) -> anyhow::Result<bool> {
+    pub fn file_completed(&self, requested_file: RequestedFile) -> Result<bool, DbError> {
         if !requested_file.downloaded {
-            return Err(anyhow!("File not marked as downloaded"));
+            return Err(DbError::MarkCompeleted);
         }
         let request_id = requested_file.request_id.to_be_bytes();
         let request_details = self
             .requests_by_request_id
             .get(request_id)?
-            .ok_or(anyhow!("Unknown request ID"))?;
+            .ok_or(DbError::NoRequest)?;
         let download_request =
             DownloadRequest::from_db_key_value(request_id.to_vec(), request_details.to_vec())?;
         let ((key, _value), (key2, value2)) = requested_file
@@ -451,7 +456,7 @@ impl WishList {
     }
 
     /// Given a request id, return the number of bytes downloaded so far
-    pub fn get_download_progress_for_request(&self, request_id: u32) -> anyhow::Result<u64> {
+    pub fn get_download_progress_for_request(&self, request_id: u32) -> Result<u64, DbError> {
         Ok(
             match self
                 .bytes_downloaded_by_request_id
@@ -461,7 +466,7 @@ impl WishList {
                     existing_bytes_buf
                         .to_vec()
                         .try_into()
-                        .map_err(|_| anyhow!("Bad existing bytes entry"))?,
+                        .map_err(|_| DbError::CorruptDb("Bad existing bytes entry".to_string()))?,
                 ),
                 None => 0,
             },
@@ -469,15 +474,41 @@ impl WishList {
     }
 
     /// Given a request id, return a request
-    pub fn get_request(&self, request_id: u32) -> anyhow::Result<DownloadRequest> {
+    pub fn get_request(&self, request_id: u32) -> Result<DownloadRequest, DbError> {
         let request_id = request_id.to_be_bytes();
         let request_details = self
             .requests_by_request_id
             .get(request_id)?
-            .ok_or(anyhow!("Unknown request ID"))?;
+            .ok_or(DbError::NoRequest)?;
         // Depending on the context this is called from, we could also check completed requests
         DownloadRequest::from_db_key_value(request_id.to_vec(), request_details.to_vec())
     }
+
+    pub async fn flush(&self) {
+        let _ = self.requests_by_request_id.flush_async().await;
+        let _ = self.requests_by_timestamp.flush_async().await;
+        let _ = self.bytes_downloaded_by_request_id.flush_async().await;
+        let _ = self.requested_files_by_peer.flush_async().await;
+        let _ = self.requested_files_by_request_id.flush_async().await;
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum DbError {
+    #[error("Sled: {0}")]
+    Sled(#[from] sled::Error),
+    #[error("There is no request with the given ID")]
+    NoRequest,
+    #[error("Serialization: {0}")]
+    Serialization(#[from] std::array::TryFromSliceError),
+    #[error("Bad length: {0}")]
+    BadLength(String),
+    #[error("UTF8 Conversion: {0}")]
+    Utf8(#[from] Utf8Error),
+    #[error("Db is corrupted: {0}")]
+    CorruptDb(String),
+    #[error("Attempted to mark a files a completed which appears to not be completed")]
+    MarkCompeleted,
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@ use crate::{
     display_bytes,
     file::{DownloadStatus, DownloadingFile, File, FileDisplayContext},
     ui_messages::UiDownloadRequest,
-    FilesSignal, PeerPath,
+    AppContext, PeerPath,
 };
 use leptos::{
     either::{Either, EitherOf3, EitherOf4},
@@ -45,10 +45,10 @@ impl Requests {
 /// A file which has been requested / downloaded
 #[component]
 pub fn Request(file: File) -> impl IntoView {
+    let app_context = use_context::<AppContext>().unwrap();
     let request_option = file.request.get();
     match request_option {
         Some(request) => {
-            let files = use_context::<FilesSignal>().unwrap().0;
             let peer_path = PeerPath {
                 peer_name: request.peer_name.clone(),
                 path: request.path.clone(),
@@ -56,7 +56,7 @@ pub fn Request(file: File) -> impl IntoView {
 
             let child_files = move || {
                 // Calling .get() clones - we should ideally use .with(|files| files.range...)
-                let files = files.get();
+                let files = app_context.get_files.get();
 
                 let mut upper_bound = peer_path.path.clone();
                 upper_bound.push_str("~");

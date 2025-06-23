@@ -11,3 +11,16 @@ repository = "https://gitlab.com/pegpeg/harddrive-party"
 [dependencies]
 thiserror = "1.0.37"
 serde = { version = "1.0", features = ["derive"] }
+futures = "0.3.25"
+bincode = "1.3.3"
+reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
+bytes= "1.10.1"
+tokio-tungstenite = { version="0.18.0", optional=true }
+tokio = { version = "1.24.2", optional=true }
+base64 = "0.22.1"
+serde_json = "1.0.140"
+
+[features]
+default = ["native"]
+native = ["tokio-tungstenite", "tokio"]
+

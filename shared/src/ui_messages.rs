@@ -1,54 +1,14 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::wire_messages::{IndexQuery, LsResponse, ReadQuery};
+use crate::{announce_address::AnnounceAddressDecodeError, wire_messages::IndexQuery};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
 
-/// A command from the UI together with a random ID used to refer to it
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct UiClientMessage {
-    pub id: u32,
-    pub command: Command,
-}
-
-/// A command from the UI
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum Command {
-    /// Query peers' files. If no peer name is given, query all connected peers
-    Ls(IndexQuery, Option<String>),
-    /// Read a portion a of a file, from the given connect peer name
-    Read(ReadQuery, String),
-    /// Download a file or dir
-    Download { path: String, peer_name: String },
-    /// Query our own shares
-    Shares(IndexQuery),
-    /// Add or update a directory to share
-    AddShare(String),
-    /// Stop sharing a directory
-    RemoveShare(String),
-    /// Get download requests
-    Requests,
-    /// Get files associated with a particular request
-    RequestedFiles(u32),
-    /// Cancel a particular request
-    RemoveRequest(u32),
-    /// Connect to the given peer
-    ConnectDirect(String),
-    /// Shutdown gracefully
-    Close,
-}
-
-/// A message to the UI
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum UiServerMessage {
-    /// The response to a `Command`
-    Response {
-        id: u32,
-        response: Result<UiResponse, UiServerError>,
-    },
-    /// Some server message which is not responding to a particular command
-    Event(UiEvent),
+pub struct FilesQuery {
+    pub peer_name: Option<String>,
+    pub query: IndexQuery,
 }
 
 /// 'Events' are messages sent from the server which are not in response to a particular
@@ -56,28 +16,22 @@ pub enum UiServerMessage {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
     /// A peer has connected
-    PeerConnected {
-        name: String,
-        /// Is the peer me? This is used to pass our own details to the UI
-        peer_type: PeerRemoteOrSelf,
-    },
+    PeerConnected { name: String },
     /// A peer has disconnected
-    PeerDisconnected { name: String },
+    PeerDisconnected { name: String, error: String },
+    /// A peer connection failed
+    PeerConnectionFailed { name: String, error: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
+    /// Download
+    Download(DownloadEvent),
 }
 
-/// Details of a [UiEvent::PeerConnected] indicating whether the connecting peer is ourself or a
-/// remote peer.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum PeerRemoteOrSelf {
-    /// A remote peer
-    Remote,
-    /// Ourself, with the path of our home directory
-    Me {
-        os_home_dir: Option<String>,
-        announce_address: String,
-    },
+pub struct Info {
+    pub name: String,
+    pub os_home_dir: Option<String>,
+    pub announce_address: String,
 }
 
 /// A request to download a file from a particular peer
@@ -117,34 +71,31 @@ pub struct UploadInfo {
     pub peer_name: String,
 }
 
-/// Response to a UI command
-#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub enum UiResponse {
-    Download(DownloadResponse),
-    Read(Vec<u8>),
-    Ls(LsResponse, String),
-    Shares(LsResponse),
-    AddShare(u32),
-    RemoveShare,
-    Requests(Vec<UiDownloadRequest>),
-    RequestedFiles(Vec<UiRequestedFile>),
-    EndResponse,
-}
-
 /// An error in response to a UI command
 #[derive(Serialize, Deserialize, PartialEq, Debug, Error, Clone)]
 pub enum UiServerError {
     #[error("Cannot connect: {0}")]
     ConnectionError(String),
-    #[error("Request error")]
-    RequestError, // TODO
+    #[error("Request error: {0}")]
+    RequestError(String),
     #[error("Error when updating shared directory")]
     ShareError(String),
+    #[error("Serialization: {0}")]
+    Serialization(String),
+    #[error("Peer discovery: {0}")]
+    PeerDiscovery(String),
+    #[error("Poisoned lock")]
+    Poison,
+    #[error("Database: {0}")]
+    Db(String),
+    #[error("Error adding directory to share: {0}")]
+    AddShare(String),
+    #[error("Cannot decode announce address {0}")]
+    AnnounceAddressDecode(#[from] AnnounceAddressDecodeError),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum DownloadInfo {
-    Requested(Duration),
     Downloading {
         /// File path of currently downloading file
         path: String,
@@ -160,7 +111,8 @@ pub enum DownloadInfo {
 
 /// A response to a download request
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
-pub struct DownloadResponse {
+pub struct DownloadEvent {
+    pub request_id: u32,
     /// File path of requested file of directory
     pub path: String,
     /// Name of the peer who holds the file or directory
@@ -169,12 +121,9 @@ pub struct DownloadResponse {
     // pub total_size: u64,
 }
 
-impl fmt::Display for DownloadResponse {
+impl fmt::Display for DownloadEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.download_info {
-            DownloadInfo::Requested(_time) => {
-                write!(f, "Requested {}/{}", self.peer_name, self.path)
-            }
             DownloadInfo::Downloading {
                 path,
                 bytes_read,
@@ -192,4 +141,13 @@ impl fmt::Display for DownloadResponse {
             }
         }
     }
+}
+
+/// Represents a remote file
+#[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PeerPath {
+    /// The name of the peer who holds the file
+    pub peer_name: String,
+    /// The path to the remote file
+    pub path: String,
 }

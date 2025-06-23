@@ -1,41 +1,25 @@
 use crate::{
     display_bytes,
     file::{File, FileDisplayContext},
-    ui_messages::Command,
-    FilesSignal, PeerPath, RequesterSetter,
+    AppContext, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
 
-#[derive(Clone, Debug)]
-pub struct Peer {
-    pub name: String,
-    pub files: HashSet<String>,
-    pub is_self: bool,
-}
-
-impl Peer {
-    pub fn new(name: String, is_self: bool) -> Self {
-        Self {
-            name,
-            files: HashSet::new(),
-            is_self,
-        }
-    }
-}
-
 #[component]
-pub fn Peer(peer: Peer) -> impl IntoView {
-    let files = use_context::<FilesSignal>().unwrap().0;
+pub fn Peer(name: String, is_self: bool) -> impl IntoView {
+    let app_context = use_context::<AppContext>().unwrap();
+    let files = app_context.get_files;
+
     // This signal is used below to provide context to File
-    let (peer_signal, _set_peer) = signal((peer.name.clone(), peer.is_self));
+    let (peer_signal, _set_peer) = signal((name.clone(), is_self));
 
     // This should probably be in a closure
     let root_size = display_bytes(
         match files.get().get(&PeerPath {
-            peer_name: peer.name,
+            peer_name: name,
             path: "".to_string(),
         }) {
             Some(file) => file.size.unwrap_or_default(),
@@ -63,7 +47,6 @@ pub fn Peer(peer: Peer) -> impl IntoView {
             .collect::<Vec<File>>()
     };
 
-    // provide_context(PeerName(peer_signal));
     view! {
         <div>
             <Flex vertical=true>
@@ -83,13 +66,12 @@ pub fn Peer(peer: Peer) -> impl IntoView {
                                 view! {
                                     <File
                                         file
-                                        is_shared=peer.is_self
+                                        is_shared=is_self
                                         context=FileDisplayContext::Peer
                                     />
                                 }
                             }
                         />
-
                     </TableBody>
                 </Table>
             </Flex>
@@ -99,11 +81,13 @@ pub fn Peer(peer: Peer) -> impl IntoView {
 
 #[component]
 pub fn Peers(
-    peers: ReadSignal<HashMap<String, Peer>>,
+    peers: ReadSignal<HashSet<String>>,
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
     set_pending_peers: WriteSignal<HashSet<String>>,
 ) -> impl IntoView {
+    let app_context = use_context::<AppContext>().unwrap();
+
     let show_peers = move || {
         if peers.get().is_empty() {
             Either::Left(view! {
@@ -116,8 +100,8 @@ pub fn Peers(
                 <div>
                     <For
                         each=move || peers.get()
-                        key=|(peer_name, peer)| format!("{}{}", peer_name, peer.files.len())
-                        children=move |(_peer_name, peer)| view! { <Peer peer /> }
+                        key=|name| name.clone()
+                        children=move |name| view! { <Peer name is_self=false /> }
                     />
                 </div>
             })
@@ -140,15 +124,14 @@ pub fn Peers(
         }
     };
 
-    let set_requester = use_context::<RequesterSetter>().unwrap().0;
+    // let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_value = RwSignal::new(String::new());
 
     let add_peer = move |_| {
         let announce_payload = input_value.get();
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
-            let add = Command::ConnectDirect(announce_payload.to_string());
-            set_requester.update(|requester| requester.make_request(add));
+            app_context.connect(announce_payload.to_string());
             set_pending_peers.update(|pending_peers| {
                 pending_peers.insert(announce_payload.to_string());
             });
