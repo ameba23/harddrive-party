@@ -184,6 +184,14 @@ impl PeerDiscovery {
             None
         }
     }
+
+    pub fn use_client_verification(&self) -> bool {
+        if let PeerConnectionDetails::NoNat(_) = self.announce_address.connection_details {
+            false
+        } else {
+            true
+        }
+    }
 }
 
 // Check if an IP appears to be private

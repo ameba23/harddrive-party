@@ -48,7 +48,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("shares")
+                    .join("api/shares")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(serialize(&query)?)
@@ -70,7 +70,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("files")
+                    .join("api/files")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(serialize(&query)?)
@@ -89,7 +89,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("download")
+                    .join("api/download")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(serialize(peer_path)?)
@@ -108,7 +108,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("connect")
+                    .join("api/connect")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(announce_address)
@@ -131,7 +131,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("read")
+                    .join("api/read")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(serialize(&(read_query, peer_name))?)
@@ -151,7 +151,7 @@ impl Client {
             .http_client
             .get(
                 self.ui_url
-                    .join("info")
+                    .join("api/info")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .send()
@@ -172,7 +172,7 @@ impl Client {
             .http_client
             .get(
                 self.ui_url
-                    .join("request")
+                    .join("api/request")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .query(&[("id", id.to_string())])
@@ -194,7 +194,7 @@ impl Client {
             .http_client
             .get(
                 self.ui_url
-                    .join("requests")
+                    .join("api/requests")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .send()
@@ -212,7 +212,7 @@ impl Client {
             .http_client
             .put(
                 self.ui_url
-                    .join("shares")
+                    .join("api/shares")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(share_dir)
@@ -231,7 +231,7 @@ impl Client {
             .http_client
             .delete(
                 self.ui_url
-                    .join("shares")
+                    .join("api/shares")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .body(share_dir)
@@ -250,7 +250,7 @@ impl Client {
             .http_client
             .post(
                 self.ui_url
-                    .join("close")
+                    .join("api/close")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
             .send()

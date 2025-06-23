@@ -142,6 +142,7 @@ impl Hdp {
                         cert_der,
                         priv_key_der,
                         shared_state.known_peers.clone(),
+                        peer_discovery.use_client_verification(),
                     )
                     .await?,
                 )
@@ -309,17 +310,17 @@ impl Hdp {
                 .await;
 
             // Loop over requests from the peer and handle them
-            loop {
+            let err = loop {
                 match accept_incoming_request(&conn).await {
                     Ok((send, buf)) => {
                         rpc.request(buf, send, peer_name.clone()).await;
                     }
                     Err(err) => {
                         warn!("Failed to handle request: {:?}", err);
-                        break;
+                        break err;
                     }
                 }
-            }
+            };
 
             // Remove the peer from our peers map and inform the UI
             let mut peers = shared_state.peers.lock().await;
@@ -330,6 +331,7 @@ impl Hdp {
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
                     name: peer_name.clone(),
+                    error: err.to_string(),
                 })
                 .await;
         });

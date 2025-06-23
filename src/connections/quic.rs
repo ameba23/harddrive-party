@@ -32,8 +32,10 @@ pub async fn make_server_endpoint(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
     known_peers: Arc<RwLock<HashSet<String>>>,
+    client_verification: bool,
 ) -> anyhow::Result<Endpoint> {
-    let (server_config, client_config) = configure_server(cert_der, priv_key_der, known_peers)?;
+    let (server_config, client_config) =
+        configure_server(cert_der, priv_key_der, known_peers, client_verification)?;
 
     let mut endpoint = quinn::Endpoint::new_with_abstract_socket(
         Default::default(),
@@ -51,7 +53,8 @@ pub async fn make_server_endpoint_basic_socket(
     priv_key_der: Vec<u8>,
     known_peers: Arc<RwLock<HashSet<String>>>,
 ) -> anyhow::Result<Endpoint> {
-    let (server_config, client_config) = configure_server(cert_der, priv_key_der, known_peers)?;
+    let (server_config, client_config) =
+        configure_server(cert_der, priv_key_der, known_peers, true)?;
 
     let mut endpoint = quinn::Endpoint::new(
         Default::default(),
@@ -86,14 +89,20 @@ fn configure_server(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
     known_peers: Arc<RwLock<HashSet<String>>>,
+    client_verification: bool,
 ) -> anyhow::Result<(ServerConfig, ClientConfig)> {
     let priv_key = rustls::PrivateKey(priv_key_der.clone());
     let cert_chain = vec![rustls::Certificate(cert_der)];
 
-    let crypto = rustls::ServerConfig::builder()
-        .with_safe_defaults()
-        .with_client_cert_verifier(ClientVerification::new(known_peers.clone()))
-        .with_single_cert(cert_chain.clone(), priv_key)?;
+    let crypto = rustls::ServerConfig::builder().with_safe_defaults();
+
+    let crypto = if client_verification {
+        crypto.with_client_cert_verifier(ClientVerification::new(known_peers.clone()))
+    } else {
+        crypto.with_client_cert_verifier(SkipClientVerification::new())
+    };
+
+    let crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
@@ -174,6 +183,29 @@ impl rustls::server::ClientCertVerifier for ClientVerification {
                 rustls::CertificateError::UnknownIssuer,
             ))
         }
+    }
+}
+
+struct SkipClientVerification;
+
+impl SkipClientVerification {
+    fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+
+impl rustls::server::ClientCertVerifier for SkipClientVerification {
+    fn client_auth_root_subjects(&self) -> &[rustls::DistinguishedName] {
+        &[]
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &rustls::Certificate,
+        _intermediates: &[rustls::Certificate],
+        _now: std::time::SystemTime,
+    ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
+        Ok(rustls::server::ClientCertVerified::assertion())
     }
 }
 

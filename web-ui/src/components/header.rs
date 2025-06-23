@@ -1,6 +1,6 @@
 use crate::{display_bytes, AppContext, PeerPath};
 use leptos::prelude::*;
-use leptos_router::hooks::use_navigate;
+use leptos_router::hooks::{use_location, use_navigate};
 use std::collections::HashSet;
 use thaw::*;
 
@@ -9,7 +9,9 @@ pub fn HdpHeader(
     peers: ReadSignal<HashSet<String>>,
     own_name: ReadSignal<Option<String>>,
 ) -> impl IntoView {
-    let selected_value = RwSignal::new("peers".to_string());
+    let location = use_location();
+    let selected_value = location.pathname;
+    let selected_value = RwSignal::new(selected_value.get_untracked());
 
     let files = use_context::<AppContext>().unwrap().get_files;
 
@@ -43,7 +45,7 @@ pub fn HdpHeader(
                 <TabList class="tab-list" selected_value>
                     <Flex>
                         <Tab
-                            value="shares"
+                            value="/shares"
                             on:click=move |_| {
                                 navigate1("/shares", Default::default());
                             }
@@ -56,9 +58,9 @@ pub fn HdpHeader(
                             </Flex>
                         </Tab>
                         <Tab
-                            value="peers"
+                            value="/"
                             on:click=move |_| {
-                                navigate2("/peers", Default::default());
+                                navigate2("/", Default::default());
                             }
                         >
 
@@ -69,7 +71,7 @@ pub fn HdpHeader(
                             </Flex>
                         </Tab>
                         <Tab
-                            value="transfers"
+                            value="/transfers"
                             on:click=move |_| {
                                 navigate3("/transfers", Default::default());
                             }

@@ -126,8 +126,8 @@ pub fn HdpUi() -> impl IntoView {
                         }
                     });
                 }
-                UiEvent::PeerDisconnected { name } => {
-                    debug!("{} disconnected", name);
+                UiEvent::PeerDisconnected { name, error } => {
+                    debug!("{} disconnected {}", name, error);
                     set_peers.update(|peers| {
                         peers.remove(&name);
                     });
@@ -268,7 +268,14 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("")
                                 view=move || {
-                                    view! { <Redirect path="/peers" /> }
+                                    view! {
+                                        <Peers
+                                            peers
+                                            announce_address
+                                            pending_peers
+                                            set_pending_peers
+                                        />
+                                    }
                                 }
                             />
                             <Route

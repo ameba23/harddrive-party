@@ -18,7 +18,7 @@ pub enum UiEvent {
     /// A peer has connected
     PeerConnected { name: String },
     /// A peer has disconnected
-    PeerDisconnected { name: String },
+    PeerDisconnected { name: String, error: String },
     /// A peer connection failed
     PeerConnectionFailed { name: String, error: String },
     /// Part of a file has been uploaded

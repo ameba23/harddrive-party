@@ -37,22 +37,29 @@ pub async fn http_server(
             "/downloads",
             ServeDir::new(shared_state.download_dir.clone()),
         )
-        .route("/connect", post(post_connect))
-        .route("/files", post(post_files))
-        .route("/download", post(post_download))
-        .route("/shares", post(post_shares))
-        .route("/info", get(get_info))
-        .route("/read", post(post_read))
-        .route("/shares", put(put_shares))
-        .route("/shares", delete(delete_shares))
-        // .route("/connect", delete(delete_connect))
-        .route("/requests", get(get_requests))
-        .route("/request", get(get_request))
-        // .route("/request", delete(delete_request))
+        .nest(
+            "/api",
+            Router::new()
+                .route("/connect", post(post_connect))
+                .route("/files", post(post_files))
+                .route("/download", post(post_download))
+                .route("/shares", post(post_shares))
+                .route("/info", get(get_info))
+                .route("/read", post(post_read))
+                .route("/shares", put(put_shares))
+                .route("/shares", delete(delete_shares))
+                // .route("/connect", delete(delete_connect))
+                .route("/requests", get(get_requests))
+                .route("/request", get(get_request))
+                // .route("/request", delete(delete_request))
+                .route("/close", post(post_close)),
+        )
         .route("/ws", any(ws_handler))
         .route("/", get(index))
+        .route("/peers", get(index))
+        .route("/shares", get(index))
+        .route("/transfers", get(index))
         .route("/{path}", get(static_handler))
-        .route("/close", post(post_close))
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
