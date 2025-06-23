@@ -63,6 +63,8 @@ pub struct SharedState {
     pub announce_address: AnnounceAddress,
     /// Our OS home directory path
     pub os_home_dir: Option<String>,
+    /// Channel for graceful shutdown signal
+    graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
 
 impl SharedState {
@@ -74,6 +76,7 @@ impl SharedState {
         peer_announce_tx: Sender<PeerConnect>,
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         announce_address: AnnounceAddress,
+        graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
     ) -> anyhow::Result<Self> {
         let shares = Shares::new(db.clone(), share_dirs).await?;
 
@@ -98,6 +101,7 @@ impl SharedState {
             name,
             announce_address,
             os_home_dir,
+            graceful_shutdown_tx,
         })
     }
 
@@ -229,6 +233,17 @@ impl SharedState {
             }
         }
         Ok(id)
+    }
+
+    /// Gracefully shut down the process
+    pub async fn shut_down(&self) {
+        // TODO tidy up peer discovery / active transfers
+        self.shares.flush().await;
+        self.wishlist.flush().await;
+        // This sends a signal to shutdown the Quic endpoint
+        if self.graceful_shutdown_tx.send(()).await.is_err() {
+            std::process::exit(0);
+        };
     }
 }
 

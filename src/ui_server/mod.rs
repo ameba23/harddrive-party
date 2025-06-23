@@ -6,8 +6,8 @@ pub use harddrive_party_shared::client;
 use crate::{
     ui_server::{
         api::{
-            delete_shares, get_info, get_request, get_requests, post_connect, post_download,
-            post_files, post_read, post_shares, put_shares,
+            delete_shares, get_info, get_request, get_requests, post_close, post_connect,
+            post_download, post_files, post_read, post_shares, put_shares,
         },
         ws::handle_socket,
     },
@@ -52,6 +52,7 @@ pub async fn http_server(
         .route("/ws", any(ws_handler))
         .route("/", get(index))
         .route("/{path}", get(static_handler))
+        .route("/close", post(post_close))
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

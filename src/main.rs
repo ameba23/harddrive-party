@@ -18,7 +18,7 @@ struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
     /// Where to host UI, or where to expect it to be hosted
-    #[arg(short, long, required = false, default_value = "127.0.0.1:3030")]
+    #[arg(short, long, required = false, default_value = "http://127.0.0.1:3030")]
     ui_address: String,
     /// Verbose mode with additional logging
     #[arg(short, long)]
@@ -82,7 +82,10 @@ enum CliCommand {
         end: Option<u64>,
     },
     /// Connect to a peer
-    Connect { announce_address: String },
+    Connect {
+        announce_address: String,
+    },
+    Stop,
 }
 
 #[tokio::main]
@@ -134,7 +137,13 @@ async fn main() -> anyhow::Result<()> {
 
             let shared_state = hdp.shared_state.clone();
 
-            let ui_address: std::net::SocketAddr = cli.ui_address.parse()?;
+            let ui_address = cli
+                .ui_address
+                .strip_prefix("http://")
+                .or_else(|| cli.ui_address.strip_prefix("https://"))
+                .unwrap_or(&cli.ui_address);
+
+            let ui_address: std::net::SocketAddr = ui_address.parse()?;
             let addr = http_server(shared_state, ui_address).await?;
 
             println!("Web UI served on http://{}", addr);
@@ -304,6 +313,17 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     _ => {}
+                }
+            }
+        }
+        CliCommand::Stop => {
+            let client = Client::new(cli.ui_address.parse()?);
+            match client.shut_down().await {
+                Ok(()) => {
+                    println!("Shut down successfully");
+                }
+                Err(err) => {
+                    println!("Could not gracefully shut down: {err}");
                 }
             }
         }

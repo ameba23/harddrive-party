@@ -483,6 +483,14 @@ impl WishList {
         // Depending on the context this is called from, we could also check completed requests
         DownloadRequest::from_db_key_value(request_id.to_vec(), request_details.to_vec())
     }
+
+    pub async fn flush(&self) {
+        let _ = self.requests_by_request_id.flush_async().await;
+        let _ = self.requests_by_timestamp.flush_async().await;
+        let _ = self.bytes_downloaded_by_request_id.flush_async().await;
+        let _ = self.requested_files_by_peer.flush_async().await;
+        let _ = self.requested_files_by_request_id.flush_async().await;
+    }
 }
 
 #[derive(Error, Debug)]

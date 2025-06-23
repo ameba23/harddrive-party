@@ -279,14 +279,13 @@ pub async fn post_read(
     Ok((StatusCode::OK, Body::from_stream(result_stream)))
 }
 
-//         Command::Close => {
-//             // TODO tidy up peer discovery / active transfers
-//             if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
-//                 endpoint.wait_idle().await;
-//             }
-//             // TODO call flush on sled db
-//             return Ok(());
-//         }
+/// Gracefully shut down process
+pub async fn post_close(
+    State(shared_state): State<SharedState>,
+) -> Result<StatusCode, UiServerErrorWrapper> {
+    shared_state.shut_down().await;
+    Ok(StatusCode::OK)
+}
 
 /// This is used for http responses for the files and shares routes
 fn create_length_prefixed_message(message: &[u8]) -> BytesMut {

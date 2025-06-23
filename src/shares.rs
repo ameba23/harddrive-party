@@ -65,7 +65,13 @@ impl Shares {
         self.share_names.insert(share_name, path_str)?;
 
         // Remove existing entries before beginning
-        self.remove_share_dir(share_name)?;
+        if let Err(err) = self.remove_share_dir(share_name) {
+            match err {
+                // Ignore the error if it didn't exist
+                ScanDirError::NoShare => {}
+                _ => return Err(err),
+            }
+        };
 
         let mut entries = WalkDir::new(path);
         loop {
@@ -207,17 +213,25 @@ impl Shares {
                     };
                     Some(new_size.to_le_bytes().to_vec())
                 })?;
-        }
 
-        for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
-            debug!("Deleting existing entry {:?}", entry);
-            self.dirs.remove(entry)?;
+            for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
+                debug!("Deleting existing entry {:?}", entry);
+                self.dirs.remove(entry)?;
+            }
+            for (entry, _) in self.files.scan_prefix(share_name).flatten() {
+                debug!("Deleting existing entry {:?}", entry);
+                self.files.remove(entry)?;
+            }
+            Ok(())
+        } else {
+            Err(ScanDirError::NoShare)
         }
-        for (entry, _) in self.files.scan_prefix(share_name).flatten() {
-            debug!("Deleting existing entry {:?}", entry);
-            self.files.remove(entry)?;
-        }
-        Ok(())
+    }
+
+    pub async fn flush(&self) {
+        let _ = self.files.flush_async().await;
+        let _ = self.dirs.flush_async().await;
+        let _ = self.share_names.flush_async().await;
     }
 
     fn get_dir_size(&mut self, dir_name: &str) -> Option<u64> {
@@ -324,6 +338,8 @@ pub enum ScanDirError {
     PrefixError(#[from] std::path::StripPrefixError),
     #[error("Error converting database value to u64")]
     U64ConversionError,
+    #[error("Share dir does not exist in DB")]
+    NoShare,
 }
 
 /// Error when parsing a Db entry

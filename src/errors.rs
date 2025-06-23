@@ -77,19 +77,9 @@ impl From<quinn::ConnectionError> for UiServerErrorWrapper {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct ErrorResponse {
-    error: String,
-    message: String,
-}
-
 impl IntoResponse for UiServerErrorWrapper {
     fn into_response(self) -> Response {
         log::error!("{self:?}");
-        let error_response = ErrorResponse {
-            error: self.0.to_string(),
-            message: format!("{self:?}"),
-        };
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)).into_response()
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(self.0)).into_response()
     }
 }

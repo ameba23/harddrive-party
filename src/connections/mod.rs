@@ -31,7 +31,7 @@ use std::{
 };
 use tokio::{
     select,
-    sync::{mpsc::channel, Mutex},
+    sync::{mpsc, Mutex},
 };
 
 /// The maximum number of bytes a request message may be
@@ -51,6 +51,8 @@ pub struct Hdp {
     pub server_connection: ServerConnection,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
+    /// Channel for graceful shutdown signal
+    graceful_shutdown_rx: mpsc::Receiver<()>,
 }
 
 impl Hdp {
@@ -108,6 +110,8 @@ impl Hdp {
         let (socket_option, peer_discovery) =
             PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port).await?;
 
+        let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
+
         // Setup shared state used by UI server
         let shared_state = SharedState::new(
             db,
@@ -117,6 +121,7 @@ impl Hdp {
             peer_discovery.peer_announce_tx.clone(),
             peers,
             peer_discovery.announce_address.clone(),
+            graceful_shutdown_tx,
         )
         .await?;
 
@@ -152,12 +157,13 @@ impl Hdp {
             ),
             server_connection,
             peer_discovery,
+            graceful_shutdown_rx,
         })
     }
 
     /// Loop handling incoming peer connections, and discovered peers
     pub async fn run(&mut self) {
-        let (incoming_connection_tx, mut incoming_connection_rx) = channel(1024);
+        let (incoming_connection_tx, mut incoming_connection_rx) = mpsc::channel(1024);
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
                 loop {
@@ -196,6 +202,14 @@ impl Hdp {
                             self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                         }
                     };
+                }
+                // A signal for graceful shutdown
+                Some(()) = self.graceful_shutdown_rx.recv() => {
+                    debug!("Shutting down");
+                    if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                        endpoint.wait_idle().await;
+                    }
+                    std::process::exit(0);
                 }
             }
         }
