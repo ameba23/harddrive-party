@@ -122,6 +122,7 @@ impl Hdp {
             peers,
             peer_discovery.announce_address.clone(),
             graceful_shutdown_tx,
+            peer_discovery.known_peers.clone(),
         )
         .await?;
 
@@ -136,7 +137,13 @@ impl Hdp {
 
                 // Create QUIC endpoint
                 ServerConnection::WithEndpoint(
-                    make_server_endpoint(socket, cert_der, priv_key_der).await?,
+                    make_server_endpoint(
+                        socket,
+                        cert_der,
+                        priv_key_der,
+                        shared_state.known_peers.clone(),
+                    )
+                    .await?,
                 )
             }
             None => {
@@ -361,15 +368,16 @@ impl Hdp {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
                 match peer.socket_option {
-                    Some(socket) => {
-                        make_server_endpoint_basic_socket(socket, cert_der, priv_key_der)
-                            .await
-                            .map_err(|err| {
-                                UiServerError::ConnectionError(format!(
-                                    "When creating endpoint: {err:?}"
-                                ))
-                            })?
-                    }
+                    Some(socket) => make_server_endpoint_basic_socket(
+                        socket,
+                        cert_der,
+                        priv_key_der,
+                        self.shared_state.known_peers.clone(),
+                    )
+                    .await
+                    .map_err(|err| {
+                        UiServerError::ConnectionError(format!("When creating endpoint: {err:?}"))
+                    })?,
                     None => {
                         // This should be an impossible state to get into
                         panic!("We are beind symmetric NAT but didn't get a socket for a connecting peer");
@@ -398,7 +406,7 @@ impl Hdp {
 // TODO the ID should actually just be the public key from the
 // certicate, but i cant figure out how to extract it so for now
 // just hash the whole thing
-fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
+pub fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
     let mut hash = [0u8; 32];
     let mut hasher = Blake2b::new(32);
     hasher.input(cert.as_ref());

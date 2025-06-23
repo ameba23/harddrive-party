@@ -25,7 +25,11 @@ use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
 use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};
 
@@ -45,8 +49,10 @@ pub mod subtree_names {
 /// Shared state used by both the peer connections and user interface server
 #[derive(Clone)]
 pub struct SharedState {
-    /// A map of peernames to peer connections
+    /// A map of peer names to active peer connections
     pub peers: Arc<Mutex<HashMap<String, Peer>>>,
+    /// A list of known peer names
+    pub known_peers: Arc<RwLock<HashSet<String>>>,
     /// The index of shared files
     pub shares: Shares,
     /// Maintains lists of requested/downloaded files
@@ -77,6 +83,7 @@ impl SharedState {
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         announce_address: AnnounceAddress,
         graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
+        known_peers: Arc<RwLock<HashSet<String>>>,
     ) -> anyhow::Result<Self> {
         let shares = Shares::new(db.clone(), share_dirs).await?;
 
@@ -93,6 +100,7 @@ impl SharedState {
 
         Ok(Self {
             peers,
+            known_peers,
             shares,
             wishlist: WishList::new(&db)?,
             event_broadcaster,
@@ -138,9 +146,14 @@ impl SharedState {
         &self,
         announce_address: AnnounceAddress,
     ) -> Result<(), UiServerErrorWrapper> {
-        let discovery_method = DiscoveryMethod::Direct {
-            announce_address: announce_address.clone(),
-        };
+        let name = announce_address.name.clone();
+
+        {
+            let mut known_peers = self.known_peers.write()?;
+            known_peers.insert(name);
+        }
+
+        let discovery_method = DiscoveryMethod::Direct { announce_address };
 
         let (response_tx, response_rx) = oneshot::channel();
         let peer_connect = PeerConnect {

@@ -56,11 +56,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -82,11 +78,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -105,11 +97,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(res.text().await?.parse()?)
@@ -128,11 +116,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
         Ok(())
     }
@@ -155,11 +139,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         let stream = res.bytes_stream();
@@ -178,11 +158,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(bincode::deserialize(&res.bytes().await?)?)
@@ -204,11 +180,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -229,11 +201,7 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(LengthPrefixedStream::new(res))
@@ -252,16 +220,48 @@ impl Client {
             .await?;
 
         if !res.status().is_success() {
-            return Err(ClientError::HttpRequest(format!(
-                "Request failed: {} {}",
-                res.status(),
-                res.text().await.unwrap_or_default()
-            )));
+            return Err(ClientError::from_response(res).await);
         }
 
         Ok(res.text().await?.parse()?)
     }
-    // TODO delete /shares
+
+    pub async fn remove_share(&self, share_dir: String) -> Result<(), ClientError> {
+        let res = self
+            .http_client
+            .delete(
+                self.ui_url
+                    .join("shares")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .body(share_dir)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::from_response(res).await);
+        }
+
+        Ok(())
+    }
+
+    pub async fn shut_down(&self) -> Result<(), ClientError> {
+        let res = self
+            .http_client
+            .post(
+                self.ui_url
+                    .join("close")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::from_response(res).await);
+        }
+
+        Ok(())
+    }
 }
 
 /// For deserializing chunked byte HTTP responses
@@ -356,6 +356,8 @@ pub enum ClientError {
     HttpRequest(String),
     #[error("Cannot parse integer: {0}")]
     ParseInt(#[from] ParseIntError),
+    #[error("Server: {0}")]
+    ServerError(#[from] UiServerError),
 }
 
 impl From<bincode::Error> for ClientError {
@@ -367,5 +369,22 @@ impl From<bincode::Error> for ClientError {
 impl From<reqwest::Error> for ClientError {
     fn from(value: reqwest::Error) -> Self {
         ClientError::Serialization(value.to_string())
+    }
+}
+
+impl ClientError {
+    pub async fn from_response(response: reqwest::Response) -> Self {
+        match response.status() {
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR => {
+                let err: UiServerError =
+                    serde_json::from_str(&response.text().await.unwrap_or_default()).unwrap();
+                err.into()
+            }
+            _ => ClientError::HttpRequest(format!(
+                "Request failed: {} {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            )),
+        }
     }
 }

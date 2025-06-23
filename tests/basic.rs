@@ -1,10 +1,11 @@
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, FilesQuery, PeerPath, UiEvent},
+    ui_messages::{DownloadInfo, FilesQuery, PeerPath, UiEvent, UiServerError},
     ui_server::{client::Client, http_server},
     wire_messages::{Entry, IndexQuery, LsResponse},
     Hdp, SharedState,
 };
+use harddrive_party_shared::client::ClientError;
 use std::collections::HashSet;
 use tempfile::TempDir;
 
@@ -118,6 +119,81 @@ async fn basic() {
     // TODO close connection
 }
 
+#[tokio::test]
+async fn add_share_dir() {
+    let (_alice, alice_url) = setup_peer(Vec::new()).await;
+
+    // Create client
+    let alice_client = Client::new(alice_url);
+
+    let num_files_added = alice_client
+        .add_share("tests/test-data".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(num_files_added, 3);
+
+    // Do a share query on alice
+    let mut response_stream = alice_client
+        .shares(IndexQuery {
+            recursive: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut response_entries = HashSet::new();
+    while let Some(item) = response_stream.next().await {
+        if let LsResponse::Success(entries) = item.unwrap() {
+            for entry in entries {
+                response_entries.insert(entry);
+            }
+        }
+    }
+    assert_eq!(response_entries, create_test_entries());
+
+    // Now remove it - note that we have to give the 'share name' and not the dir
+    alice_client
+        .remove_share("test-data".to_string())
+        .await
+        .unwrap();
+
+    // Do a share query on alice
+    let mut response_stream = alice_client
+        .shares(IndexQuery {
+            recursive: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut response_entries = HashSet::new();
+    while let Some(item) = response_stream.next().await {
+        if let LsResponse::Success(entries) = item.unwrap() {
+            for entry in entries {
+                response_entries.insert(entry);
+            }
+        }
+    }
+
+    assert_eq!(
+        response_entries,
+        HashSet::from([Entry {
+            name: String::new(),
+            size: 0,
+            is_dir: true
+        }])
+    );
+
+    // Try to remove it again - we should get an error
+    assert_eq!(
+        alice_client.remove_share("test-data".to_string()).await,
+        Err(ClientError::ServerError(UiServerError::AddShare(
+            "Share dir does not exist in DB".to_string()
+        )))
+    );
+}
+
 fn create_test_entries() -> HashSet<Entry> {
     HashSet::from([
         Entry {
@@ -157,69 +233,3 @@ fn create_test_entries() -> HashSet<Entry> {
         },
     ])
 }
-
-//
-//     // Do a read request
-//     let req = ReadQuery {
-//         path: "test-data/somefile".to_string(),
-//         start: None,
-//         end: None,
-//     };
-//     bob_command_tx
-//         .send(UiClientMessage {
-//             id: 2,
-//             command: Command::Read(req, alice_name.clone()),
-//         })
-//         .await
-//         .unwrap();
-//
-//     while let Some(res) = bob_rx.recv().await {
-//         if let UiServerMessage::Response { id: _, response } = res {
-//             assert_eq!(Ok(UiResponse::Read(b"boop\n".to_vec())), response);
-//             break;
-//         }
-//     }
-//
-//     // // Do an Ls query
-//     let req = IndexQuery {
-//         path: None,
-//         searchterm: None,
-//         recursive: true,
-//     };
-//     bob_command_tx
-//         .send(UiClientMessage {
-//             id: 3,
-//             command: Command::Ls(req, Some(alice_name)),
-//         })
-//         .await
-//         .unwrap();
-//
-//     let mut entries = Vec::new();
-//     while let Some(res) = bob_rx.recv().await {
-//         if let UiServerMessage::Response { id, response } = res {
-//             match response.unwrap() {
-//                 UiResponse::Ls(LsResponse::Success(some_entries), _name) => {
-//                     for entry in some_entries {
-//                         entries.push(entry);
-//                     }
-//                 }
-//                 UiResponse::EndResponse => {
-//                     if id == 3 {
-//                         break;
-//                     }
-//                 }
-//                 _ => {}
-//             }
-//         }
-//     }
-//     let test_entries = create_test_entries();
-//     assert_eq!(test_entries, entries);
-//
-//     // Close the connection
-//     alice_command_tx
-//         .send(UiClientMessage {
-//             id: 3,
-//             command: Command::Close,
-//         })
-//         .await
-//         .unwrap();

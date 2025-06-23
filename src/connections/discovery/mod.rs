@@ -11,7 +11,7 @@ use local_ip_address::local_ip;
 use log::{debug, error, warn};
 use quinn::AsyncUdpSocket;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
 };
@@ -65,6 +65,7 @@ pub struct PeerDiscovery {
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, DiscoveryMethod>>>,
     pub peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
+    pub known_peers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl PeerDiscovery {
@@ -112,10 +113,14 @@ impl PeerDiscovery {
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
+        let known_peers: Arc<RwLock<HashSet<String>>> = Default::default();
 
         // Only use mdns if we are on a local network
         let _mdns_server = if use_mdns && is_private(my_local_ip) {
-            Some(MdnsServer::new(&id, addr, peers_tx.clone(), public_key).await?)
+            Some(
+                MdnsServer::new(&id, addr, peers_tx.clone(), public_key, known_peers.clone())
+                    .await?,
+            )
         } else {
             None
         };
@@ -137,6 +142,7 @@ impl PeerDiscovery {
             pending_peer_connections: Default::default(),
             peer_announce_tx,
             peers,
+            known_peers,
         };
 
         let pending_peer_connections = peer_discovery.pending_peer_connections.clone();
