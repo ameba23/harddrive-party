@@ -4,19 +4,14 @@ use self::{
     mdns::MdnsServer,
     stun::stun_test,
 };
-use crate::{
-    peer::Peer,
-    wire_messages::{AnnounceAddress, AnnouncePeer},
-};
-use anyhow::anyhow;
-use base64::prelude::{Engine as _, BASE64_STANDARD_NO_PAD};
-use harddrive_party_shared::wire_messages::PeerConnectionDetails;
+use crate::{errors::UiServerErrorWrapper, peer::Peer, wire_messages::AnnounceAddress};
+use harddrive_party_shared::{ui_messages::UiServerError, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
 use log::{debug, error, warn};
 use quinn::AsyncUdpSocket;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
 };
@@ -24,7 +19,7 @@ use tokio::{
     net::UdpSocket,
     sync::{
         mpsc::{channel, Receiver, Sender},
-        Mutex,
+        oneshot, Mutex,
     },
 };
 
@@ -37,20 +32,15 @@ pub mod stun;
 pub struct DiscoveredPeer {
     pub socket_address: SocketAddr,
     pub socket_option: Option<UdpSocket>,
-    pub public_key: [u8; 32],
     pub discovery_method: DiscoveryMethod,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DiscoveryMethod {
-    Direct {
-        announce_address: AnnounceAddress,
-        request_id: u32,
-    },
-    Gossip {
-        announce_address: AnnounceAddress,
-    },
-    Mdns,
+    Direct { announce_address: AnnounceAddress },
+    Gossip { announce_address: AnnounceAddress },
+    // TODO this should also be announce address - and move announce address out of this enum
+    Mdns { public_key: [u8; 32] },
 }
 
 impl DiscoveryMethod {
@@ -65,25 +55,17 @@ impl DiscoveryMethod {
             _ => None,
         }
     }
-
-    pub fn get_request_id(&self) -> Option<u32> {
-        match self {
-            DiscoveryMethod::Direct { request_id, .. } => Some(*request_id),
-            _ => None,
-        }
-    }
 }
 
 /// Handles the different peer discovery methods
 pub struct PeerDiscovery {
-    peers_tx: Sender<DiscoveredPeer>,
     pub peers_rx: Receiver<DiscoveredPeer>,
-    hole_puncher: Option<HolePuncher>,
     /// Our own connection details
-    announce_address: AnnounceAddress,
+    pub announce_address: AnnounceAddress,
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, DiscoveryMethod>>>,
-    pub peer_announce_tx: Sender<AnnouncePeer>,
+    pub peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
+    pub known_peers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl PeerDiscovery {
@@ -92,6 +74,7 @@ impl PeerDiscovery {
         use_mdns: bool,
         public_key: [u8; 32],
         peers: Arc<Mutex<HashMap<String, Peer>>>,
+        port: Option<u16>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
@@ -100,7 +83,17 @@ impl PeerDiscovery {
         let (peer_announce_tx, mut peer_announce_rx) = channel(1024);
 
         let my_local_ip = local_ip()?;
-        let raw_socket = UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?;
+
+        let raw_socket = if let Some(given_port) = port {
+            // If we get an error with a given port try again with the port set to 0
+            if let Ok(socket) = UdpSocket::bind(SocketAddr::new(my_local_ip, given_port)).await {
+                socket
+            } else {
+                UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
+            }
+        } else {
+            UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
+        };
 
         // Get our public address and NAT type from a STUN server
         // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
@@ -120,10 +113,14 @@ impl PeerDiscovery {
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
+        let known_peers: Arc<RwLock<HashSet<String>>> = Default::default();
 
         // Only use mdns if we are on a local network
         let _mdns_server = if use_mdns && is_private(my_local_ip) {
-            Some(MdnsServer::new(&id, addr, peers_tx.clone(), public_key).await?)
+            Some(
+                MdnsServer::new(&id, addr, peers_tx.clone(), public_key, known_peers.clone())
+                    .await?,
+            )
         } else {
             None
         };
@@ -136,39 +133,41 @@ impl PeerDiscovery {
 
         let announce_address = AnnounceAddress {
             connection_details: local_connection_details.clone(),
-            public_key,
+            name: key_to_animal::key_to_name(&public_key),
         };
 
         let peer_discovery = Self {
-            peers_tx: peers_tx.clone(),
             peers_rx,
-            hole_puncher: hole_puncher.clone(),
             announce_address,
             pending_peer_connections: Default::default(),
             peer_announce_tx,
             peers,
+            known_peers,
         };
 
         let pending_peer_connections = peer_discovery.pending_peer_connections.clone();
         let own_announce_address = peer_discovery.announce_address.clone();
         let peers = peer_discovery.peers.clone();
 
-        // In a separate task, loop over gossiped peer announcements
+        // In a separate task, loop over peer announcements
         tokio::spawn(async move {
-            while let Some(announce_peer) = peer_announce_rx.recv().await {
-                if let Err(err) = handle_peer_announcement(
+            while let Some(peer_connect) = peer_announce_rx.recv().await {
+                let result = handle_peer_announcement(
                     hole_puncher.clone(),
                     own_announce_address.clone(),
                     peers_tx.clone(),
                     pending_peer_connections.clone(),
                     peers.clone(),
-                    DiscoveryMethod::Gossip {
-                        announce_address: announce_peer.announce_address,
-                    },
+                    peer_connect.discovery_method,
                 )
-                .await
-                {
-                    warn!("Failed to handle gossiped peer announcement {err}");
+                .await;
+
+                if let Some(response_tx) = peer_connect.response_tx {
+                    let _ = response_tx.send(result);
+                } else {
+                    if let Err(err) = result {
+                        warn!("Failed to handle gossiped peer announcement {err}");
+                    }
                 }
             }
         });
@@ -176,40 +175,22 @@ impl PeerDiscovery {
         Ok((socket_option, peer_discovery))
     }
 
-    pub async fn connect_direct_to_peer(
-        &mut self,
-        announce_payload: &str,
-        request_id: u32,
-    ) -> anyhow::Result<()> {
-        let announce_address_bytes = BASE64_STANDARD_NO_PAD.decode(announce_payload)?;
-        let announce_address = AnnounceAddress::from_bytes(announce_address_bytes)?;
-
-        handle_peer_announcement(
-            self.hole_puncher.clone(),
-            self.announce_address.clone(),
-            self.peers_tx.clone(),
-            self.pending_peer_connections.clone(),
-            self.peers.clone(),
-            DiscoveryMethod::Direct {
-                announce_address: announce_address.clone(),
-                request_id,
-            },
-        )
-        .await
-    }
-
     pub fn get_pending_peer(&self, socket_address: &SocketAddr) -> Option<DiscoveryMethod> {
         if let Ok(mut connections) = self.pending_peer_connections.write() {
             connections.remove(socket_address)
         } else {
+            // TODO can clear poison
             error!("Poisoned RwLock pending_peer_connections");
             None
         }
     }
 
-    pub fn get_ui_announce_address(&self) -> anyhow::Result<String> {
-        let bytes = self.announce_address.to_bytes();
-        Ok(BASE64_STANDARD_NO_PAD.encode(&bytes))
+    pub fn use_client_verification(&self) -> bool {
+        if let PeerConnectionDetails::NoNat(_) = self.announce_address.connection_details {
+            false
+        } else {
+            true
+        }
     }
 }
 
@@ -232,21 +213,24 @@ pub async fn handle_peer_announcement(
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, DiscoveryMethod>>>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     discovery_method: DiscoveryMethod,
-) -> anyhow::Result<()> {
+) -> Result<(), UiServerErrorWrapper> {
     let announce_address = discovery_method
         .get_announce_address()
-        .ok_or(anyhow!("Cannot handle MDNS peer"))?
+        .ok_or(UiServerError::PeerDiscovery(
+            "Cannot handle MDNS peer".to_string(),
+        ))?
         .clone();
 
     // Check it is not ourself
     if our_announce_address == announce_address {
-        return Err(anyhow!("Cannot connect to ourself"));
+        return Err(UiServerError::PeerDiscovery("Cannot connect to ourself".to_string()).into());
     }
 
     // Check that we are not already connected to this peer
-    let name = key_to_animal::key_to_name(&announce_address.public_key);
-    if peers.lock().await.contains_key(&name) {
-        return Err(anyhow!("Already connected to this peer"));
+    if peers.lock().await.contains_key(&announce_address.name) {
+        return Err(
+            UiServerError::PeerDiscovery("Already connected to this peer".to_string()).into(),
+        );
     }
 
     // TODO check that it is not already a pending peer connection
@@ -256,9 +240,9 @@ pub async fn handle_peer_announcement(
         &our_announce_address.connection_details,
         discovery_method.clone(),
     )
-    .await
+    .await?
     {
-        Ok((Some(discovered_peer), _)) => {
+        (Some(discovered_peer), _) => {
             // We connect to them
             debug!("Connecting to {:?}", discovered_peer);
             if peers_tx.send(discovered_peer).await.is_err() {
@@ -266,16 +250,15 @@ pub async fn handle_peer_announcement(
             }
             Ok(())
         }
-        Ok((None, socket_address)) => {
+        (None, socket_address) => {
             debug!("Successfully handled peer - awaiting connection from their side");
+            // TODO should we clear poison here?
             // They connect to us
             pending_peer_connections
-                .write()
-                .map_err(|_| anyhow!("Poisoned RwLock pending_peer_connections"))?
+                .write()?
                 .insert(socket_address, discovery_method);
             Ok(())
         }
-        Err(error) => Err(anyhow!("Error when handling discovered peer {:?}", error)),
     };
 }
 
@@ -284,24 +267,30 @@ pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
     local: &PeerConnectionDetails,
     discovery_method: DiscoveryMethod,
-) -> anyhow::Result<(Option<DiscoveredPeer>, SocketAddr)> {
+) -> Result<(Option<DiscoveredPeer>, SocketAddr), UiServerErrorWrapper> {
     let announce_address = discovery_method
         .get_announce_address()
-        .ok_or(anyhow!("Cannot handle MDNS peer"))?
+        .ok_or(UiServerError::PeerDiscovery(
+            "Cannot handle MDNS peer".to_string(),
+        ))?
         .clone();
 
     match announce_address.connection_details {
         PeerConnectionDetails::Symmetric(remote_ip) => match local {
-            PeerConnectionDetails::Symmetric(_) => {
-                Err(anyhow!("Symmetric to Symmetric not yet supported"))
-            }
+            PeerConnectionDetails::Symmetric(_) => Err(UiServerError::PeerDiscovery(
+                "Symmetric to symmetric not yet supported".to_string(),
+            )
+            .into()),
             PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
                 Some(mut puncher) => {
                     let socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
                     // Wait for them to connect to us
                     Ok((None, socket_address))
                 }
-                None => Err(anyhow!("We have asymmetric NAT but no local socket")),
+                None => Err(UiServerError::PeerDiscovery(
+                    "We have asymmetric NAT but no local socket".to_string(),
+                )
+                .into()),
             },
             PeerConnectionDetails::NoNat(socket_address) => {
                 // They are symmetric (hard), we have no nat
@@ -325,7 +314,6 @@ pub async fn handle_peer(
                                         discovery_method,
                                         socket_address,
                                         socket_option: None,
-                                        public_key: announce_address.public_key,
                                     }),
                                     socket_address,
                                 )
@@ -333,7 +321,10 @@ pub async fn handle_peer(
                                 (None, socket_address)
                             })
                         }
-                        None => Err(anyhow!("We have asymmetric nat but no local socket")),
+                        None => Err(UiServerError::PeerDiscovery(
+                            "We have asymmetric nat but no local socket".to_string(),
+                        )
+                        .into()),
                     }
                 }
                 PeerConnectionDetails::Symmetric(_) => {
@@ -343,7 +334,6 @@ pub async fn handle_peer(
                             discovery_method,
                             socket_address,
                             socket_option: Some(socket),
-                            public_key: announce_address.public_key,
                         }),
                         socket_address,
                     ))
@@ -366,7 +356,6 @@ pub async fn handle_peer(
                                 discovery_method,
                                 socket_address,
                                 socket_option: None,
-                                public_key: announce_address.public_key,
                             }),
                             socket_address,
                         )
@@ -375,13 +364,14 @@ pub async fn handle_peer(
                     })
                 }
                 PeerConnectionDetails::Symmetric(_) => {
-                    let socket = UdpSocket::bind("0.0.0.0:0").await?;
+                    let socket = UdpSocket::bind("0.0.0.0:0")
+                        .await
+                        .map_err(|e| UiServerError::PeerDiscovery(e.to_string()))?;
                     Ok((
                         Some(DiscoveredPeer {
                             discovery_method,
                             socket_address,
                             socket_option: Some(socket),
-                            public_key: announce_address.public_key,
                         }),
                         socket_address,
                     ))
@@ -391,11 +381,15 @@ pub async fn handle_peer(
                         discovery_method,
                         socket_address,
                         socket_option: None,
-                        public_key: announce_address.public_key,
                     }),
                     socket_address,
                 )),
             }
         }
     }
+}
+
+pub struct PeerConnect {
+    pub discovery_method: DiscoveryMethod,
+    pub response_tx: Option<oneshot::Sender<Result<(), UiServerErrorWrapper>>>,
 }

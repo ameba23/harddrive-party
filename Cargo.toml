@@ -51,11 +51,13 @@ speedometer = "0.2.2"
 stunclient = "0.4.1"
 lru = "0.10.0"
 async-stream = "0.3.4"
-warp = "0.3.5"
-warp-embed = "0.4.0"
-rust-embed = "6"
-base64 = "0.22.1"
+axum = { version = "0.8.4", features = ["ws"] }
+tower-http = { version = "0.6.4", features = ["fs"] }
+rust-embed = "8.7.2"
+mime_guess = "2.0.5"
+serde = { version = "1.0", features = ["derive"] }
+reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
+bytes= "1.10.1"
 
 [dev-dependencies]
 tempfile = "3.3.0"
-

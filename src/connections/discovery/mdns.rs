@@ -1,12 +1,13 @@
 //! Peer discovery on local network using mDNS
-use crate::discovery::{DiscoveredPeer, DiscoveryMethod};
+use super::{DiscoveredPeer, DiscoveryMethod};
 use anyhow::anyhow;
 use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{
     cmp::min,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
+    sync::{Arc, RwLock},
 };
 use tokio::sync::mpsc::Sender;
 
@@ -25,10 +26,11 @@ impl MdnsServer {
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
         public_key: [u8; 32],
+        known_peers: Arc<RwLock<HashSet<String>>>,
     ) -> anyhow::Result<Self> {
         let mdns_server = Self {};
 
-        mdns_server.run(id, addr, peers_tx, public_key)?;
+        mdns_server.run(id, addr, peers_tx, public_key, known_peers)?;
         Ok(mdns_server)
     }
 
@@ -38,6 +40,7 @@ impl MdnsServer {
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
         public_key: [u8; 32],
+        known_peers: Arc<RwLock<HashSet<String>>>,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
 
@@ -56,6 +59,13 @@ impl MdnsServer {
                                     debug!("Found ourself on mdns");
                                 } else {
                                     debug!("Found peer on mdns {their_addr:?}");
+
+                                    {
+                                        let mut known_peers = known_peers.write().unwrap();
+                                        known_peers
+                                            .insert(key_to_animal::key_to_name(&their_public_key));
+                                    }
+
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections
                                     let us = addr.to_string();
@@ -63,10 +73,11 @@ impl MdnsServer {
                                     if us > them
                                         && peers_tx
                                             .send(DiscoveredPeer {
-                                                discovery_method: DiscoveryMethod::Mdns,
+                                                discovery_method: DiscoveryMethod::Mdns {
+                                                    public_key: their_public_key,
+                                                },
                                                 socket_address: their_addr,
                                                 socket_option: None,
-                                                public_key: their_public_key,
                                             })
                                             .await
                                             .is_err()
@@ -101,6 +112,7 @@ fn create_service_info(
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = HashMap::new();
+    // TODO here we could replace hex-encoded public key with announce address
     properties.insert(
         PUBLIC_KEY_PROPERTY_NAME.to_string(),
         hex::encode(public_key),
@@ -161,9 +173,15 @@ mod tests {
         public_key: [u8; 32],
     ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
         let (peers_tx, peers_rx) = channel(1024);
-        let server = MdnsServer::new(name, socket_address, peers_tx, public_key)
-            .await
-            .unwrap();
+        let server = MdnsServer::new(
+            name,
+            socket_address,
+            peers_tx,
+            public_key,
+            Default::default(),
+        )
+        .await
+        .unwrap();
         (server, peers_rx)
     }
 
@@ -180,6 +198,11 @@ mod tests {
 
         let discovered_peer = bob_peers_rx.recv().await.unwrap();
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
-        assert_eq!(discovered_peer.public_key, [0; 32]);
+        assert_eq!(
+            discovered_peer.discovery_method,
+            DiscoveryMethod::Mdns {
+                public_key: [0; 32]
+            }
+        );
     }
 }

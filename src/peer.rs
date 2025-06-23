@@ -1,35 +1,45 @@
 //! Representation of remote peer, and download handling
 use std::{
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use crate::{
-    hdp::get_timestamp,
-    ui_messages::{DownloadResponse, UiResponse, UiServerMessage},
+    connections::get_timestamp,
+    ui_messages::{DownloadEvent, DownloadInfo, UiEvent},
     wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::anyhow;
 use bincode::serialize;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::ui_messages::DownloadInfo;
+use harddrive_party_shared::wire_messages::{AnnounceAddress, Entry};
 use key_to_animal::key_to_name;
 use log::{debug, error, warn};
+use lru::LruCache;
 use quinn::{Connection, RecvStream};
 use speedometer::Speedometer;
+use std::sync::{Arc, Mutex};
 use tokio::{
     fs::{create_dir_all, File, OpenOptions},
     io::AsyncWriteExt,
-    sync::mpsc::Sender,
+    sync::broadcast,
 };
 
 // Maybe this is too big - not sure if it matters as this is only allocated
 // once per download
-const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
+pub const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
 // How often (in bytes) to update the UI on process during downloading
 const UPDATE_EVERY: u64 = 10 * 1024;
+
+/// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
+/// This saves making subsequent requests with a duplicate query
+const CACHE_SIZE: usize = 64;
+
+/// The cache for index requests
+type IndexCache = LruCache<Request, Vec<Vec<Entry>>>;
 
 /// Representation of a remote peer
 #[derive(Debug)]
@@ -38,15 +48,20 @@ pub struct Peer {
     pub connection: Connection,
     /// The peer's public ed25519 key
     pub public_key: [u8; 32],
+    /// The peer's public connection details if known
+    pub announce_address: Option<AnnounceAddress>,
+    /// Cache for peer's file index, to avoid making duplicate requests
+    pub index_cache: Arc<Mutex<IndexCache>>,
 }
 
 impl Peer {
     pub fn new(
         connection: Connection,
-        response_tx: Sender<UiServerMessage>,
+        event_broadcaster: broadcast::Sender<UiEvent>,
         download_dir: PathBuf,
         public_key: [u8; 32],
         wishlist: WishList,
+        announce_address: Option<AnnounceAddress>,
     ) -> Self {
         let connection_clone = connection.clone();
 
@@ -59,7 +74,7 @@ impl Peer {
                 peer_name,
                 wishlist,
                 download_dir,
-                response_tx,
+                event_broadcaster,
             )
             .await
             {
@@ -70,6 +85,10 @@ impl Peer {
         Self {
             connection,
             public_key,
+            announce_address,
+            index_cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(CACHE_SIZE).expect("Cache size to be non-zero"),
+            ))),
         }
     }
 }
@@ -81,7 +100,7 @@ async fn process_requests(
     peer_name: String,
     wishlist: WishList,
     download_dir: PathBuf,
-    response_tx: Sender<UiServerMessage>,
+    event_broadcaster: broadcast::Sender<UiEvent>,
 ) -> anyhow::Result<()> {
     let request_stream = wishlist.requests_for_peer(&public_key);
     pin_mut!(request_stream);
@@ -96,7 +115,7 @@ async fn process_requests(
             &request,
             &connection,
             &download_dir,
-            response_tx.clone(),
+            event_broadcaster.clone(),
             peer_name.clone(),
             progress,
             associated_request.clone(),
@@ -113,16 +132,13 @@ async fn process_requests(
                         // If all files associated with this request have been downloaded
                         // TODO here we could also send an EndResponse message
                         if request_complete
-                            && response_tx
-                                .send(UiServerMessage::Response {
-                                    id,
-                                    response: Ok(UiResponse::Download(DownloadResponse {
-                                        path: associated_request.path.clone(),
-                                        peer_name: peer_name.clone(),
-                                        download_info: DownloadInfo::Completed(get_timestamp()),
-                                    })),
-                                })
-                                .await
+                            && event_broadcaster
+                                .send(UiEvent::Download(DownloadEvent {
+                                    request_id: id,
+                                    path: associated_request.path.clone(),
+                                    peer_name: peer_name.clone(),
+                                    download_info: DownloadInfo::Completed(get_timestamp()),
+                                }))
                                 .is_err()
                         {
                             warn!("Response channel closed");
@@ -146,7 +162,7 @@ async fn download(
     requested_file: &RequestedFile,
     connection: &Connection,
     download_dir: &Path,
-    response_tx: Sender<UiServerMessage>,
+    event_broadcaster: broadcast::Sender<UiEvent>,
     peer_name: String,
     progress_request: u64,
     associated_request: DownloadRequest,
@@ -202,25 +218,22 @@ async fn download(
                         );
                         bytes_read_since_last_ui_update = 0;
 
-                        if response_tx
-                            .send(UiServerMessage::Response {
-                                id,
-                                response: Ok(UiResponse::Download(DownloadResponse {
-                                    path: associated_request.path.clone(),
-                                    peer_name: peer_name.clone(),
-                                    download_info: DownloadInfo::Downloading {
-                                        path: requested_file.path.clone(),
-                                        bytes_read,
-                                        total_bytes_read,
-                                        speed: speedometer
-                                            .measure()
-                                            .unwrap_or_default()
-                                            .try_into()
-                                            .unwrap(),
-                                    },
-                                })),
-                            })
-                            .await
+                        if event_broadcaster
+                            .send(UiEvent::Download(DownloadEvent {
+                                request_id: id,
+                                path: associated_request.path.clone(),
+                                peer_name: peer_name.clone(),
+                                download_info: DownloadInfo::Downloading {
+                                    path: requested_file.path.clone(),
+                                    bytes_read,
+                                    total_bytes_read,
+                                    speed: speedometer
+                                        .measure()
+                                        .unwrap_or_default()
+                                        .try_into()
+                                        .unwrap_or_default(),
+                                },
+                            }))
                             .is_err()
                         {
                             warn!("Response channel closed");
@@ -235,7 +248,7 @@ async fn download(
                         .measure()
                         .unwrap_or_default()
                         .try_into()
-                        .unwrap();
+                        .unwrap_or_default();
                     break;
                 }
                 Err(error) => {
@@ -245,28 +258,25 @@ async fn download(
                         .measure()
                         .unwrap_or_default()
                         .try_into()
-                        .unwrap();
+                        .unwrap_or_default();
                     break;
                 }
             }
         }
     }
     // Send a final update to give the UI an accurate report on bytes downloaded
-    if response_tx
-        .send(UiServerMessage::Response {
-            id,
-            response: Ok(UiResponse::Download(DownloadResponse {
-                peer_name: peer_name.clone(),
-                path: associated_request.path.clone(),
-                download_info: DownloadInfo::Downloading {
-                    path: requested_file.path.clone(),
-                    bytes_read,
-                    total_bytes_read,
-                    speed: final_speed,
-                },
-            })),
-        })
-        .await
+    if event_broadcaster
+        .send(UiEvent::Download(DownloadEvent {
+            request_id: id,
+            peer_name: peer_name.clone(),
+            path: associated_request.path.clone(),
+            download_info: DownloadInfo::Downloading {
+                path: requested_file.path.clone(),
+                bytes_read,
+                total_bytes_read,
+                speed: final_speed,
+            },
+        }))
         .is_err()
     {
         warn!("Response channel closed");

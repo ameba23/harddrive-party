@@ -1,18 +1,24 @@
 //! Remote procedure call for share index queries and file uploading
 
 use crate::{
+    connections::discovery::{DiscoveryMethod, PeerConnect},
     shares::{EntryParseError, Shares},
-    ui_messages::{UiEvent, UiServerMessage, UploadInfo},
+    ui_messages::{UiEvent, UploadInfo},
 };
 use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{AnnouncePeer, IndexQuery, ReadQuery, Request};
+use harddrive_party_shared::wire_messages::{
+    IndexQuery, LsResponse, LsResponseError, ReadQuery, Request,
+};
 use log::{debug, error, warn};
 use quinn::WriteError;
 use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        broadcast,
+        mpsc::{channel, Receiver, Sender},
+    },
 };
 
 /// Number of bytes uploaded at a time
@@ -33,15 +39,14 @@ pub struct Rpc {
     pub shares: Shares,
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
-    // upload_rx: UnboundedReceiver<ReadRequest>,
-    peer_announce_tx: Sender<AnnouncePeer>,
+    peer_announce_tx: Sender<PeerConnect>,
 }
 
 impl Rpc {
     pub fn new(
         shares: Shares,
-        event_tx: Sender<UiServerMessage>,
-        peer_announce_tx: Sender<AnnouncePeer>,
+        event_broadcaster: broadcast::Sender<UiEvent>,
+        peer_announce_tx: Sender<PeerConnect>,
     ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
@@ -50,7 +55,7 @@ impl Rpc {
             let mut uploader = Uploader {
                 shares: shares_clone,
                 upload_rx,
-                event_tx,
+                event_broadcaster,
             };
             uploader.run().await;
         });
@@ -74,18 +79,32 @@ impl Rpc {
                         searchterm,
                         recursive,
                     }) => {
-                        if let Ok(()) = self.ls(path, searchterm, recursive, output).await {};
-                        // TODO else
+                        if let Err(err) = self.ls(path, searchterm, recursive, output).await {
+                            warn!("Error handling incoming index query {err}");
+                        };
                     }
                     Request::Read(ReadQuery { path, start, end }) => {
-                        if let Ok(()) = self.read(path, start, end, output, peer_name).await {};
-                        // TODO else
+                        if let Err(_) = self.read(path, start, end, output, peer_name).await {
+                            warn!("Could not send read request - channel closed");
+                        }
                     }
                     Request::AnnouncePeer(announce_peer) => {
                         log::info!(
                             "Discovered peer through existing peer connection {announce_peer:?}"
                         );
-                        self.peer_announce_tx.send(announce_peer).await.unwrap();
+                        let discovery_method = DiscoveryMethod::Gossip {
+                            announce_address: announce_peer.announce_address,
+                        };
+                        if let Err(_) = self
+                            .peer_announce_tx
+                            .send(PeerConnect {
+                                discovery_method,
+                                response_tx: None,
+                            })
+                            .await
+                        {
+                            error!("Unable to announce peer - channel closed");
+                        }
                     }
                 }
             }
@@ -113,13 +132,13 @@ impl Rpc {
                     })?;
 
                     // Write the length prefix
-                    // TODO this should be a varint
-                    let length: u64 = buf
+                    // TODO use big endian, u32
+                    let length: u32 = buf
                         .len()
                         .try_into()
                         .map_err(|_| RpcError::U64ConvertError)?;
                     debug!("Writing prefix {length}");
-                    output.write_all(&length.to_le_bytes()).await?;
+                    output.write_all(&length.to_be_bytes()).await?;
 
                     output.write_all(&buf).await?;
                     debug!("Written ls response");
@@ -129,7 +148,7 @@ impl Rpc {
             }
             Err(error) => {
                 warn!("Error during share query {:?}", error);
-                send_error(
+                send_ls_error(
                     match error {
                         EntryParseError::PathNotFound => RpcError::PathNotFound,
                         _ => RpcError::DbError,
@@ -172,7 +191,7 @@ struct Uploader {
     /// Incoming read requests
     upload_rx: Receiver<ReadRequest>,
     /// Channel for sending messages to the UI
-    event_tx: Sender<UiServerMessage>,
+    event_broadcaster: broadcast::Sender<UiEvent>,
 }
 
 impl Uploader {
@@ -210,14 +229,13 @@ impl Uploader {
                     }
                     bytes_read += n as u64;
                     if self
-                        .event_tx
-                        .send(UiServerMessage::Event(UiEvent::Uploaded(UploadInfo {
+                        .event_broadcaster
+                        .send(UiEvent::Uploaded(UploadInfo {
                             path: path.clone(),
                             bytes_read,
                             speed: 0, // TODO
                             peer_name: requester_name.clone(),
-                        })))
-                        .await
+                        }))
                         .is_err()
                     {
                         warn!("Ui response channel closed");
@@ -228,7 +246,7 @@ impl Uploader {
                 output.finish().await?;
                 Ok(())
             }
-            Err(rpc_error) => send_error(rpc_error, output).await,
+            Err(rpc_error) => send_read_error(rpc_error, output).await,
         }
     }
     // This is what write_all does internally:
@@ -287,10 +305,35 @@ impl Uploader {
     }
 }
 
-/// Respond with an error
-async fn send_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+/// Respond with an error to a read query
+// The issue here is that this is indistinguishable from actual output
+// A solution might be to send a fixed length error code, and only parse it in the case that the
+// stream ended prematurely
+async fn send_read_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
     // TODO send serialised version of the error
     output.write_all(&[0]).await?;
+    output.finish().await?;
+    Err(error)
+}
+
+/// Send an error response to an LS query
+async fn send_ls_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
+    // For LS query this should be length prefixed LsResponse::Err(LsResponseError)
+    let response = LsResponse::Err(LsResponseError::InternalServer(error.to_string()));
+
+    let buf = serialize(&response).map_err(|e| {
+        error!("Cannot serialize query response {:?}", e);
+        RpcError::SerializeError
+    })?;
+
+    // Write the length prefix
+    let length: u32 = buf
+        .len()
+        .try_into()
+        .map_err(|_| RpcError::U64ConvertError)?;
+    output.write_all(&length.to_be_bytes()).await?;
+
+    output.write_all(&buf).await?;
     output.finish().await?;
     Err(error)
 }
