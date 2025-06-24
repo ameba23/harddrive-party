@@ -15,6 +15,8 @@ use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
+const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
+
 /// Generate a TLS certificate with Ed25519 keypair
 pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     // TODO server name probably shouldn't be localhost but maybe it doesnt matter
@@ -102,7 +104,14 @@ fn configure_server(
         crypto.with_client_cert_verifier(SkipClientVerification::new())
     };
 
-    let crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
+    let mut crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
+
+    let supported_protocols: Vec<_> = SUPPORTED_PROTOCOL_VERSIONS
+        .into_iter()
+        .map(|p| p.to_vec())
+        .collect();
+
+    crypto.alpn_protocols = supported_protocols.clone();
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
@@ -111,10 +120,12 @@ fn configure_server(
         .max_concurrent_uni_streams(0_u8.into())
         .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
 
-    let client_crypto = rustls::ClientConfig::builder()
+    let mut client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(ServerVerification::new(known_peers))
         .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key_der));
+
+    client_crypto.alpn_protocols = supported_protocols;
 
     let client_config = ClientConfig::new(Arc::new(client_crypto));
 
