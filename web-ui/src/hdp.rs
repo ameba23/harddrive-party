@@ -1,6 +1,6 @@
 pub use harddrive_party_shared::ui_messages;
-use harddrive_party_shared::ui_messages::PeerPath;
 pub use harddrive_party_shared::wire_messages;
+use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
 
 use crate::{
     components::header::HdpHeader,
@@ -17,7 +17,7 @@ use crate::{
 use futures::StreamExt;
 use leptos::prelude::*;
 use leptos_router::{
-    components::{Redirect, Route, Routes},
+    components::{Route, Routes},
     path,
 };
 use log::debug;
@@ -67,6 +67,7 @@ pub fn HdpUi() -> impl IntoView {
         set_files.clone(),
         set_requests.clone(),
         set_add_or_remove_share_message,
+        set_error_message.clone(),
     );
 
     // Get initial info
@@ -354,6 +355,19 @@ pub fn SuccessMessage(message: String) -> impl IntoView {
 pub enum AppError {
     WsConnection,
     PeerConnection(String, String),
+    Client(String),
+}
+
+impl From<ClientError> for AppError {
+    fn from(error: ClientError) -> Self {
+        AppError::Client(error.to_string())
+    }
+}
+
+impl From<UiServerError> for AppError {
+    fn from(error: UiServerError) -> Self {
+        AppError::Client(error.to_string())
+    }
 }
 
 impl std::fmt::Display for AppError {
@@ -367,6 +381,9 @@ impl std::fmt::Display for AppError {
             }
             AppError::PeerConnection(announce_address, message) => {
                 write!(f, "Cannot connect to peer {announce_address}: {message}")
+            }
+            AppError::Client(client_error) => {
+                write!(f, "{client_error}")
             }
         }
     }
