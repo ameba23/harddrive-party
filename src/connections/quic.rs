@@ -15,6 +15,7 @@ use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// This makes it possible to add breaking protocol changes and provide backwards compatibility
 const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
 
 /// Generate a TLS certificate with Ed25519 keypair
