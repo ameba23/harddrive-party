@@ -84,7 +84,11 @@ impl Rpc {
                         };
                     }
                     Request::Read(ReadQuery { path, start, end }) => {
-                        if let Err(_) = self.read(path, start, end, output, peer_name).await {
+                        if self
+                            .read(path, start, end, output, peer_name)
+                            .await
+                            .is_err()
+                        {
                             warn!("Could not send read request - channel closed");
                         }
                     }
@@ -92,16 +96,15 @@ impl Rpc {
                         log::info!(
                             "Discovered peer through existing peer connection {announce_peer:?}"
                         );
-                        let discovery_method = DiscoveryMethod::Gossip {
-                            announce_address: announce_peer.announce_address,
-                        };
-                        if let Err(_) = self
+                        if self
                             .peer_announce_tx
                             .send(PeerConnect {
-                                discovery_method,
+                                discovery_method: DiscoveryMethod::Gossip,
+                                announce_address: announce_peer.announce_address,
                                 response_tx: None,
                             })
                             .await
+                            .is_err()
                         {
                             error!("Unable to announce peer - channel closed");
                         }

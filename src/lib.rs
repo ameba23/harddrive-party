@@ -74,6 +74,7 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         db: sled::Db,
         share_dirs: Vec<String>,
@@ -146,18 +147,12 @@ impl SharedState {
         &self,
         announce_address: AnnounceAddress,
     ) -> Result<(), UiServerErrorWrapper> {
-        let name = announce_address.name.clone();
-
-        {
-            let mut known_peers = self.known_peers.write()?;
-            known_peers.insert(name);
-        }
-
-        let discovery_method = DiscoveryMethod::Direct { announce_address };
+        let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
         let peer_connect = PeerConnect {
             discovery_method,
+            announce_address,
             response_tx: Some(response_tx),
         };
         self.peer_announce_tx

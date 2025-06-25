@@ -162,9 +162,7 @@ impl std::fmt::Display for AnnounceAddress {
         write!(
             f,
             "{}{}{}",
-            self.name,
-            connection_details_string,
-            type_value.to_string()
+            self.name, connection_details_string, type_value,
         )
     }
 }

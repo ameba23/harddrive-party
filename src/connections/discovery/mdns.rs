@@ -1,6 +1,7 @@
 //! Peer discovery on local network using mDNS
 use super::{DiscoveredPeer, DiscoveryMethod};
 use anyhow::anyhow;
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{
@@ -15,7 +16,7 @@ use tokio::sync::mpsc::Sender;
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 
 /// Used when giving the public key as a property of a [ServiceInfo]
-const PUBLIC_KEY_PROPERTY_NAME: &str = "hdp-pk";
+const ANNOUNCE_ADDRESS_PROPERTY_NAME: &str = "hdp-aa";
 
 /// Announces ourself on mDNS
 pub struct MdnsServer {}
@@ -25,12 +26,12 @@ impl MdnsServer {
         id: &str,
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
-        public_key: [u8; 32],
+        announce_address: AnnounceAddress,
         known_peers: Arc<RwLock<HashSet<String>>>,
     ) -> anyhow::Result<Self> {
         let mdns_server = Self {};
 
-        mdns_server.run(id, addr, peers_tx, public_key, known_peers)?;
+        mdns_server.run(id, addr, peers_tx, announce_address, known_peers)?;
         Ok(mdns_server)
     }
 
@@ -39,14 +40,14 @@ impl MdnsServer {
         id: &str,
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
-        public_key: [u8; 32],
+        announce_address: AnnounceAddress,
         known_peers: Arc<RwLock<HashSet<String>>>,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
 
         let mdns_receiver = mdns.browse(SERVICE_TYPE)?;
 
-        let service = create_service_info(id, &addr, &public_key)?;
+        let service = create_service_info(id, &addr, announce_address)?;
         mdns.register(service)?;
 
         tokio::spawn(async move {
@@ -54,7 +55,7 @@ impl MdnsServer {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
                         match parse_peer_info(info) {
-                            Ok((their_addr, their_public_key)) => {
+                            Ok((their_addr, their_announce_address)) => {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
                                 } else {
@@ -62,8 +63,7 @@ impl MdnsServer {
 
                                     {
                                         let mut known_peers = known_peers.write().unwrap();
-                                        known_peers
-                                            .insert(key_to_animal::key_to_name(&their_public_key));
+                                        known_peers.insert(their_announce_address.name.clone());
                                     }
 
                                     // Only connect if our address is lexicographicaly greater than
@@ -73,9 +73,8 @@ impl MdnsServer {
                                     if us > them
                                         && peers_tx
                                             .send(DiscoveredPeer {
-                                                discovery_method: DiscoveryMethod::Mdns {
-                                                    public_key: their_public_key,
-                                                },
+                                                discovery_method: DiscoveryMethod::Mdns,
+                                                announce_address: their_announce_address,
                                                 socket_address: their_addr,
                                                 socket_option: None,
                                             })
@@ -107,15 +106,15 @@ impl MdnsServer {
 fn create_service_info(
     id: &str,
     addr: &SocketAddr,
-    public_key: &[u8; 32],
+    annouce_address: AnnounceAddress,
 ) -> anyhow::Result<ServiceInfo> {
     // Create a service info.
     let host_name = "localhost"; // TODO
     let mut properties = HashMap::new();
     // TODO here we could replace hex-encoded public key with announce address
     properties.insert(
-        PUBLIC_KEY_PROPERTY_NAME.to_string(),
-        hex::encode(public_key),
+        ANNOUNCE_ADDRESS_PROPERTY_NAME.to_string(),
+        annouce_address.to_string(),
     );
 
     if let IpAddr::V4(ipv4_addr) = addr.ip() {
@@ -135,20 +134,18 @@ fn create_service_info(
 }
 
 /// Handle a discovered [ServiceInfo] from a remote peer
-fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, [u8; 32])> {
+fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, AnnounceAddress)> {
     if info.get_type() != SERVICE_TYPE {
         return Err(anyhow!("Peer does not have expected service type"));
     }
 
     let properties = info.get_properties();
 
-    let public_key = properties
-        .get(PUBLIC_KEY_PROPERTY_NAME)
-        .ok_or_else(|| anyhow!("Cannot get public key property from mDNS service"))?;
+    let announce_address = properties
+        .get(ANNOUNCE_ADDRESS_PROPERTY_NAME)
+        .ok_or_else(|| anyhow!("Cannot get announce address property from mDNS service"))?;
 
-    let public_key = hex::decode(public_key)?
-        .try_into()
-        .map_err(|_| anyhow!("Bad public key length"))?;
+    let announce_address = AnnounceAddress::from_string(announce_address.to_string())?;
 
     let their_ip = info
         .get_addresses()
@@ -159,25 +156,26 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, [u8; 32])> 
     let their_port = info.get_port();
 
     let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
-    Ok((addr, public_key))
+    Ok((addr, announce_address))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use harddrive_party_shared::wire_messages::PeerConnectionDetails;
     use tokio::sync::mpsc::{channel, Receiver};
 
     async fn create_test_server(
         name: &str,
         socket_address: SocketAddr,
-        public_key: [u8; 32],
+        annouce_address: AnnounceAddress,
     ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
         let (peers_tx, peers_rx) = channel(1024);
         let server = MdnsServer::new(
             name,
             socket_address,
             peers_tx,
-            public_key,
+            annouce_address,
             Default::default(),
         )
         .await
@@ -192,17 +190,22 @@ mod tests {
         let local_ip = local_ip_address::local_ip().unwrap();
         let alice_socket_address = SocketAddr::new(local_ip, 1234);
         let bob_socket_address = SocketAddr::new(local_ip, 5678);
+        let alice_announce = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            name: "BubblingBeaver".to_string(),
+        };
+        let bob_announce = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            name: "AngryAadvark".to_string(),
+        };
         let (_alice, _alice_peers_rx) =
-            create_test_server("alice", alice_socket_address, [0; 32]).await;
-        let (_bob, mut bob_peers_rx) = create_test_server("bob", bob_socket_address, [1; 32]).await;
+            create_test_server("alice", alice_socket_address, alice_announce.clone()).await;
+        let (_bob, mut bob_peers_rx) =
+            create_test_server("bob", bob_socket_address, bob_announce).await;
 
         let discovered_peer = bob_peers_rx.recv().await.unwrap();
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
-        assert_eq!(
-            discovered_peer.discovery_method,
-            DiscoveryMethod::Mdns {
-                public_key: [0; 32]
-            }
-        );
+        assert_eq!(discovered_peer.discovery_method, DiscoveryMethod::Mdns);
+        assert_eq!(discovered_peer.announce_address, alice_announce);
     }
 }

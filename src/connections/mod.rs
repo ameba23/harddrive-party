@@ -20,6 +20,7 @@ use crate::{
     SharedState,
 };
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rustls::Certificate;
@@ -188,12 +189,11 @@ impl Hdp {
             select! {
                 // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
-                    let discovery_method = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
-                    let announce_address = discovery_method.as_ref().and_then(|d| d.get_announce_address());
+                    let maybe_peer_details = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
 
-                    if let Err(err) = self.handle_incoming_connection(discovery_method, incoming_conn).await {
+                    if let Err(err) = self.handle_incoming_connection(maybe_peer_details.clone(), incoming_conn).await {
                         error!("Error when handling incoming peer connection {:?}", err);
-                         if let Some (announce_address) = announce_address {
+                         if let Some((_, announce_address)) = maybe_peer_details {
                             let name = announce_address.name;
                              self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                         }
@@ -202,13 +202,11 @@ impl Hdp {
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {:?}", peer);
-                    let name = peer.discovery_method.get_announce_address().map(|a| a.name);
+                    let name = peer.announce_address.name.clone();
 
                     if let Err(err) = self.connect_to_peer(peer).await {
                         error!("Cannot connect to discovered peer {:?}", err);
-                        if let Some(name) = name {
-                            self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
-                        }
+                        self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                     };
                 }
                 // A signal for graceful shutdown
@@ -228,7 +226,7 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        discovery_method: Option<DiscoveryMethod>,
+        maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
         remote_cert: Certificate,
     ) {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
@@ -237,19 +235,8 @@ impl Hdp {
             self.shared_state.name, peer_name
         );
 
-        let announce_address = if let Some(discovery_method) = discovery_method {
-            // If we know their announce address, check if it matches the certificate
-            if let Some(announce_address) = discovery_method.get_announce_address() {
-                if announce_address.name == key_to_animal::key_to_name(&peer_public_key) {
-                    debug!("Public key matches");
-                } else {
-                    // TODO there should be some consequences here - eg: return
-                    error!("Public key does not match!");
-                }
-                Some(announce_address)
-            } else {
-                None
-            }
+        let announce_address = if let Some(peer_details) = maybe_peer_details {
+            Some(peer_details.1)
         } else {
             None
         };
@@ -340,7 +327,7 @@ impl Hdp {
     /// Handle an incoming connection from a remote peer
     async fn handle_incoming_connection(
         &mut self,
-        discovery_method: Option<DiscoveryMethod>,
+        maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
         incoming_conn: quinn::Connecting,
     ) -> Result<(), UiServerErrorWrapper> {
         let conn = incoming_conn.await?;
@@ -359,7 +346,7 @@ impl Hdp {
         }
 
         let remote_cert = get_certificate_from_connection(&conn)?;
-        self.handle_connection(conn, true, discovery_method, remote_cert)
+        self.handle_connection(conn, true, maybe_peer_details, remote_cert)
             .await;
         Ok(())
     }
@@ -397,8 +384,13 @@ impl Hdp {
         let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
             UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
         })?;
-        self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
-            .await;
+        self.handle_connection(
+            connection,
+            false,
+            Some((peer.discovery_method, peer.announce_address)),
+            remote_cert,
+        )
+        .await;
         Ok(())
     }
 }
