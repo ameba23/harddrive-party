@@ -1,5 +1,6 @@
 //! Main program loop handling connections to/from peers
 pub mod discovery;
+pub mod known_peers;
 pub mod quic;
 pub mod rpc;
 
@@ -14,7 +15,7 @@ use crate::{
     },
     errors::UiServerErrorWrapper,
     peer::Peer,
-    subtree_names::CONFIG,
+    subtree_names::{CONFIG, KNOWN_PEERS},
     ui_messages::{UiEvent, UiServerError},
     wire_messages::{AnnouncePeer, Request},
     SharedState,
@@ -107,9 +108,11 @@ impl Hdp {
             .and_then(|bytes| bytes.to_vec().try_into().ok())
             .map(u16::from_be_bytes);
 
+        let known_peers_db = db.open_tree(KNOWN_PEERS)?;
+
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port).await?;
+            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port, known_peers_db).await?;
 
         let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
 

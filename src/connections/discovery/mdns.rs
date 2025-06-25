@@ -1,4 +1,6 @@
 //! Peer discovery on local network using mDNS
+use crate::connections::known_peers::KnownPeers;
+
 use super::{DiscoveredPeer, DiscoveryMethod};
 use anyhow::anyhow;
 use harddrive_party_shared::wire_messages::AnnounceAddress;
@@ -6,9 +8,8 @@ use log::{debug, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{
     cmp::min,
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, RwLock},
 };
 use tokio::sync::mpsc::Sender;
 
@@ -27,7 +28,7 @@ impl MdnsServer {
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
         announce_address: AnnounceAddress,
-        known_peers: Arc<RwLock<HashSet<String>>>,
+        known_peers: KnownPeers,
     ) -> anyhow::Result<Self> {
         let mdns_server = Self {};
 
@@ -41,7 +42,7 @@ impl MdnsServer {
         addr: SocketAddr,
         peers_tx: Sender<DiscoveredPeer>,
         announce_address: AnnounceAddress,
-        known_peers: Arc<RwLock<HashSet<String>>>,
+        known_peers: KnownPeers,
     ) -> anyhow::Result<()> {
         let mdns = ServiceDaemon::new()?;
 
@@ -61,10 +62,7 @@ impl MdnsServer {
                                 } else {
                                     debug!("Found peer on mdns {their_addr:?}");
 
-                                    {
-                                        let mut known_peers = known_peers.write().unwrap();
-                                        known_peers.insert(their_announce_address.name.clone());
-                                    }
+                                    known_peers.add_peer(&their_announce_address.name).unwrap();
 
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections
@@ -163,6 +161,7 @@ fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, AnnounceAdd
 mod tests {
     use super::*;
     use harddrive_party_shared::wire_messages::PeerConnectionDetails;
+    use tempfile::TempDir;
     use tokio::sync::mpsc::{channel, Receiver};
 
     async fn create_test_server(
@@ -170,13 +169,17 @@ mod tests {
         socket_address: SocketAddr,
         annouce_address: AnnounceAddress,
     ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage).unwrap();
+        let db = db.open_tree(b"k").unwrap();
+
         let (peers_tx, peers_rx) = channel(1024);
         let server = MdnsServer::new(
             name,
             socket_address,
             peers_tx,
             annouce_address,
-            Default::default(),
+            KnownPeers::new(db),
         )
         .await
         .unwrap();

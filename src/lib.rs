@@ -10,7 +10,10 @@ pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
-    connections::discovery::{DiscoveryMethod, PeerConnect},
+    connections::{
+        discovery::{DiscoveryMethod, PeerConnect},
+        known_peers::KnownPeers,
+    },
     errors::UiServerErrorWrapper,
     peer::Peer,
     shares::Shares,
@@ -25,11 +28,7 @@ use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
 use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};
 
@@ -44,6 +43,7 @@ pub mod subtree_names {
     pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
     pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
     pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
+    pub const KNOWN_PEERS: &[u8; 1] = b"k";
 }
 
 /// Shared state used by both the peer connections and user interface server
@@ -52,7 +52,7 @@ pub struct SharedState {
     /// A map of peer names to active peer connections
     pub peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// A list of known peer names
-    pub known_peers: Arc<RwLock<HashSet<String>>>,
+    pub known_peers: KnownPeers,
     /// The index of shared files
     pub shares: Shares,
     /// Maintains lists of requested/downloaded files
@@ -84,7 +84,7 @@ impl SharedState {
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         announce_address: AnnounceAddress,
         graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
-        known_peers: Arc<RwLock<HashSet<String>>>,
+        known_peers: KnownPeers,
     ) -> anyhow::Result<Self> {
         let shares = Shares::new(db.clone(), share_dirs).await?;
 

@@ -4,14 +4,17 @@ use self::{
     mdns::MdnsServer,
     stun::stun_test,
 };
-use crate::{errors::UiServerErrorWrapper, peer::Peer, wire_messages::AnnounceAddress};
+use crate::{
+    connections::known_peers::KnownPeers, errors::UiServerErrorWrapper, peer::Peer,
+    wire_messages::AnnounceAddress,
+};
 use harddrive_party_shared::{ui_messages::UiServerError, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
 use log::{debug, error, warn};
 use quinn::AsyncUdpSocket;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
 };
@@ -51,7 +54,7 @@ pub struct PeerDiscovery {
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, (DiscoveryMethod, AnnounceAddress)>>>,
     pub peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
-    pub known_peers: Arc<RwLock<HashSet<String>>>,
+    pub known_peers: KnownPeers,
 }
 
 impl PeerDiscovery {
@@ -61,6 +64,7 @@ impl PeerDiscovery {
         public_key: [u8; 32],
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         port: Option<u16>,
+        known_peers_db: sled::Tree,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
@@ -99,7 +103,7 @@ impl PeerDiscovery {
         // Id is used as an identifier for mdns services
         // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
-        let known_peers: Arc<RwLock<HashSet<String>>> = Default::default();
+        let known_peers = KnownPeers::new(known_peers_db);
 
         let socket_option = match local_connection_details {
             // TODO probable need to give the ip address here
@@ -145,10 +149,7 @@ impl PeerDiscovery {
             while let Some(peer_connect) = peer_announce_rx.recv().await {
                 let name = peer_connect.announce_address.name.clone();
 
-                {
-                    let mut known_peers = known_peers.write().unwrap();
-                    known_peers.insert(name);
-                }
+                known_peers.add_peer(&name).unwrap();
 
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
