@@ -124,7 +124,6 @@ pub fn Peers(
         }
     };
 
-    // let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_value = RwSignal::new(String::new());
 
     let add_peer = move |_| {

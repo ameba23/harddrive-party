@@ -7,6 +7,7 @@ use crate::{
     file::{DownloadStatus, File},
     peer::Peers,
     requests::Requests,
+    search::Search,
     shares::Shares,
     transfers::Transfers,
     ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
@@ -51,10 +52,11 @@ pub fn HdpUi() -> impl IntoView {
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
 
-    // let (own_name, set_own_name) = signal(Option::<String>::None);
     let (requests, set_requests) = signal(Requests::new());
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
+
+    let (search_results, set_search_results) = signal(Vec::<File>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
@@ -68,6 +70,7 @@ pub fn HdpUi() -> impl IntoView {
         set_requests.clone(),
         set_add_or_remove_share_message,
         set_error_message.clone(),
+        set_search_results,
     );
 
     // Get initial info
@@ -89,6 +92,7 @@ pub fn HdpUi() -> impl IntoView {
                 searchterm: None,
                 recursive: false,
             };
+            own_name.get();
             app_context.shares_query(index_query.clone());
 
             // On startup do a files query to see what peers are connected
@@ -302,6 +306,12 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("transfers")
                                 view=move || view! { <Transfers requests files /> }
+                            />
+                            <Route
+                                path=path!("search")
+                                view=move || {
+                                    view! { <Search search_results /> }
+                                }
                             />
                         </Routes>
                     </Layout>

@@ -3,6 +3,7 @@ pub mod file;
 pub mod hdp;
 pub mod peer;
 mod requests;
+pub mod search;
 pub mod shares;
 pub mod transfers;
 pub mod ws;
@@ -41,6 +42,7 @@ pub struct AppContext {
     pub set_requests: WriteSignal<Requests>,
     pub set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
     pub set_error_message: WriteSignal<HashSet<AppError>>,
+    pub set_search_results: WriteSignal<Vec<File>>,
 }
 
 impl AppContext {
@@ -53,6 +55,7 @@ impl AppContext {
         set_requests: WriteSignal<Requests>,
         set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
         set_error_message: WriteSignal<HashSet<AppError>>,
+        set_search_results: WriteSignal<Vec<File>>,
     ) -> Self {
         let (client, _set_client) = signal(Client::new(ui_url));
         Self {
@@ -64,6 +67,7 @@ impl AppContext {
             set_requests,
             set_add_or_remove_share_message,
             set_error_message,
+            set_search_results,
         }
     }
 
@@ -95,6 +99,8 @@ impl AppContext {
                                                 }
                                             }
                                         });
+                                    } else {
+                                        debug!("No name");
                                     }
                                 }
                                 LsResponse::Err(err) => {
@@ -423,6 +429,53 @@ impl AppContext {
                     });
                 }
                 Err(err) => self_clone.set_error_message.update(|error_messages| {
+                    error_messages.insert(err.into());
+                }),
+            }
+        });
+    }
+
+    pub fn search(&self, searchterm: String) {
+        let query = FilesQuery {
+            query: IndexQuery {
+                path: Default::default(),
+                searchterm: Some(searchterm),
+                recursive: true,
+            },
+            peer_name: None,
+        };
+        let client = self.client.get_untracked();
+        let set_search_results = self.set_search_results.clone();
+        let set_error_message = self.set_error_message.clone();
+        spawn_local(async move {
+            match client.files(query).await {
+                Ok(mut files_stream) => {
+                    // Remove existing search results
+                    set_search_results.update(|search_results| {
+                        *search_results = Vec::new();
+                    });
+                    while let Some(response) = files_stream.next().await {
+                        match response {
+                            Ok((ls_response, peer_name)) => match ls_response {
+                                LsResponse::Success(entries) => {
+                                    set_search_results.update(|search_results| {
+                                        for entry in entries {
+                                            search_results
+                                                .push(File::from_entry(entry, peer_name.clone()));
+                                        }
+                                    });
+                                }
+                                LsResponse::Err(err) => {
+                                    warn!("Peer responded to ls request with err {:?}", err);
+                                }
+                            },
+                            Err(err) => set_error_message.update(|error_messages| {
+                                error_messages.insert(err.into());
+                            }),
+                        }
+                    }
+                }
+                Err(err) => set_error_message.update(|error_messages| {
                     error_messages.insert(err.into());
                 }),
             }

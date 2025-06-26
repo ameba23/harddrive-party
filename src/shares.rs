@@ -134,6 +134,7 @@ impl Shares {
         }
 
         let path_len = path.len();
+        let searchterm = searchterm.map(|s| s.to_lowercase());
         let searchterm_clone = searchterm.clone();
 
         let dirs_iter = self.dirs.scan_prefix(&path).filter_map(move |kv_result| {
@@ -265,13 +266,12 @@ fn kv_filter_map(
     }
 
     if let Some(search) = searchterm {
-        if !name.contains(search) {
+        if !name.to_lowercase().contains(search) {
             return None;
         };
     }
 
     let size = u64::from_le_bytes(size.to_vec().try_into().ok()?);
-
     Some(Entry {
         name: name.to_string(),
         size,

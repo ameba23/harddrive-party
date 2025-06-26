@@ -31,6 +31,7 @@ pub fn HdpHeader(
     let navigate1 = use_navigate();
     let navigate2 = use_navigate();
     let navigate3 = use_navigate();
+    let navigate4 = use_navigate();
 
     view! {
         <LayoutHeader class="hdp-header">
@@ -71,9 +72,21 @@ pub fn HdpHeader(
                             </Flex>
                         </Tab>
                         <Tab
+                            value="/search"
+                            on:click=move |_| {
+                                navigate3("/search", Default::default());
+                            }
+                        >
+
+                            <Flex>
+                                <Icon icon=icondata::AiSearchOutlined />
+                                " Search"
+                            </Flex>
+                        </Tab>
+                        <Tab
                             value="/transfers"
                             on:click=move |_| {
-                                navigate3("/transfers", Default::default());
+                                navigate4("/transfers", Default::default());
                             }
                         >
 
