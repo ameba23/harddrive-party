@@ -21,7 +21,7 @@ use crate::{
     SharedState,
 };
 use cryptoxide::{blake2b::Blake2b, digest::Digest};
-use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rustls::Certificate;
@@ -188,6 +188,23 @@ impl Hdp {
             });
         }
 
+        // Look at our known peers, and if there are any without NAT, connect to them
+        for announce_address in self.shared_state.known_peers.iter() {
+            if let PeerConnectionDetails::NoNat(socket_address) =
+                announce_address.connection_details
+            {
+                let peer = DiscoveredPeer {
+                    socket_address,
+                    socket_option: None,
+                    discovery_method: DiscoveryMethod::Direct,
+                    announce_address,
+                };
+                if let Err(err) = self.connect_to_peer(peer).await {
+                    error!("Cannot connect to peer from known_peers {:?}", err);
+                };
+            }
+        }
+
         loop {
             select! {
                 // An incoming peer connection
@@ -260,8 +277,10 @@ impl Hdp {
                 );
                 let mut peers = shared_state.peers.lock().await;
 
-                if let Some(announce_address) = announce_address {
-                    let announce_peer = AnnouncePeer { announce_address };
+                if let Some(ref announce_address) = announce_address {
+                    let announce_peer = AnnouncePeer {
+                        announce_address: announce_address.clone(),
+                    };
 
                     // Send their annouce details to other peers who we are connected to
                     for other_peer in peers.values() {
@@ -312,11 +331,15 @@ impl Hdp {
                 }
             };
 
-            // Remove the peer from our peers map and inform the UI
-            let mut peers = shared_state.peers.lock().await;
-            if peers.remove(&peer_name).is_none() {
-                warn!("Connection closed but peer not present in map");
+            // Remove the peer from our peers map
+            {
+                let mut peers = shared_state.peers.lock().await;
+                if peers.remove(&peer_name).is_none() {
+                    warn!("Connection closed but peer not present in map");
+                }
             }
+
+            // Inform the UI the the peer has disconnected
             debug!("Connection closed - removed peer");
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
@@ -324,6 +347,14 @@ impl Hdp {
                     error: err.to_string(),
                 })
                 .await;
+
+            // Now try to reconnect
+            // TODO only do this when the error type means it makes sense to attempt reconnection
+            if let Some(announce_address) = announce_address {
+                if let Err(err) = shared_state.connect_to_peer(announce_address).await {
+                    warn!("Could not reconnect to peer following disconnect: {err}");
+                }
+            }
         });
     }
 

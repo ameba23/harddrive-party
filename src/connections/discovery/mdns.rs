@@ -62,7 +62,7 @@ impl MdnsServer {
                                 } else {
                                     debug!("Found peer on mdns {their_addr:?}");
 
-                                    known_peers.add_peer(&their_announce_address.name).unwrap();
+                                    known_peers.add_peer(&their_announce_address).unwrap();
 
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections

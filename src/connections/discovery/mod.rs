@@ -147,10 +147,10 @@ impl PeerDiscovery {
         // In a separate task, loop over peer announcements
         tokio::spawn(async move {
             while let Some(peer_connect) = peer_announce_rx.recv().await {
-                let name = peer_connect.announce_address.name.clone();
-
-                known_peers.add_peer(&name).unwrap();
-
+                debug!(
+                    "Attempting to connect to peer {}",
+                    peer_connect.announce_address
+                );
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
                     own_announce_address.clone(),
@@ -159,6 +159,7 @@ impl PeerDiscovery {
                     peers.clone(),
                     peer_connect.announce_address,
                     peer_connect.discovery_method,
+                    known_peers.clone(),
                 )
                 .await;
 
@@ -214,7 +215,9 @@ pub async fn handle_peer_announcement(
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     their_announce_address: AnnounceAddress,
     discovery_method: DiscoveryMethod,
+    known_peers: KnownPeers,
 ) -> Result<(), UiServerErrorWrapper> {
+    known_peers.add_peer(&their_announce_address)?;
     // Check it is not ourself
     if our_announce_address == their_announce_address {
         return Err(UiServerError::PeerDiscovery("Cannot connect to ourself".to_string()).into());

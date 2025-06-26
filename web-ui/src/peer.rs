@@ -52,7 +52,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
             <Flex vertical=true>
                 <div>
                     <Icon icon=icondata::AiUserOutlined />
-                    {peer_signal.get().0}
+                    { move || peer_signal.get().0}
                     " "
                     {root_size}
                     " shared"
