@@ -31,7 +31,7 @@ impl AnnounceAddress {
             5 => 16 + 2,
             _ => panic!("Bad type value"),
         };
-        let suffix_length_chars = ((suffux_length_bytes * 8) + 5) / 6;
+        let suffix_length_chars = (suffux_length_bytes * 8usize).div_ceil(6);
         let truncated_string = input_string
             [input_string.len() - 1 - suffix_length_chars..input_string.len() - 1]
             .to_string();
