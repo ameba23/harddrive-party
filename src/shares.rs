@@ -108,7 +108,7 @@ impl Shares {
                     }
                 }
                 Some(Err(e)) => {
-                    warn!("Error {}", e);
+                    warn!("Error {e}");
                     return Err(ScanDirError::IOError(e));
                 }
                 None => break,
@@ -160,7 +160,7 @@ impl Shares {
     /// Resolve a path from a request by looking up the absolute path associated with its share name
     /// component
     pub fn resolve_path(&self, input_path: String) -> Result<(PathBuf, u64), ResolvePathError> {
-        info!("Resolving path {}", input_path);
+        info!("Resolving path {input_path}");
 
         let size = match self.files.get(&input_path)? {
             Some(size_buf) => u64::from_le_bytes(
@@ -216,11 +216,11 @@ impl Shares {
                 })?;
 
             for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
-                debug!("Deleting existing entry {:?}", entry);
+                debug!("Deleting existing entry {entry:?}");
                 self.dirs.remove(entry)?;
             }
             for (entry, _) in self.files.scan_prefix(share_name).flatten() {
-                debug!("Deleting existing entry {:?}", entry);
+                debug!("Deleting existing entry {entry:?}");
                 self.files.remove(entry)?;
             }
             Ok(())

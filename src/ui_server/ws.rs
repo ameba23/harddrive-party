@@ -11,7 +11,7 @@ pub async fn handle_socket(shared_state: SharedState, mut socket: WebSocket) {
         match serialize(&msg) {
             Ok(message_bytes) => {
                 if let Err(err) = socket.send(Message::Binary(message_bytes.into())).await {
-                    warn!("cannot send ws message {:?}", err);
+                    warn!("cannot send ws message {err:?}");
                     break;
                 };
             }

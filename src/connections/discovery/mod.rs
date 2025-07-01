@@ -207,6 +207,7 @@ fn is_private(ip: IpAddr) -> bool {
 
 /// This is called when a peer is announced, either directly by the user or through a gossiped peer
 /// announcement from another connected peer.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_peer_announcement(
     hole_puncher: Option<HolePuncher>,
     our_announce_address: AnnounceAddress,
@@ -235,7 +236,7 @@ pub async fn handle_peer_announcement(
     }
 
     // TODO check that it is not already a pending peer connection
-    debug!("Remote peer {:?}", their_announce_address);
+    debug!("Remote peer {their_announce_address:?}");
     return match handle_peer(
         hole_puncher.clone(),
         &our_announce_address.connection_details,
@@ -246,7 +247,7 @@ pub async fn handle_peer_announcement(
     {
         (Some(discovered_peer), _) => {
             // We connect to them
-            debug!("Connecting to {:?}", discovered_peer);
+            debug!("Connecting to {discovered_peer:?}");
             if peers_tx.send(discovered_peer).await.is_err() {
                 error!("Cannot write to channel");
             }

@@ -72,7 +72,7 @@ impl Rpc {
         let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
         match request {
             Ok(req) => {
-                debug!("Got request from peer {:?}", req);
+                debug!("Got request from peer {req:?}");
                 match req {
                     Request::Ls(IndexQuery {
                         path,
@@ -130,7 +130,7 @@ impl Rpc {
             Ok(response_iterator) => {
                 for res in response_iterator {
                     let buf = serialize(&res).map_err(|e| {
-                        error!("Cannot serialize query response {:?}", e);
+                        error!("Cannot serialize query response {e:?}");
                         RpcError::SerializeError
                     })?;
 
@@ -150,7 +150,7 @@ impl Rpc {
                 Ok(())
             }
             Err(error) => {
-                warn!("Error during share query {:?}", error);
+                warn!("Error during share query {error:?}");
                 send_ls_error(
                     match error {
                         EntryParseError::PathNotFound => RpcError::PathNotFound,
@@ -202,7 +202,7 @@ impl Uploader {
     async fn run(&mut self) {
         while let Some(read_request) = self.upload_rx.recv().await {
             if let Err(e) = self.do_read(read_request).await {
-                warn!("Error uploading {:?}", e);
+                warn!("Error uploading {e:?}");
             }
         }
     }
@@ -244,7 +244,7 @@ impl Uploader {
                         warn!("Ui response channel closed");
                     };
                     output.write_all(&buf[..n]).await?;
-                    debug!("Uploaded {} bytes of {}", bytes_read, size);
+                    debug!("Uploaded {bytes_read} bytes of {size}");
                 }
                 output.finish().await?;
                 Ok(())
@@ -325,7 +325,7 @@ async fn send_ls_error(error: RpcError, mut output: quinn::SendStream) -> Result
     let response = LsResponse::Err(LsResponseError::InternalServer(error.to_string()));
 
     let buf = serialize(&response).map_err(|e| {
-        error!("Cannot serialize query response {:?}", e);
+        error!("Cannot serialize query response {e:?}");
         RpcError::SerializeError
     })?;
 

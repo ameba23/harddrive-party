@@ -222,7 +222,7 @@ impl SharedState {
                             id,
                             peer_public_key,
                         )) {
-                            error!("Cannot add download request {:?}", err);
+                            error!("Cannot add download request {err:?}");
                         }
                     }
                     if !entry.is_dir {
@@ -234,7 +234,7 @@ impl SharedState {
                             request_id: id,
                             downloaded: false,
                         }) {
-                            error!("Cannot make download request {:?}", err);
+                            error!("Cannot make download request {err:?}");
                         };
                     }
                 }

@@ -200,7 +200,7 @@ impl Hdp {
                     announce_address,
                 };
                 if let Err(err) = self.connect_to_peer(peer).await {
-                    error!("Cannot connect to peer from known_peers {:?}", err);
+                    error!("Cannot connect to peer from known_peers {err:?}");
                 };
             }
         }
@@ -212,7 +212,7 @@ impl Hdp {
                     let maybe_peer_details = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
 
                     if let Err(err) = self.handle_incoming_connection(maybe_peer_details.clone(), incoming_conn).await {
-                        error!("Error when handling incoming peer connection {:?}", err);
+                        error!("Error when handling incoming peer connection {err:?}");
                          if let Some((_, announce_address)) = maybe_peer_details {
                             let name = announce_address.name;
                              self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
@@ -221,11 +221,11 @@ impl Hdp {
                 }
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
-                    debug!("Discovered peer {:?}", peer);
+                    debug!("Discovered peer {peer:?}");
                     let name = peer.announce_address.name.clone();
 
                     if let Err(err) = self.connect_to_peer(peer).await {
-                        error!("Cannot connect to discovered peer {:?}", err);
+                        error!("Cannot connect to discovered peer {err:?}");
                         self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                     };
                 }
@@ -327,7 +327,7 @@ impl Hdp {
                         rpc.request(buf, send, peer_name.clone()).await;
                     }
                     Err(err) => {
-                        warn!("Failed to handle request: {:?}", err);
+                        warn!("Failed to handle request: {err:?}");
                         break err;
                     }
                 }

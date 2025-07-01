@@ -78,7 +78,7 @@ impl Peer {
             )
             .await
             {
-                error!("Error when processing requests: {:?}", err);
+                error!("Error when processing requests: {err:?}");
             }
         });
 
@@ -145,12 +145,12 @@ async fn process_requests(
                         };
                     }
                     Err(e) => {
-                        warn!("Could not remove item from wishlist {:?}", e)
+                        warn!("Could not remove item from wishlist {e:?}")
                     }
                 }
             }
             Err(e) => {
-                warn!("Error downloading {:?}", e);
+                warn!("Error downloading {e:?}");
             }
         }
     }
@@ -201,7 +201,7 @@ async fn download(
                     speedometer.entry(n);
 
                     if let Err(error) = file.write(&buf[..n]).await {
-                        warn!("Cannot write downloading file {:?}", error);
+                        warn!("Cannot write downloading file {error:?}");
                         break;
                     }
 
@@ -252,7 +252,7 @@ async fn download(
                     break;
                 }
                 Err(error) => {
-                    error!("Got error {:?}", error);
+                    error!("Got error {error:?}");
                     bytes_read += bytes_read_since_last_ui_update;
                     final_speed = speedometer
                         .measure()

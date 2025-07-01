@@ -84,7 +84,7 @@ impl MdnsServer {
                                 }
                             }
                             Err(error) => {
-                                warn!("Invalid mdns peer found {:?}", error);
+                                warn!("Invalid mdns peer found {error:?}");
                             }
                         }
                     }
