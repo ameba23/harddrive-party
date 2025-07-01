@@ -282,7 +282,9 @@ impl Hdp {
                         announce_address: announce_address.clone(),
                     };
 
-                    // Send their annouce details to other peers who we are connected to
+                    // Send their announce details to other peers who we are connected to
+                    // TODO we could clone peers here in order to run this loop after dropping the
+                    // mutex gaurd
                     for other_peer in peers.values() {
                         let request = Request::AnnouncePeer(announce_peer.clone());
                         if let Err(err) = SharedState::request_peer(request, other_peer).await {
@@ -349,6 +351,7 @@ impl Hdp {
                 .await;
 
             // Now try to reconnect
+            // TODO consider waiting a moment for network interface to come up if following sleep
             // TODO only do this when the error type means it makes sense to attempt reconnection
             if let Some(announce_address) = announce_address {
                 if let Err(err) = shared_state.connect_to_peer(announce_address).await {

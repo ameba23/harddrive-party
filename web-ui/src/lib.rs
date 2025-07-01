@@ -42,7 +42,7 @@ pub struct AppContext {
     pub set_requests: WriteSignal<Requests>,
     pub set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
     pub set_error_message: WriteSignal<HashSet<AppError>>,
-    pub set_search_results: WriteSignal<Vec<File>>,
+    pub set_search_results: WriteSignal<Vec<PeerPath>>,
 }
 
 impl AppContext {
@@ -55,7 +55,7 @@ impl AppContext {
         set_requests: WriteSignal<Requests>,
         set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
         set_error_message: WriteSignal<HashSet<AppError>>,
-        set_search_results: WriteSignal<Vec<File>>,
+        set_search_results: WriteSignal<Vec<PeerPath>>,
     ) -> Self {
         let (client, _set_client) = signal(Client::new(ui_url));
         Self {
@@ -446,6 +446,7 @@ impl AppContext {
         };
         let client = self.client.get_untracked();
         let set_search_results = self.set_search_results.clone();
+        let set_files = self.set_files.clone();
         let set_error_message = self.set_error_message.clone();
         spawn_local(async move {
             match client.files(query).await {
@@ -459,9 +460,31 @@ impl AppContext {
                             Ok((ls_response, peer_name)) => match ls_response {
                                 LsResponse::Success(entries) => {
                                     set_search_results.update(|search_results| {
+                                        for entry in entries.clone() {
+                                            let peer_path = PeerPath {
+                                                path: entry.name.clone(),
+                                                peer_name: peer_name.clone(),
+                                            };
+                                            search_results.push(peer_path);
+                                        }
+                                    });
+
+                                    set_files.update(|files| {
                                         for entry in entries {
-                                            search_results
-                                                .push(File::from_entry(entry, peer_name.clone()));
+                                            let peer_path = PeerPath {
+                                                path: entry.name.clone(),
+                                                peer_name: peer_name.clone(),
+                                            };
+                                            files
+                                                .entry(peer_path)
+                                                .and_modify(|file| {
+                                                    file.size = Some(entry.size);
+                                                    file.is_dir = Some(entry.is_dir);
+                                                })
+                                                .or_insert(File::from_entry(
+                                                    entry,
+                                                    peer_name.clone(),
+                                                ));
                                         }
                                     });
                                 }

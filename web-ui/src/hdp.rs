@@ -56,7 +56,7 @@ pub fn HdpUi() -> impl IntoView {
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
-    let (search_results, set_search_results) = signal(Vec::<File>::new());
+    let (search_results, set_search_results) = signal(Vec::<PeerPath>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
