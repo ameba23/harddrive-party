@@ -43,6 +43,7 @@ pub struct AppContext {
     pub set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
+    pub set_pending_peers: WriteSignal<HashSet<String>>,
 }
 
 impl AppContext {
@@ -56,6 +57,7 @@ impl AppContext {
         set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
+        set_pending_peers: WriteSignal<HashSet<String>>,
     ) -> Self {
         let (client, _set_client) = signal(Client::new(ui_url));
         Self {
@@ -68,6 +70,7 @@ impl AppContext {
             set_add_or_remove_share_message,
             set_error_message,
             set_search_results,
+            set_pending_peers,
         }
     }
 
@@ -188,13 +191,17 @@ impl AppContext {
     pub fn connect(&self, announce_address: String) {
         let client = self.client.get_untracked();
         let set_error_message = self.set_error_message.clone();
+        let set_pending_peers = self.set_pending_peers.clone();
         spawn_local(async move {
-            match client.connect(announce_address).await {
+            match client.connect(announce_address.clone()).await {
                 Ok(()) => {
                     debug!("Connecting to peer...");
                 }
                 Err(err) => set_error_message.update(|error_messages| {
                     error_messages.insert(err.into());
+                    set_pending_peers.update(|pending_peers| {
+                        pending_peers.remove(&announce_address);
+                    });
                 }),
             };
         });

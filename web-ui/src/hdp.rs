@@ -71,6 +71,7 @@ pub fn HdpUi() -> impl IntoView {
         set_add_or_remove_share_message,
         set_error_message.clone(),
         set_search_results,
+        set_pending_peers.clone(),
     );
 
     // Get initial info
