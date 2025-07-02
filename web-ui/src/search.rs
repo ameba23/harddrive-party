@@ -32,38 +32,35 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
         })
     };
     view! {
-    <form>
+        <form>
 
-                <Flex>
-            <Input rules=vec![InputRule::required(true.into())] value=input_value placeholder="Searchterm">
-                <InputPrefix slot>
-                    <Icon icon=icondata::ImSearch />
-                </InputPrefix>
-            </Input>
-                    <Button
-                        button_type=ButtonType::Submit
-                        on_click=do_search
-                    >
-                        "Search"
-                    </Button>
-                </Flex>
+            <Flex>
+                <Input
+                    rules=vec![InputRule::required(true.into())]
+                    value=input_value
+                    placeholder="Searchterm"
+                >
+                    <InputPrefix slot>
+                        <Icon icon=icondata::ImSearch />
+                    </InputPrefix>
+                </Input>
+                <Button button_type=ButtonType::Submit on_click=do_search>
+                    "Search"
+                </Button>
+            </Flex>
         </form>
-            <Table>
+        <Table>
             <TableBody>
-            <For
-            each=search_results_iter
-            key=|file| file.name.clone()
-            children=move |file: File| {
-                view! {
-                    <File
-                        file
-                        is_shared=false
-                        context=FileDisplayContext::SearchResult
-                        />
-                }
-            }
-            />
-                </TableBody>
-                </Table>
-        }
+                <For
+                    each=search_results_iter
+                    key=|file| file.name.clone()
+                    children=move |file: File| {
+                        view! {
+                            <File file is_shared=false context=FileDisplayContext::SearchResult />
+                        }
+                    }
+                />
+            </TableBody>
+        </Table>
+    }
 }

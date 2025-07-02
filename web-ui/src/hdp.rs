@@ -352,9 +352,7 @@ pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
 #[component]
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
-        <div
-            role="alert"
-        >
+        <div role="alert">
             <div>
                 <span class="font-medium">" ✅ " {message}</span>
             </div>
