@@ -151,7 +151,8 @@ impl rustls::client::ServerCertVerifier for ServerVerification {
         _ocsp_response: &[u8],
         _now: std::time::SystemTime,
     ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        let (name, _) = certificate_to_name(end_entity.clone());
+        // This internally verifies the signature
+        let (name, _) = certificate_to_name(end_entity.clone())?;
         if self.known_peers.has(&name) {
             Ok(rustls::client::ServerCertVerified::assertion())
         } else {
@@ -183,7 +184,8 @@ impl rustls::server::ClientCertVerifier for ClientVerification {
         _intermediates: &[rustls::Certificate],
         _now: std::time::SystemTime,
     ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
-        let (name, _) = certificate_to_name(end_entity.clone());
+        // This internally verifies the signature
+        let (name, _) = certificate_to_name(end_entity.clone())?;
         if self.known_peers.has(&name) {
             Ok(rustls::server::ClientCertVerified::assertion())
         } else {

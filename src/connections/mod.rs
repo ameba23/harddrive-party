@@ -20,7 +20,6 @@ use crate::{
     wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
-use cryptoxide::{blake2b::Blake2b, digest::Digest};
 use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
@@ -35,6 +34,7 @@ use tokio::{
     select,
     sync::{mpsc, Mutex},
 };
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 /// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
@@ -94,7 +94,7 @@ impl Hdp {
         };
 
         // Derive a human-readable name from the public key
-        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
+        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()))?;
 
         let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
 
@@ -248,8 +248,10 @@ impl Hdp {
         incoming: bool,
         maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
         remote_cert: Certificate,
-    ) {
-        let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
+    ) -> Result<(), UiServerError> {
+        let (peer_name, peer_public_key) = certificate_to_name(remote_cert)
+            .map_err(|err| UiServerError::PeerDiscovery(err.to_string()))?;
+
         debug!(
             "[{}] Connected to peer {}",
             self.shared_state.name, peer_name
@@ -359,6 +361,7 @@ impl Hdp {
                 }
             }
         });
+        Ok(())
     }
 
     /// Handle an incoming connection from a remote peer
@@ -384,7 +387,7 @@ impl Hdp {
 
         let remote_cert = get_certificate_from_connection(&conn)?;
         self.handle_connection(conn, true, maybe_peer_details, remote_cert)
-            .await;
+            .await?;
         Ok(())
     }
 
@@ -427,7 +430,7 @@ impl Hdp {
             Some((peer.discovery_method, peer.announce_address)),
             remote_cert,
         )
-        .await;
+        .await?;
         Ok(())
     }
 }
@@ -437,12 +440,28 @@ impl Hdp {
 // TODO the ID should actually just be the public key from the
 // certicate, but i cant figure out how to extract it so for now
 // just hash the whole thing
-pub fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
-    let mut hash = [0u8; 32];
-    let mut hasher = Blake2b::new(32);
-    hasher.input(cert.as_ref());
-    hasher.result(&mut hash);
-    (key_to_animal::key_to_name(&hash), hash)
+pub fn certificate_to_name(cert: Certificate) -> Result<(String, PublicKey), rustls::Error> {
+    let (_, cert) = X509Certificate::from_der(&cert.0)
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
+
+    cert.verify_signature(None)
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature))?;
+
+    let public_key = cert.public_key();
+    // We only accept Ed25519
+    if public_key.algorithm.algorithm.to_string() != "1.3.101.112" {
+        return Err(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::BadEncoding,
+        ));
+    }
+    let public_key: [u8; 32] = public_key
+        .subject_public_key
+        .data
+        .as_ref()
+        .try_into()
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
+
+    Ok((key_to_animal::key_to_name(&public_key), public_key))
 }
 
 async fn accept_incoming_request(

@@ -39,11 +39,6 @@ clap = { version = "4.3.0", features = ["derive"] }
 colored = "2.0.0"
 mdns-sd = "0.5.10"
 local-ip-address = "0.5.1"
-cryptoxide = { version = "0.4.4", default-features = false, features = [
-  "blake2",
-  "poly1305",
-  "chacha",
-] }
 hex = "0.4.3"
 key-to-animal = "0.0.1"
 ring = "0.16.20"
@@ -58,6 +53,7 @@ mime_guess = "2.0.5"
 serde = { version = "1.0", features = ["derive"] }
 reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
 bytes= "1.10.1"
+x509-parser = { version = "0.17.0", features = ["verify"] }
 
 [dev-dependencies]
 tempfile = "3.3.0"
