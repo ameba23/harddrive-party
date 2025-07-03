@@ -21,6 +21,8 @@ use tokio::{
     },
 };
 
+use super::speedometer::{self, Speedometer};
+
 /// Number of bytes uploaded at a time
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
@@ -125,7 +127,6 @@ impl Rpc {
         recursive: bool,
         mut output: quinn::SendStream,
     ) -> Result<(), RpcError> {
-        println!("Responding to ls query");
         match self.shares.query(path, searchterm, recursive) {
             Ok(response_iterator) => {
                 for res in response_iterator {
@@ -226,17 +227,19 @@ impl Uploader {
                 let mut buf: [u8; UPLOAD_BLOCK_SIZE] = [0; UPLOAD_BLOCK_SIZE];
                 let mut file = Box::into_pin(file);
                 let mut bytes_read: u64 = start.unwrap_or(0);
+                let mut speedometer = Speedometer::new(speedometer::WINDOW_SIZE);
                 while let Ok(n) = file.read(&mut buf).await {
                     if n == 0 {
                         break;
                     }
                     bytes_read += n as u64;
+                    speedometer.entry(n);
                     if self
                         .event_broadcaster
                         .send(UiEvent::Uploaded(UploadInfo {
                             path: path.clone(),
                             bytes_read,
-                            speed: 0, // TODO
+                            speed: speedometer.measure().try_into().unwrap_or_default(),
                             peer_name: requester_name.clone(),
                         }))
                         .is_err()

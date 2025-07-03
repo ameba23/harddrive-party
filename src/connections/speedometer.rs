@@ -6,6 +6,8 @@
 use std::collections::vec_deque::VecDeque;
 use std::time::{Duration, Instant};
 
+pub const WINDOW_SIZE: Duration = Duration::from_secs(5);
+
 /// Entries into the queue.
 #[derive(Debug)]
 pub struct Entry {
