@@ -3,6 +3,7 @@ pub mod discovery;
 pub mod known_peers;
 pub mod quic;
 pub mod rpc;
+pub mod speedometer;
 
 use crate::{
     connections::{
