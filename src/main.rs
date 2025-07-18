@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
             let ui_address: std::net::SocketAddr = ui_address.parse()?;
             let addr = http_server(shared_state, ui_address).await?;
 
-            println!("Web UI served on http://{}", addr);
+            println!("Web UI served on http://{addr}");
 
             println!(
                 "Announce address {}",
@@ -198,11 +198,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         LsResponse::Err(err) => {
-                            println!("Error from peer {:?}", err);
+                            println!("Error from peer {err:?}");
                         }
                     },
                     Err(e) => {
-                        println!("Error from WS server {:?}", e);
+                        println!("Error from WS server {e:?}");
                         break;
                     }
                 }
@@ -239,11 +239,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         LsResponse::Err(err) => {
-                            println!("Error from peer {:?}", err);
+                            println!("Error from peer {err:?}");
                         }
                     },
                     Err(e) => {
-                        println!("Error from server {:?}", e);
+                        println!("Error from server {e:?}");
                         break;
                     }
                 }

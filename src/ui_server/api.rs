@@ -101,7 +101,7 @@ pub async fn post_files(
                 continue;
             }
         }
-        debug!("Sending ls query to {}", peer_name);
+        debug!("Sending ls query to {peer_name}");
         let peer_name_clone = peer_name.clone();
 
         let recv = shared_state.request(request.clone(), &peer_name).await?;
@@ -267,7 +267,7 @@ pub async fn post_read(
 
         while let Ok(Some(n)) = recv.read(&mut buf).await {
             bytes_read += n as u64;
-            debug!("Read {} bytes", bytes_read);
+            debug!("Read {bytes_read} bytes");
             if response_tx.try_send(buf[..n].to_vec()).is_err() {
                 warn!("Response channel closed - probably the UI client disconnected");
                 break;

@@ -28,8 +28,7 @@ pub async fn stun_test(socket: &UdpSocket) -> anyhow::Result<PeerConnectionDetai
     };
 
     debug!(
-        "Local address: {:?}  Public address 1: {:?} Public address 2: {:?} NAT: {:?}",
-        addr, public_addr1, public_addr2, details
+        "Local address: {addr:?}  Public address 1: {public_addr1:?} Public address 2: {public_addr2:?} NAT: {details:?}"
     );
 
     Ok(details)

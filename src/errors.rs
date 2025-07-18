@@ -77,6 +77,18 @@ impl From<quinn::ConnectionError> for UiServerErrorWrapper {
     }
 }
 
+impl From<sled::Error> for UiServerErrorWrapper {
+    fn from(error: sled::Error) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::Db(error.to_string()))
+    }
+}
+
+impl From<Box<bincode::ErrorKind>> for UiServerErrorWrapper {
+    fn from(error: Box<bincode::ErrorKind>) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::Db(error.to_string()))
+    }
+}
+
 impl IntoResponse for UiServerErrorWrapper {
     fn into_response(self) -> Response {
         log::error!("{self:?}");

@@ -72,13 +72,12 @@ pub fn Shares(
                     None => EitherOf3::C(view! { <span></span> }),
                 }
             }}
-            { move || {
-                     match app_context.own_name.get() {
-                              Some(name) => {
-                                  Either::Left(view! { <Peer name is_self=true />}) },
-                             None => Either::Right(view! { <span />}),
-                                }
-                      }}
+            {move || {
+                match app_context.own_name.get() {
+                    Some(name) => Either::Left(view! { <Peer name is_self=true /> }),
+                    None => Either::Right(view! { <span /> }),
+                }
+            }}
         </Flex>
     }
 }

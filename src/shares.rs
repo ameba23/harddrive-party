@@ -108,7 +108,7 @@ impl Shares {
                     }
                 }
                 Some(Err(e)) => {
-                    warn!("Error {}", e);
+                    warn!("Error {e}");
                     return Err(ScanDirError::IOError(e));
                 }
                 None => break,
@@ -134,6 +134,7 @@ impl Shares {
         }
 
         let path_len = path.len();
+        let searchterm = searchterm.map(|s| s.to_lowercase());
         let searchterm_clone = searchterm.clone();
 
         let dirs_iter = self.dirs.scan_prefix(&path).filter_map(move |kv_result| {
@@ -159,7 +160,7 @@ impl Shares {
     /// Resolve a path from a request by looking up the absolute path associated with its share name
     /// component
     pub fn resolve_path(&self, input_path: String) -> Result<(PathBuf, u64), ResolvePathError> {
-        info!("Resolving path {}", input_path);
+        info!("Resolving path {input_path}");
 
         let size = match self.files.get(&input_path)? {
             Some(size_buf) => u64::from_le_bytes(
@@ -215,11 +216,11 @@ impl Shares {
                 })?;
 
             for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
-                debug!("Deleting existing entry {:?}", entry);
+                debug!("Deleting existing entry {entry:?}");
                 self.dirs.remove(entry)?;
             }
             for (entry, _) in self.files.scan_prefix(share_name).flatten() {
-                debug!("Deleting existing entry {:?}", entry);
+                debug!("Deleting existing entry {entry:?}");
                 self.files.remove(entry)?;
             }
             Ok(())
@@ -265,13 +266,12 @@ fn kv_filter_map(
     }
 
     if let Some(search) = searchterm {
-        if !name.contains(search) {
+        if !name.to_lowercase().contains(search) {
             return None;
         };
     }
 
     let size = u64::from_le_bytes(size.to_vec().try_into().ok()?);
-
     Some(Entry {
         name: name.to_string(),
         size,

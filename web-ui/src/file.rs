@@ -90,9 +90,9 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button = move || {
-        if file.download_status.get() == DownloadStatus::Nothing
+        if file.download_status.get_untracked() == DownloadStatus::Nothing
             && !is_shared
-            && file.request.get() == None
+            && file.request.get_untracked() == None
             && context != FileDisplayContext::Transfer
         {
             Either::Left(view! {

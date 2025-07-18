@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    connections::get_timestamp,
+    connections::{get_timestamp, speedometer::Speedometer},
     ui_messages::{DownloadEvent, DownloadInfo, UiEvent},
     wire_messages::{ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
@@ -19,7 +19,6 @@ use key_to_animal::key_to_name;
 use log::{debug, error, warn};
 use lru::LruCache;
 use quinn::{Connection, RecvStream};
-use speedometer::Speedometer;
 use std::sync::{Arc, Mutex};
 use tokio::{
     fs::{create_dir_all, File, OpenOptions},
@@ -78,7 +77,7 @@ impl Peer {
             )
             .await
             {
-                error!("Error when processing requests: {:?}", err);
+                error!("Error when processing requests: {err:?}");
             }
         });
 
@@ -145,12 +144,12 @@ async fn process_requests(
                         };
                     }
                     Err(e) => {
-                        warn!("Could not remove item from wishlist {:?}", e)
+                        warn!("Could not remove item from wishlist {e:?}")
                     }
                 }
             }
             Err(e) => {
-                warn!("Error downloading {:?}", e);
+                warn!("Error downloading {e:?}");
             }
         }
     }
@@ -201,7 +200,7 @@ async fn download(
                     speedometer.entry(n);
 
                     if let Err(error) = file.write(&buf[..n]).await {
-                        warn!("Cannot write downloading file {:?}", error);
+                        warn!("Cannot write downloading file {error:?}");
                         break;
                     }
 
@@ -227,11 +226,7 @@ async fn download(
                                     path: requested_file.path.clone(),
                                     bytes_read,
                                     total_bytes_read,
-                                    speed: speedometer
-                                        .measure()
-                                        .unwrap_or_default()
-                                        .try_into()
-                                        .unwrap_or_default(),
+                                    speed: speedometer.measure().try_into().unwrap_or_default(),
                                 },
                             }))
                             .is_err()
@@ -244,21 +239,13 @@ async fn download(
                 Ok(None) => {
                     debug!("Stream ended");
                     bytes_read += bytes_read_since_last_ui_update;
-                    final_speed = speedometer
-                        .measure()
-                        .unwrap_or_default()
-                        .try_into()
-                        .unwrap_or_default();
+                    final_speed = speedometer.measure().try_into().unwrap_or_default();
                     break;
                 }
                 Err(error) => {
-                    error!("Got error {:?}", error);
+                    error!("Got error {error:?}");
                     bytes_read += bytes_read_since_last_ui_update;
-                    final_speed = speedometer
-                        .measure()
-                        .unwrap_or_default()
-                        .try_into()
-                        .unwrap_or_default();
+                    final_speed = speedometer.measure().try_into().unwrap_or_default();
                     break;
                 }
             }

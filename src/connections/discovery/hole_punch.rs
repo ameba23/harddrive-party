@@ -334,7 +334,7 @@ pub async fn birthday_hard_side(
         let mut stop_signal_rx = stop_signal_tx.subscribe();
         spawn(async move {
             if let Err(error) = socket.send_to(&INIT_PUNCH, target_addr).await {
-                warn!("Send error: {:?}", error);
+                warn!("Send error: {error:?}");
             }
 
             let mut buf = [0u8; 32];
@@ -344,23 +344,23 @@ pub async fn birthday_hard_side(
                         Ok((_len, sender)) => {
                             if sender == target_addr {
                                 if let Err(error) = socket.send_to(&ACK_PUNCH, sender).await {
-                                    warn!("Send error: {:?}", error);
+                                    warn!("Send error: {error:?}");
                                 }
                                 if socket_tx.send(socket).is_err() {
                                     // This may happen if we get more than one successful punch
                                     warn!("Cannot send success socket - channel closed");
                                 }
                             } else {
-                                warn!("Got message from unexpected sender {}", sender);
+                                warn!("Got message from unexpected sender {sender}");
                             }
                         }
                         Err(error) => {
-                            warn!("Cannot recieve on socket {:?} - {:?}", socket, error);
+                            warn!("Cannot recieve on socket {socket:?} - {error:?}");
                         }
                     }
                 }
                 stop_signal_result = stop_signal_rx.recv() => {
-                    debug!("Stop signal result {:?}", stop_signal_result);
+                    debug!("Stop signal result {stop_signal_result:?}");
                 }
             }
         });
