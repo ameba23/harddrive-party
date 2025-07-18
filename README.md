@@ -42,7 +42,7 @@ Download a file or directory by clicking the download button next to it. You can
 ### Peer discovery
 
 There are 3 methods of peer discovery:
-- Manual connections by directly entering a peer's connection details using the UI. The connection details consist of IP address, port, NAT type and public key.
+- Manual connections by directly entering a peer's connection details using the UI. The connection details consist of IP address, port, NAT type and a name derived from the public key. For example: `IndicRedWolf0rtRbD7b2` - here `IndicRedWolf` is derived from public key, and `0rRtbQ7b2` is the connection details.
 - 'Gossiped' connections by which peers who are already connected can pass on the details of others they are also connected to.
 - [Multicast DNS](https://en.wikipedia.org/wiki/Multicast_DNS) is also used to find peers connected to the same local network.
 
@@ -74,7 +74,7 @@ You can switch on logging by setting the environment variable `RUST_LOG=harddriv
 
 ## Web user interface
 
-There is a work-in-progress web-based front end build with [Leptos](https://docs.rs/leptos), served by default to `http://localhost:3030`. Source code in [`./web-ui`](./web-ui)
+There is a work-in-progress web-based front end build with [Leptos](https://docs.rs/leptos) and [ThawUI](https://github.com/thaw-ui/thaw), served by default to `http://localhost:3030`. Source code in [`./web-ui`](./web-ui)
 
 ## Contributing
 

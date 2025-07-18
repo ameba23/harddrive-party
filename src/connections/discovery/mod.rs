@@ -39,10 +39,14 @@ pub struct DiscoveredPeer {
     pub announce_address: AnnounceAddress,
 }
 
+/// The way by which a peer was discovered
 #[derive(Debug, Clone, PartialEq)]
 pub enum DiscoveryMethod {
+    /// User provided the announce address
     Direct,
+    /// Another peer provided the announce address
     Gossip,
+    /// Discovered over local network
     Mdns,
 }
 
@@ -52,6 +56,7 @@ pub struct PeerDiscovery {
     /// Our own connection details
     pub announce_address: AnnounceAddress,
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, (DiscoveryMethod, AnnounceAddress)>>>,
+    /// Channel used to announce peers
     pub peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     pub known_peers: KnownPeers,
@@ -101,15 +106,15 @@ impl PeerDiscovery {
         let addr = socket.local_addr()?;
 
         // Id is used as an identifier for mdns services
-        // TODO this should be hashed or rather use the session token for privacy
         let id = hex::encode(public_key);
         let known_peers = KnownPeers::new(known_peers_db);
 
         let socket_option = match local_connection_details {
-            // TODO probable need to give the ip address here
+            // TODO probably need to give the ip address here
             PeerConnectionDetails::Symmetric(_) => None,
             _ => Some(socket),
         };
+
         let announce_address = AnnounceAddress {
             connection_details: local_connection_details.clone(),
             name: key_to_animal::key_to_name(&public_key),

@@ -22,7 +22,7 @@ impl KnownPeers {
         Ok(())
     }
 
-    /// Check if we know of a given peer name during ceritication verification
+    /// Check if we know of a given peer name during certificate verification
     pub fn has(&self, name: &str) -> bool {
         self.db.contains_key(name.as_bytes()).unwrap_or_default()
     }

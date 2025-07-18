@@ -16,7 +16,7 @@ use tokio::sync::mpsc::Sender;
 /// Name of the mDNS service
 const SERVICE_TYPE: &str = "_hdp._udp.local.";
 
-/// Used when giving the public key as a property of a [ServiceInfo]
+/// Used when giving the announce address as a property of a [ServiceInfo]
 const ANNOUNCE_ADDRESS_PROPERTY_NAME: &str = "hdp-aa";
 
 /// Announces ourself on mDNS

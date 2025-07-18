@@ -436,11 +436,9 @@ impl Hdp {
     }
 }
 
-/// Given a TLS certificate, get a 32 byte ID and a human-readable
+/// Given a TLS certificate, get a 32 byte public key and a human-readable
 /// name derived from it.
-// TODO the ID should actually just be the public key from the
-// certicate, but i cant figure out how to extract it so for now
-// just hash the whole thing
+/// This internally verifies the signature, and only accepts Ed25519.
 pub fn certificate_to_name(cert: Certificate) -> Result<(String, PublicKey), rustls::Error> {
     let (_, cert) = X509Certificate::from_der(&cert.0)
         .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
@@ -465,6 +463,7 @@ pub fn certificate_to_name(cert: Certificate) -> Result<(String, PublicKey), rus
     Ok((key_to_animal::key_to_name(&public_key), public_key))
 }
 
+/// Accept an incoming request on a QUIC connection, and read the request message
 async fn accept_incoming_request(
     conn: &quinn::Connection,
 ) -> anyhow::Result<(quinn::SendStream, Vec<u8>)> {
@@ -473,6 +472,9 @@ async fn accept_incoming_request(
     Ok((send, buf))
 }
 
+/// The QUIC server
+/// In the case that our NAT type makes it not possible to have a single UDP endpoint for all peer
+/// connections, this stores the certificate details
 #[derive(Clone)]
 pub enum ServerConnection {
     /// A single endpoint
