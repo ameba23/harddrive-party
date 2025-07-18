@@ -1,12 +1,13 @@
 pub use harddrive_party_shared::ui_messages;
-use harddrive_party_shared::ui_messages::PeerPath;
 pub use harddrive_party_shared::wire_messages;
+use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
 
 use crate::{
     components::header::HdpHeader,
     file::{DownloadStatus, File},
     peer::Peers,
     requests::Requests,
+    search::Search,
     shares::Shares,
     transfers::Transfers,
     ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
@@ -17,7 +18,7 @@ use crate::{
 use futures::StreamExt;
 use leptos::prelude::*;
 use leptos_router::{
-    components::{Redirect, Route, Routes},
+    components::{Route, Routes},
     path,
 };
 use log::debug;
@@ -51,10 +52,11 @@ pub fn HdpUi() -> impl IntoView {
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
 
-    // let (own_name, set_own_name) = signal(Option::<String>::None);
     let (requests, set_requests) = signal(Requests::new());
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
+
+    let (search_results, set_search_results) = signal(Vec::<PeerPath>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
@@ -67,6 +69,9 @@ pub fn HdpUi() -> impl IntoView {
         set_files.clone(),
         set_requests.clone(),
         set_add_or_remove_share_message,
+        set_error_message.clone(),
+        set_search_results,
+        set_pending_peers.clone(),
     );
 
     // Get initial info
@@ -88,6 +93,7 @@ pub fn HdpUi() -> impl IntoView {
                 searchterm: None,
                 recursive: false,
             };
+            own_name.get();
             app_context.shares_query(index_query.clone());
 
             // On startup do a files query to see what peers are connected
@@ -302,6 +308,12 @@ pub fn HdpUi() -> impl IntoView {
                                 path=path!("transfers")
                                 view=move || view! { <Transfers requests files /> }
                             />
+                            <Route
+                                path=path!("search")
+                                view=move || {
+                                    view! { <Search search_results /> }
+                                }
+                            />
                         </Routes>
                     </Layout>
                 </main>
@@ -340,9 +352,7 @@ pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
 #[component]
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
-        <div
-            role="alert"
-        >
+        <div role="alert">
             <div>
                 <span class="font-medium">" ✅ " {message}</span>
             </div>
@@ -354,6 +364,19 @@ pub fn SuccessMessage(message: String) -> impl IntoView {
 pub enum AppError {
     WsConnection,
     PeerConnection(String, String),
+    Client(String),
+}
+
+impl From<ClientError> for AppError {
+    fn from(error: ClientError) -> Self {
+        AppError::Client(error.to_string())
+    }
+}
+
+impl From<UiServerError> for AppError {
+    fn from(error: UiServerError) -> Self {
+        AppError::Client(error.to_string())
+    }
 }
 
 impl std::fmt::Display for AppError {
@@ -367,6 +390,9 @@ impl std::fmt::Display for AppError {
             }
             AppError::PeerConnection(announce_address, message) => {
                 write!(f, "Cannot connect to peer {announce_address}: {message}")
+            }
+            AppError::Client(client_error) => {
+                write!(f, "{client_error}")
             }
         }
     }

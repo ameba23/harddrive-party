@@ -1,7 +1,9 @@
 //! Main program loop handling connections to/from peers
 pub mod discovery;
+pub mod known_peers;
 pub mod quic;
 pub mod rpc;
+pub mod speedometer;
 
 use crate::{
     connections::{
@@ -14,12 +16,12 @@ use crate::{
     },
     errors::UiServerErrorWrapper,
     peer::Peer,
-    subtree_names::CONFIG,
+    subtree_names::{CONFIG, KNOWN_PEERS},
     ui_messages::{UiEvent, UiServerError},
     wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
-use cryptoxide::{blake2b::Blake2b, digest::Digest};
+use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rustls::Certificate;
@@ -33,6 +35,7 @@ use tokio::{
     select,
     sync::{mpsc, Mutex},
 };
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 /// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
@@ -92,7 +95,7 @@ impl Hdp {
         };
 
         // Derive a human-readable name from the public key
-        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()));
+        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()))?;
 
         let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
 
@@ -106,9 +109,11 @@ impl Hdp {
             .and_then(|bytes| bytes.to_vec().try_into().ok())
             .map(u16::from_be_bytes);
 
+        let known_peers_db = db.open_tree(KNOWN_PEERS)?;
+
         // Setup peer discovery
         let (socket_option, peer_discovery) =
-            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port).await?;
+            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port, known_peers_db).await?;
 
         let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
 
@@ -184,16 +189,32 @@ impl Hdp {
             });
         }
 
+        // Look at our known peers, and if there are any without NAT, connect to them
+        for announce_address in self.shared_state.known_peers.iter() {
+            if let PeerConnectionDetails::NoNat(socket_address) =
+                announce_address.connection_details
+            {
+                let peer = DiscoveredPeer {
+                    socket_address,
+                    socket_option: None,
+                    discovery_method: DiscoveryMethod::Direct,
+                    announce_address,
+                };
+                if let Err(err) = self.connect_to_peer(peer).await {
+                    error!("Cannot connect to peer from known_peers {err:?}");
+                };
+            }
+        }
+
         loop {
             select! {
                 // An incoming peer connection
                 Some(incoming_conn) = incoming_connection_rx.recv() => {
-                    let discovery_method = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
-                    let announce_address = discovery_method.as_ref().and_then(|d| d.get_announce_address());
+                    let maybe_peer_details = self.peer_discovery.get_pending_peer(&incoming_conn.remote_address());
 
-                    if let Err(err) = self.handle_incoming_connection(discovery_method, incoming_conn).await {
-                        error!("Error when handling incoming peer connection {:?}", err);
-                         if let Some (announce_address) = announce_address {
+                    if let Err(err) = self.handle_incoming_connection(maybe_peer_details.clone(), incoming_conn).await {
+                        error!("Error when handling incoming peer connection {err:?}");
+                         if let Some((_, announce_address)) = maybe_peer_details {
                             let name = announce_address.name;
                              self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                         }
@@ -201,14 +222,12 @@ impl Hdp {
                 }
                 // A discovered peer
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
-                    debug!("Discovered peer {:?}", peer);
-                    let name = peer.discovery_method.get_announce_address().map(|a| a.name);
+                    debug!("Discovered peer {peer:?}");
+                    let name = peer.announce_address.name.clone();
 
                     if let Err(err) = self.connect_to_peer(peer).await {
-                        error!("Cannot connect to discovered peer {:?}", err);
-                        if let Some(name) = name {
-                            self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
-                        }
+                        error!("Cannot connect to discovered peer {err:?}");
+                        self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
                     };
                 }
                 // A signal for graceful shutdown
@@ -228,28 +247,19 @@ impl Hdp {
         &mut self,
         conn: quinn::Connection,
         incoming: bool,
-        discovery_method: Option<DiscoveryMethod>,
+        maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
         remote_cert: Certificate,
-    ) {
-        let (peer_name, peer_public_key) = certificate_to_name(remote_cert);
+    ) -> Result<(), UiServerError> {
+        let (peer_name, peer_public_key) = certificate_to_name(remote_cert)
+            .map_err(|err| UiServerError::PeerDiscovery(err.to_string()))?;
+
         debug!(
             "[{}] Connected to peer {}",
             self.shared_state.name, peer_name
         );
 
-        let announce_address = if let Some(discovery_method) = discovery_method {
-            // If we know their announce address, check if it matches the certificate
-            if let Some(announce_address) = discovery_method.get_announce_address() {
-                if announce_address.name == key_to_animal::key_to_name(&peer_public_key) {
-                    debug!("Public key matches");
-                } else {
-                    // TODO there should be some consequences here - eg: return
-                    error!("Public key does not match!");
-                }
-                Some(announce_address)
-            } else {
-                None
-            }
+        let announce_address = if let Some(peer_details) = maybe_peer_details {
+            Some(peer_details.1)
         } else {
             None
         };
@@ -270,10 +280,14 @@ impl Hdp {
                 );
                 let mut peers = shared_state.peers.lock().await;
 
-                if let Some(announce_address) = announce_address {
-                    let announce_peer = AnnouncePeer { announce_address };
+                if let Some(ref announce_address) = announce_address {
+                    let announce_peer = AnnouncePeer {
+                        announce_address: announce_address.clone(),
+                    };
 
-                    // Send their annouce details to other peers who we are connected to
+                    // Send their announce details to other peers who we are connected to
+                    // TODO we could clone peers here in order to run this loop after dropping the
+                    // mutex gaurd
                     for other_peer in peers.values() {
                         let request = Request::AnnouncePeer(announce_peer.clone());
                         if let Err(err) = SharedState::request_peer(request, other_peer).await {
@@ -316,17 +330,21 @@ impl Hdp {
                         rpc.request(buf, send, peer_name.clone()).await;
                     }
                     Err(err) => {
-                        warn!("Failed to handle request: {:?}", err);
+                        warn!("Failed to handle request: {err:?}");
                         break err;
                     }
                 }
             };
 
-            // Remove the peer from our peers map and inform the UI
-            let mut peers = shared_state.peers.lock().await;
-            if peers.remove(&peer_name).is_none() {
-                warn!("Connection closed but peer not present in map");
+            // Remove the peer from our peers map
+            {
+                let mut peers = shared_state.peers.lock().await;
+                if peers.remove(&peer_name).is_none() {
+                    warn!("Connection closed but peer not present in map");
+                }
             }
+
+            // Inform the UI the the peer has disconnected
             debug!("Connection closed - removed peer");
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
@@ -334,13 +352,23 @@ impl Hdp {
                     error: err.to_string(),
                 })
                 .await;
+
+            // Now try to reconnect
+            // TODO consider waiting a moment for network interface to come up if following sleep
+            // TODO only do this when the error type means it makes sense to attempt reconnection
+            if let Some(announce_address) = announce_address {
+                if let Err(err) = shared_state.connect_to_peer(announce_address).await {
+                    warn!("Could not reconnect to peer following disconnect: {err}");
+                }
+            }
         });
+        Ok(())
     }
 
     /// Handle an incoming connection from a remote peer
     async fn handle_incoming_connection(
         &mut self,
-        discovery_method: Option<DiscoveryMethod>,
+        maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
         incoming_conn: quinn::Connecting,
     ) -> Result<(), UiServerErrorWrapper> {
         let conn = incoming_conn.await?;
@@ -359,8 +387,8 @@ impl Hdp {
         }
 
         let remote_cert = get_certificate_from_connection(&conn)?;
-        self.handle_connection(conn, true, discovery_method, remote_cert)
-            .await;
+        self.handle_connection(conn, true, maybe_peer_details, remote_cert)
+            .await?;
         Ok(())
     }
 
@@ -397,25 +425,45 @@ impl Hdp {
         let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
             UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
         })?;
-        self.handle_connection(connection, false, Some(peer.discovery_method), remote_cert)
-            .await;
+        self.handle_connection(
+            connection,
+            false,
+            Some((peer.discovery_method, peer.announce_address)),
+            remote_cert,
+        )
+        .await?;
         Ok(())
     }
 }
 
-/// Given a TLS certificate, get a 32 byte ID and a human-readable
+/// Given a TLS certificate, get a 32 byte public key and a human-readable
 /// name derived from it.
-// TODO the ID should actually just be the public key from the
-// certicate, but i cant figure out how to extract it so for now
-// just hash the whole thing
-pub fn certificate_to_name(cert: Certificate) -> (String, PublicKey) {
-    let mut hash = [0u8; 32];
-    let mut hasher = Blake2b::new(32);
-    hasher.input(cert.as_ref());
-    hasher.result(&mut hash);
-    (key_to_animal::key_to_name(&hash), hash)
+/// This internally verifies the signature, and only accepts Ed25519.
+pub fn certificate_to_name(cert: Certificate) -> Result<(String, PublicKey), rustls::Error> {
+    let (_, cert) = X509Certificate::from_der(&cert.0)
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
+
+    cert.verify_signature(None)
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadSignature))?;
+
+    let public_key = cert.public_key();
+    // We only accept Ed25519
+    if public_key.algorithm.algorithm.to_string() != "1.3.101.112" {
+        return Err(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::BadEncoding,
+        ));
+    }
+    let public_key: [u8; 32] = public_key
+        .subject_public_key
+        .data
+        .as_ref()
+        .try_into()
+        .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
+
+    Ok((key_to_animal::key_to_name(&public_key), public_key))
 }
 
+/// Accept an incoming request on a QUIC connection, and read the request message
 async fn accept_incoming_request(
     conn: &quinn::Connection,
 ) -> anyhow::Result<(quinn::SendStream, Vec<u8>)> {
@@ -424,6 +472,9 @@ async fn accept_incoming_request(
     Ok((send, buf))
 }
 
+/// The QUIC server
+/// In the case that our NAT type makes it not possible to have a single UDP endpoint for all peer
+/// connections, this stores the certificate details
 #[derive(Clone)]
 pub enum ServerConnection {
     /// A single endpoint

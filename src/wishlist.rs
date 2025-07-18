@@ -126,8 +126,19 @@ impl DownloadRequest {
         key: Vec<u8>,
         value: Vec<u8>,
     ) -> Result<Self, DbError> {
+        if key.len() != 4 {
+            return Err(DbError::BadLength(
+                "Unexpected key length (should be 4 bytes)".to_string(),
+            ));
+        }
         let request_id_buf: [u8; 4] = key[..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
+
+        if value.len() < 8 + 32 + 8 {
+            return Err(DbError::BadLength(
+                "Unexpected value length (should be at least 48 bytes)".to_string(),
+            ));
+        }
 
         let timestamp_buf: [u8; 8] = value[0..8].try_into()?;
         let timestamp_secs = u64::from_be_bytes(timestamp_buf);
@@ -178,6 +189,11 @@ impl RequestedFile {
     /// Given a serialized wishlist db entry, make a [RequestedFile]
     /// key: `<peer_public_key><timestamp><path>` value: `<request_id><size>`
     fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
+        if key.len() < 32 + 8 {
+            return Err(DbError::BadLength(
+                "Unexpected key length (should at least 40 bytes)".to_string(),
+            ));
+        }
         // TODO would it be useful to also return these?
         // let peer_public_key: [u8; 32] = key[0..32].try_into()?;
 
@@ -187,6 +203,11 @@ impl RequestedFile {
 
         let path = std::str::from_utf8(&key[32 + 8..])?.to_string();
 
+        if value.len() < 4 + 8 {
+            return Err(DbError::BadLength(
+                "Unexpected value length (should at least 12 bytes)".to_string(),
+            ));
+        }
         let request_id_buf: [u8; 4] = value[0..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
 
@@ -203,10 +224,21 @@ impl RequestedFile {
 
     /// key2: `<requestid><path>` value2: `<size><downloaded>`
     fn from_db_by_request_id_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
+        if key.len() < 4 {
+            return Err(DbError::BadLength(
+                "Unexpected key length (should at least 4 bytes)".to_string(),
+            ));
+        }
         let request_id_buf: [u8; 4] = key[0..4].try_into()?;
         let request_id = u32::from_be_bytes(request_id_buf);
 
         let path = std::str::from_utf8(&key[4..])?.to_string();
+
+        if value.len() < 9 {
+            return Err(DbError::BadLength(
+                "Unexpected value length (should at least 9 bytes)".to_string(),
+            ));
+        }
 
         let size_buf: [u8; 8] = value[0..8].try_into()?;
         let size = u64::from_be_bytes(size_buf);

@@ -5,15 +5,16 @@ use log::{debug, warn};
 use quinn::{AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig};
 use ring::signature::Ed25519KeyPair;
 use rustls::{Certificate, SignatureScheme};
-use std::{
-    collections::HashSet,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 
+use super::known_peers::KnownPeers;
+
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// This makes it possible to add breaking protocol changes and provide backwards compatibility
+const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
 
 /// Generate a TLS certificate with Ed25519 keypair
 pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
@@ -31,7 +32,7 @@ pub async fn make_server_endpoint(
     socket: impl AsyncUdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
-    known_peers: Arc<RwLock<HashSet<String>>>,
+    known_peers: KnownPeers,
     client_verification: bool,
 ) -> anyhow::Result<Endpoint> {
     let (server_config, client_config) =
@@ -51,7 +52,7 @@ pub async fn make_server_endpoint_basic_socket(
     socket: tokio::net::UdpSocket,
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
-    known_peers: Arc<RwLock<HashSet<String>>>,
+    known_peers: KnownPeers,
 ) -> anyhow::Result<Endpoint> {
     let (server_config, client_config) =
         configure_server(cert_der, priv_key_der, known_peers, true)?;
@@ -88,7 +89,7 @@ pub fn get_certificate_from_connection(
 fn configure_server(
     cert_der: Vec<u8>,
     priv_key_der: Vec<u8>,
-    known_peers: Arc<RwLock<HashSet<String>>>,
+    known_peers: KnownPeers,
     client_verification: bool,
 ) -> anyhow::Result<(ServerConfig, ClientConfig)> {
     let priv_key = rustls::PrivateKey(priv_key_der.clone());
@@ -102,7 +103,14 @@ fn configure_server(
         crypto.with_client_cert_verifier(SkipClientVerification::new())
     };
 
-    let crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
+    let mut crypto = crypto.with_single_cert(cert_chain.clone(), priv_key)?;
+
+    let supported_protocols: Vec<_> = SUPPORTED_PROTOCOL_VERSIONS
+        .into_iter()
+        .map(|p| p.to_vec())
+        .collect();
+
+    crypto.alpn_protocols = supported_protocols.clone();
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(crypto));
 
@@ -111,10 +119,12 @@ fn configure_server(
         .max_concurrent_uni_streams(0_u8.into())
         .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
 
-    let client_crypto = rustls::ClientConfig::builder()
+    let mut client_crypto = rustls::ClientConfig::builder()
         .with_safe_defaults()
         .with_custom_certificate_verifier(ServerVerification::new(known_peers))
         .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key_der));
+
+    client_crypto.alpn_protocols = supported_protocols;
 
     let client_config = ClientConfig::new(Arc::new(client_crypto));
 
@@ -122,11 +132,11 @@ fn configure_server(
 }
 
 struct ServerVerification {
-    known_peers: Arc<RwLock<HashSet<String>>>,
+    known_peers: KnownPeers,
 }
 
 impl ServerVerification {
-    fn new(known_peers: Arc<RwLock<HashSet<String>>>) -> Arc<Self> {
+    fn new(known_peers: KnownPeers) -> Arc<Self> {
         Arc::new(Self { known_peers })
     }
 }
@@ -141,9 +151,9 @@ impl rustls::client::ServerCertVerifier for ServerVerification {
         _ocsp_response: &[u8],
         _now: std::time::SystemTime,
     ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        let (name, _) = certificate_to_name(end_entity.clone());
-        let known_peers = self.known_peers.read().unwrap();
-        if known_peers.contains(&name) {
+        // This internally verifies the signature
+        let (name, _) = certificate_to_name(end_entity.clone())?;
+        if self.known_peers.has(&name) {
             Ok(rustls::client::ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(
@@ -154,11 +164,11 @@ impl rustls::client::ServerCertVerifier for ServerVerification {
 }
 
 struct ClientVerification {
-    known_peers: Arc<RwLock<HashSet<String>>>,
+    known_peers: KnownPeers,
 }
 
 impl ClientVerification {
-    fn new(known_peers: Arc<RwLock<HashSet<String>>>) -> Arc<Self> {
+    fn new(known_peers: KnownPeers) -> Arc<Self> {
         Arc::new(Self { known_peers })
     }
 }
@@ -174,9 +184,9 @@ impl rustls::server::ClientCertVerifier for ClientVerification {
         _intermediates: &[rustls::Certificate],
         _now: std::time::SystemTime,
     ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
-        let (name, _) = certificate_to_name(end_entity.clone());
-        let known_peers = self.known_peers.read().unwrap();
-        if known_peers.contains(&name) {
+        // This internally verifies the signature
+        let (name, _) = certificate_to_name(end_entity.clone())?;
+        if self.known_peers.has(&name) {
             Ok(rustls::server::ClientCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(

@@ -56,7 +56,7 @@ pub async fn http_server(
         )
         .route("/ws", any(ws_handler))
         .route("/", get(index))
-        .route("/peers", get(index))
+        .route("/search", get(index))
         .route("/shares", get(index))
         .route("/transfers", get(index))
         .route("/{path}", get(static_handler))

@@ -1,4 +1,5 @@
 use crate::AppError;
+use anyhow::anyhow;
 use bincode::deserialize;
 use futures::{
     channel::mpsc::{channel, Receiver},
@@ -20,83 +21,72 @@ impl WebsocketService {
         set_error_message: WriteSignal<HashSet<AppError>>,
     ) -> anyhow::Result<(Self, Receiver<UiEvent>)> {
         let mut url = url.join("ws")?;
-        url.set_scheme("ws").unwrap();
-        debug!("Connecting to ws {}", url.to_string());
-        let ws = WebSocket::open(&url.to_string())?;
+        url.set_scheme("ws")
+            .map_err(|_| anyhow!("Cannot set url scheme"))?;
 
-        let (_write, mut read) = ws.split();
-
-        let (mut out_tx, out_rx) = channel::<UiEvent>(1024);
-
-        // Incoming messages from the server
-        spawn_local(async move {
-            while let Some(msg) = read.next().await {
-                match msg {
-                    Ok(Message::Bytes(buf)) => {
-                        let msg: UiEvent = deserialize(&buf).unwrap();
-                        debug!("Decoded msg from server {:?}", msg);
-                        if out_tx.send(msg).await.is_err() {
-                            error!("Cannot send ws message over channel");
-                            break;
-                        }
-                    }
-                    Ok(Message::Text(text)) => {
-                        warn!("Got unexpected text from websocket: {}", text);
-                    }
-                    Err(e) => {
-                        error!("ws: {:?}", e);
-                        set_error_message.update(|error_messages| {
-                            error_messages.insert(AppError::WsConnection);
-                        });
-                    }
-                }
-            }
-            debug!("WebSocket Closed");
-        });
+        let (out_tx, out_rx) = channel::<UiEvent>(1024);
+        spawn_local(Self::run_ws_loop(url, set_error_message, out_tx));
 
         Ok((Self, out_rx))
     }
-}
 
-// /// Keeps track of requests to the server over ws
-// #[derive(Clone, Debug)]
-// pub struct Requester {
-//     ws_service: WebsocketService,
-//     requests: HashMap<u32, Command>,
-//     rng: StdRng,
-// }
-//
-// impl Requester {
-//     pub fn new(ws_service: WebsocketService) -> Self {
-//         Self {
-//             ws_service,
-//             requests: HashMap::new(),
-//             rng: StdRng::from_entropy(),
-//         }
-//     }
-//
-//     /// Retrieve a request by id
-//     pub fn get_request(&self, id: &u32) -> Option<&Command> {
-//         self.requests.get(id)
-//     }
-//
-//     /// Create a request, keep a record of it, and send it to the server over ws
-//     pub fn make_request(&mut self, command: Command) {
-//         let id = self.rng.gen();
-//         let command_clone = command.clone();
-//         self.requests.insert(id, command_clone);
-//         if self
-//             .ws_service
-//             .tx
-//             .try_send(UiClientMessage { id, command })
-//             .is_err()
-//         {
-//             error!("Cannot send command over channel");
-//         }
-//     }
-//
-//     /// Remove a request that has been responded to
-//     pub fn remove_request(&mut self, id: &u32) {
-//         self.requests.remove(id);
-//     }
-// }
+    async fn run_ws_loop(
+        url: url::Url,
+        set_error_message: WriteSignal<HashSet<AppError>>,
+        mut out_tx: futures::channel::mpsc::Sender<UiEvent>,
+    ) {
+        let mut retry_delay = std::time::Duration::from_secs(3);
+
+        loop {
+            debug!("Connecting to ws {}", url);
+            match WebSocket::open(&url.to_string()) {
+                Ok(ws) => {
+                    set_error_message.update(|errors| {
+                        errors.remove(&AppError::WsConnection);
+                    });
+                    let (_write, mut read) = ws.split();
+
+                    while let Some(msg) = read.next().await {
+                        match msg {
+                            Ok(Message::Bytes(buf)) => match deserialize::<UiEvent>(&buf) {
+                                Ok(event) => {
+                                    debug!("Decoded msg from server {:?}", event);
+                                    if out_tx.send(event).await.is_err() {
+                                        error!("Cannot send ws message over channel");
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Deserialization failed: {:?}", e);
+                                }
+                            },
+                            Ok(Message::Text(text)) => {
+                                warn!("Unexpected text from WebSocket: {}", text);
+                            }
+                            Err(e) => {
+                                error!("WebSocket error: {:?}", e);
+                                break;
+                            }
+                        }
+                    }
+
+                    debug!(
+                        "WebSocket connection closed. Reconnecting in {} seconds...",
+                        retry_delay.as_secs()
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to connect: {:?}", e);
+                }
+            }
+
+            // Update error state and sleep before retry
+            set_error_message.update(|errors| {
+                errors.insert(AppError::WsConnection);
+            });
+
+            gloo_timers::future::sleep(retry_delay).await;
+            retry_delay = std::cmp::min(retry_delay * 2, std::time::Duration::from_secs(30));
+        }
+    }
+}

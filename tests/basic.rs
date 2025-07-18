@@ -100,7 +100,7 @@ async fn basic() {
         .unwrap();
 
     let mut bob_events = bob_client.event_stream().await.unwrap();
-    // Check it dowloads - using the download events
+    // Check it downloads - using the download events
     while let Some(event) = bob_events.next().await {
         if let Ok(UiEvent::Download(download_event)) = event {
             if let DownloadInfo::Completed(_) = download_event.download_info {

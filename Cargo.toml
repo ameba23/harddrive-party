@@ -34,20 +34,14 @@ tokio = { version = "1.24.2", features = ["rt-multi-thread"] }
 rustls = { version = "0.21.10", features = ["dangerous_configuration", "quic"] }
 rcgen = "0.10.0"
 bincode = "1.3.3"
-tokio-tungstenite = "0.18.0"
+tokio-tungstenite = "0.26.2"
 clap = { version = "4.3.0", features = ["derive"] }
 colored = "2.0.0"
 mdns-sd = "0.5.10"
 local-ip-address = "0.5.1"
-cryptoxide = { version = "0.4.4", default-features = false, features = [
-  "blake2",
-  "poly1305",
-  "chacha",
-] }
 hex = "0.4.3"
 key-to-animal = "0.0.1"
-ring = "0.16.20"
-speedometer = "0.2.2"
+ring = "0.17.14"
 stunclient = "0.4.1"
 lru = "0.10.0"
 async-stream = "0.3.4"
@@ -58,6 +52,7 @@ mime_guess = "2.0.5"
 serde = { version = "1.0", features = ["derive"] }
 reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
 bytes= "1.10.1"
+x509-parser = { version = "0.17.0", features = ["verify"] }
 
 [dev-dependencies]
 tempfile = "3.3.0"

@@ -52,7 +52,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
             <Flex vertical=true>
                 <div>
                     <Icon icon=icondata::AiUserOutlined />
-                    {peer_signal.get().0}
+                    {move || peer_signal.get().0}
                     " "
                     {root_size}
                     " shared"
@@ -64,11 +64,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                             key=|file| file.name.clone()
                             children=move |file: File| {
                                 view! {
-                                    <File
-                                        file
-                                        is_shared=is_self
-                                        context=FileDisplayContext::Peer
-                                    />
+                                    <File file is_shared=is_self context=FileDisplayContext::Peer />
                                 }
                             }
                         />
@@ -124,7 +120,6 @@ pub fn Peers(
         }
     };
 
-    // let set_requester = use_context::<RequesterSetter>().unwrap().0;
     let input_value = RwSignal::new(String::new());
 
     let add_peer = move |_| {

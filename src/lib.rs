@@ -10,7 +10,10 @@ pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
 
 use crate::{
-    connections::discovery::{DiscoveryMethod, PeerConnect},
+    connections::{
+        discovery::{DiscoveryMethod, PeerConnect},
+        known_peers::KnownPeers,
+    },
     errors::UiServerErrorWrapper,
     peer::Peer,
     shares::Shares,
@@ -25,11 +28,7 @@ use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
 use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};
 
@@ -44,6 +43,7 @@ pub mod subtree_names {
     pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
     pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
     pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
+    pub const KNOWN_PEERS: &[u8; 1] = b"k";
 }
 
 /// Shared state used by both the peer connections and user interface server
@@ -52,7 +52,7 @@ pub struct SharedState {
     /// A map of peer names to active peer connections
     pub peers: Arc<Mutex<HashMap<String, Peer>>>,
     /// A list of known peer names
-    pub known_peers: Arc<RwLock<HashSet<String>>>,
+    pub known_peers: KnownPeers,
     /// The index of shared files
     pub shares: Shares,
     /// Maintains lists of requested/downloaded files
@@ -74,6 +74,7 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         db: sled::Db,
         share_dirs: Vec<String>,
@@ -83,7 +84,7 @@ impl SharedState {
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         announce_address: AnnounceAddress,
         graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
-        known_peers: Arc<RwLock<HashSet<String>>>,
+        known_peers: KnownPeers,
     ) -> anyhow::Result<Self> {
         let shares = Shares::new(db.clone(), share_dirs).await?;
 
@@ -146,18 +147,12 @@ impl SharedState {
         &self,
         announce_address: AnnounceAddress,
     ) -> Result<(), UiServerErrorWrapper> {
-        let name = announce_address.name.clone();
-
-        {
-            let mut known_peers = self.known_peers.write()?;
-            known_peers.insert(name);
-        }
-
-        let discovery_method = DiscoveryMethod::Direct { announce_address };
+        let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
         let peer_connect = PeerConnect {
             discovery_method,
+            announce_address,
             response_tx: Some(response_tx),
         };
         self.peer_announce_tx
@@ -227,7 +222,7 @@ impl SharedState {
                             id,
                             peer_public_key,
                         )) {
-                            error!("Cannot add download request {:?}", err);
+                            error!("Cannot add download request {err:?}");
                         }
                     }
                     if !entry.is_dir {
@@ -239,7 +234,7 @@ impl SharedState {
                             request_id: id,
                             downloaded: false,
                         }) {
-                            error!("Cannot make download request {:?}", err);
+                            error!("Cannot make download request {err:?}");
                         };
                     }
                 }
