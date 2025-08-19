@@ -239,7 +239,7 @@ impl Uploader {
                         .send(UiEvent::Uploaded(UploadInfo {
                             path: path.clone(),
                             bytes_read,
-                            speed: speedometer.measure().try_into().unwrap_or_default(),
+                            speed: speedometer.measure(),
                             peer_name: requester_name.clone(),
                         }))
                         .is_err()

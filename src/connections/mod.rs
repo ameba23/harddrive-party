@@ -32,6 +32,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::{
+    net::UdpSocket,
     select,
     sync::{mpsc, Mutex},
 };
@@ -200,8 +201,11 @@ impl Hdp {
                     discovery_method: DiscoveryMethod::Direct,
                     announce_address,
                 };
+                info!("Connecting to known peer... {}", peer.announce_address.name);
                 if let Err(err) = self.connect_to_peer(peer).await {
                     error!("Cannot connect to peer from known_peers {err:?}");
+                    // If this is a bad certificate error, we should probably remove the peer from
+                    // known_peers
                 };
             }
         }
@@ -397,22 +401,23 @@ impl Hdp {
         let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
-                match peer.socket_option {
-                    Some(socket) => make_server_endpoint_basic_socket(
-                        socket,
-                        cert_der,
-                        priv_key_der,
-                        self.shared_state.known_peers.clone(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        UiServerError::ConnectionError(format!("When creating endpoint: {err:?}"))
-                    })?,
-                    None => {
-                        // This should be an impossible state to get into
-                        panic!("We are beind symmetric NAT but didn't get a socket for a connecting peer");
-                    }
-                }
+                let socket = match peer.socket_option {
+                    Some(socket) => socket,
+                    None => UdpSocket::bind("0.0.0.0:0")
+                        .await
+                        .map_err(|e| UiServerError::PeerDiscovery(e.to_string()))?,
+                };
+
+                make_server_endpoint_basic_socket(
+                    socket,
+                    cert_der,
+                    priv_key_der,
+                    self.shared_state.known_peers.clone(),
+                )
+                .await
+                .map_err(|err| {
+                    UiServerError::ConnectionError(format!("When creating endpoint: {err:?}"))
+                })?
             }
         };
 
