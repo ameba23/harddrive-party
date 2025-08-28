@@ -17,6 +17,8 @@ Allows two or more peers to share files. Peers can choose directories to share, 
 - Support slow / intermittent connections - downloads continue from where they left off following dropped connection or restarting the process.
 - Hackable open source protocol.
 
+![Screenshot](./screenshot.png)
+
 ## Installation
 
 `cargo install --locked harddrive-party`
