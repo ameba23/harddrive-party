@@ -11,7 +11,7 @@ homepage = "https://gitlab.com/pegpeg/harddrive-party"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
 
 [dependencies]
-harddrive-party-shared = { version = "0.0.1", path = "../shared", default-features = false }
+harddrive-party-shared = { version = "0.0.2", path = "../shared", default-features = false }
 console_log = "0.2"
 log = "0.4"
 console_error_panic_hook = "0.1.7"

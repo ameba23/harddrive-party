@@ -157,18 +157,22 @@ pub fn Peers(
 
     view! {
         <p>
-            Announce address<code>{announce}</code> <Popover trigger_type=PopoverTriggerType::Click>
-                <PopoverTrigger slot>
-                    <span title="Copy to clipboard">
-                        <Button
-                            icon=icondata::ChCopy
-                            on:click=copy_to_clipboard
-                            size=ButtonSize::Small
-                        />
-                    </span>
-                </PopoverTrigger>
-                "Copied"
-            </Popover>
+            <Flex>
+                <span>Announce address</span>
+                <code>{announce}</code>
+                <Popover trigger_type=PopoverTriggerType::Click>
+                    <PopoverTrigger slot>
+                        <span title="Copy to clipboard">
+                            <Button
+                                icon=icondata::ChCopy
+                                on:click=copy_to_clipboard
+                                size=ButtonSize::Small
+                            />
+                        </span>
+                    </PopoverTrigger>
+                    "Copied"
+                </Popover>
+            </Flex>
         </p>
         <Input value=input_value placeholder="Enter an announce address">
             <InputPrefix slot>
