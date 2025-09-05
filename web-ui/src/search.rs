@@ -1,6 +1,6 @@
 use crate::{file::FileDisplayContext, AppContext, File};
 use harddrive_party_shared::ui_messages::PeerPath;
-use leptos::prelude::*;
+use leptos::{either::Either, prelude::*};
 use thaw::*;
 
 #[component]
@@ -31,9 +31,35 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
             }
         })
     };
+
+    let show_results = move || {
+        if app_context.get_peers.get().is_empty() && search_results.get().is_empty() {
+            Either::Left(view! {
+                <div>
+                    <p>"There are no connected peers - so there is nothing to search"</p>
+                </div>
+            })
+        } else {
+            Either::Right(view! {
+                <Table>
+                    <TableBody>
+                    <For
+                    each=search_results_iter
+                    key=|file| file.name.clone()
+                    children=move |file: File| {
+                        view! {
+                            <File file is_shared=false context=FileDisplayContext::SearchResult />
+                        }
+                    }
+                />
+                    </TableBody>
+                    </Table>
+            })
+        }
+    };
+
     view! {
         <form>
-
             <Flex>
                 <Input
                     rules=vec![InputRule::required(true.into())]
@@ -49,18 +75,6 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
                 </Button>
             </Flex>
         </form>
-        <Table>
-            <TableBody>
-                <For
-                    each=search_results_iter
-                    key=|file| file.name.clone()
-                    children=move |file: File| {
-                        view! {
-                            <File file is_shared=false context=FileDisplayContext::SearchResult />
-                        }
-                    }
-                />
-            </TableBody>
-        </Table>
+        {show_results}
     }
 }

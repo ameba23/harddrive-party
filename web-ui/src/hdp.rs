@@ -64,6 +64,7 @@ pub fn HdpUi() -> impl IntoView {
     let app_context = AppContext::new(
         ui_url,
         own_name,
+        peers.clone(),
         set_peers.clone(),
         files.clone(),
         set_files.clone(),
@@ -276,10 +277,8 @@ pub fn HdpUi() -> impl IntoView {
                                 view=move || {
                                     view! {
                                         <Peers
-                                            peers
                                             announce_address
                                             pending_peers
-                                            set_pending_peers
                                         />
                                     }
                                 }
@@ -296,10 +295,8 @@ pub fn HdpUi() -> impl IntoView {
                                 view=move || {
                                     view! {
                                         <Peers
-                                            peers
                                             announce_address
                                             pending_peers
-                                            set_pending_peers
                                         />
                                     }
                                 }

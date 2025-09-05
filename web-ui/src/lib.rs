@@ -36,6 +36,7 @@ pub fn App() -> impl IntoView {
 pub struct AppContext {
     pub client: ReadSignal<Client>,
     pub own_name: ReadSignal<Option<String>>,
+    pub get_peers: ReadSignal<HashSet<String>>,
     pub set_peers: WriteSignal<HashSet<String>>,
     pub get_files: ReadSignal<BTreeMap<PeerPath, File>>,
     pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
@@ -50,6 +51,7 @@ impl AppContext {
     pub fn new(
         ui_url: url::Url,
         own_name: ReadSignal<Option<String>>,
+        get_peers: ReadSignal<HashSet<String>>,
         set_peers: WriteSignal<HashSet<String>>,
         get_files: ReadSignal<BTreeMap<PeerPath, File>>,
         set_files: WriteSignal<BTreeMap<PeerPath, File>>,
@@ -63,6 +65,7 @@ impl AppContext {
         Self {
             client,
             own_name,
+            get_peers,
             set_peers,
             get_files,
             set_files,
