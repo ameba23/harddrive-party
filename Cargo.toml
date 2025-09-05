@@ -4,7 +4,7 @@ exclude = ["web-ui"]
 
 [package]
 name = "harddrive-party"
-version = "0.0.1"
+version = "0.0.2"
 authors = ["peg <ameba23@systemli.org>"]
 edition = "2021"
 license = "GPL-3.0-or-later"
@@ -19,7 +19,7 @@ include = [
 ]
 
 [dependencies]
-harddrive-party-shared = { version = "0.0.1", path = "shared" }
+harddrive-party-shared = { version = "0.0.2", path = "shared" }
 futures = "0.3.25"
 async-walkdir = "0.2.0"
 sled = "0.34.7"

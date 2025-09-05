@@ -37,6 +37,10 @@ You will automatically also connect to anyone else they are connected to - that 
 
 Download a file or directory by clicking the download button next to it. You can see the status of downloads and view downloaded files in the 'Transfers' tab. 
 
+To try it out, you can try connecting to the announce address `bathypelagicKomodoDragonx4hZOg2U0`. But things will work a bit different because this peer is running on a server which is not behind NAT. This means you can connect to them without giving them your own announce address. This instance is used for experimenting with new features and there is no guarantee that it will be running or functioning correctly. Also, if someone else connects to that peer, your details will be 'gossiped' allowing you to connect to them directly as well.
+
+![Screenshot](./screenshot.png)
+
 ## Protocol
 
 ### Peer discovery
