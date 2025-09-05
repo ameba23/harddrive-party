@@ -77,15 +77,13 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
 
 #[component]
 pub fn Peers(
-    peers: ReadSignal<HashSet<String>>,
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
-    set_pending_peers: WriteSignal<HashSet<String>>,
 ) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
 
     let show_peers = move || {
-        if peers.get().is_empty() {
+        if app_context.get_peers.get().is_empty() {
             Either::Left(view! {
                 <div>
                     <p>"No peers connected"</p>
@@ -95,7 +93,7 @@ pub fn Peers(
             Either::Right(view! {
                 <div>
                     <For
-                        each=move || peers.get()
+                        each=move || app_context.get_peers.get()
                         key=|name| name.clone()
                         children=move |name| view! { <Peer name is_self=false /> }
                     />
@@ -127,7 +125,7 @@ pub fn Peers(
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
             app_context.connect(announce_payload.to_string());
-            set_pending_peers.update(|pending_peers| {
+            app_context.set_pending_peers.update(|pending_peers| {
                 pending_peers.insert(announce_payload.to_string());
             });
         }
