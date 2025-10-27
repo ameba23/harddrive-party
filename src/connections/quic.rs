@@ -18,8 +18,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
 
 /// Generate a TLS certificate with Ed25519 keypair
 pub fn generate_certificate() -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    // TODO server name probably shouldn't be localhost but maybe it doesnt matter
-    let mut cert_params = rcgen::CertificateParams::new(vec!["localhost".into()]);
+    let mut cert_params = rcgen::CertificateParams::new(vec!["peer".into()]);
     cert_params.alg = &rcgen::PKCS_ED25519;
     let cert = rcgen::Certificate::from_params(cert_params)?;
     let cert_der = cert.serialize_der()?;
@@ -211,10 +210,12 @@ impl rustls::server::ClientCertVerifier for SkipClientVerification {
 
     fn verify_client_cert(
         &self,
-        _end_entity: &rustls::Certificate,
+        end_entity: &rustls::Certificate,
         _intermediates: &[rustls::Certificate],
         _now: std::time::SystemTime,
     ) -> Result<rustls::server::ClientCertVerified, rustls::Error> {
+        // This internally verifies the signature
+        let _ = certificate_to_name(end_entity.clone())?;
         Ok(rustls::server::ClientCertVerified::assertion())
     }
 }
@@ -268,6 +269,7 @@ impl rustls::sign::SigningKey for OurSigningKey {
             None
         }
     }
+
     fn algorithm(&self) -> rustls::SignatureAlgorithm {
         rustls::SignatureAlgorithm::ED25519
     }

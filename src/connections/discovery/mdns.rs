@@ -121,7 +121,7 @@ fn create_service_info(
             &id[0..min(16, id.len())],
             host_name,
             ipv4_addr,
-            addr.port(), //+ 150, // TODO
+            addr.port(),
             Some(properties),
         )?;
         Ok(service_info)

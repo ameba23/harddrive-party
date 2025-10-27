@@ -422,7 +422,7 @@ impl Hdp {
         };
 
         let connection = endpoint
-            .connect(peer.socket_address, "localhost") // TODO
+            .connect(peer.socket_address, "peer")
             .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?
             .await
             .map_err(|err| UiServerError::ConnectionError(format!("After connecting: {err:?}")))?;

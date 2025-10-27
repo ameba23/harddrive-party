@@ -192,6 +192,10 @@ impl PeerDiscovery {
         }
     }
 
+    /// Decide whether to use client verification based on our NAT type
+    ///
+    /// If we are not behind NAT we allow connections without needing to
+    /// know their announce address (containing public key) up front
     pub fn use_client_verification(&self) -> bool {
         !matches!(
             self.announce_address.connection_details,
