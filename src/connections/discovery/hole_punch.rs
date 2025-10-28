@@ -34,6 +34,15 @@ const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
 /// Maximum capacity of channel used to send/recieve holepunch pakets
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
 
+/// The number of sockets to listen on
+const UNKNOWN_PORT_INCOMING_SOCKETS: usize = 256;
+
+/// The inital holepunch packet sent
+const INIT_PUNCH: [u8; 1] = [0];
+
+/// The acknowledgement holepunch packet
+const ACK_PUNCH: [u8; 1] = [1];
+
 /// UDP socket which sends holepunch packets using the [HolePuncher]
 #[derive(Debug)]
 pub struct PunchingUdpSocket {
@@ -104,8 +113,8 @@ impl quinn::UdpPoller for PunchingUdpPoller {
         self: Pin<&mut PunchingUdpPoller>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        // Register the QUIC stack's Waker with the tokio socket for write readiness.
-        // We call poll_send_ready on the inner tokio socket.
+        // Register the QUIC stack's Waker with the tokio socket for write readiness
+        // We call poll_send_ready on the inner tokio socket
         self.inner.socket.poll_send_ready(cx)
     }
 }
@@ -125,8 +134,6 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
             transmit.destination, // The destination address
         )?;
 
-        // If try_send_to succeeds, it returns the number of bytes sent.
-        // We compare this against the expected size.
         if sent_bytes == transmit.contents.len() {
             Ok(())
         } else {
@@ -138,24 +145,6 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
             ))
         }
     }
-
-    // fn poll_send(
-    //     &self,
-    //     state: &quinn_udp::UdpState,
-    //     cx: &mut Context,
-    //     transmits: &[quinn_udp::Transmit],
-    // ) -> Poll<io::Result<usize>> {
-    //     let quinn_socket_state = &*self.quinn_socket_state;
-    //     let io = &*self.socket;
-    //     loop {
-    //         ready!(io.poll_send_ready(cx))?;
-    //         if let Ok(res) = io.try_io(Interest::WRITABLE, || {
-    //             quinn_socket_state.send(io.into(), state, transmits)
-    //         }) {
-    //             return Poll::Ready(Ok(res));
-    //         }
-    //     }
-    // }
 
     fn poll_recv(
         &self,
@@ -179,22 +168,6 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
                 return Poll::Ready(Ok(res));
             }
         }
-        // self.inner.poll_recv_from(cx, bufs[0].as_mut()).map(|poll| {
-        //            match poll {
-        //                Poll::Ready(Ok((n, addr))) => {
-        //                    meta[0] = RecvMeta {
-        //                        len: n,
-        //                        addr: addr.into(),
-        //                        ecn: None,
-        //                        stride: n,
-        //                        segment_size: n,
-        //                    };
-        //                    Ok(1)
-        //                }
-        //                Poll::Ready(Err(e)) => Err(e),
-        //                Poll::Pending => Ok(0),
-        //            }
-        //        })
     }
 
     fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
@@ -237,11 +210,17 @@ pub struct OutgoingHolepunchPacket {
 
 impl OutgoingHolepunchPacket {
     fn new_init(dest: SocketAddr) -> Self {
-        Self { data: [0u8], dest }
+        Self {
+            data: INIT_PUNCH,
+            dest,
+        }
     }
 
     fn new_ack(dest: SocketAddr) -> Self {
-        Self { data: [1u8], dest }
+        Self {
+            data: ACK_PUNCH,
+            dest,
+        }
     }
 }
 
@@ -257,10 +236,7 @@ impl HolePuncher {
     /// Make a connection by holepunching
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> Result<(), HolePunchError> {
         let mut udp_recv = self.udp_recv_tx.subscribe();
-        let mut packet = OutgoingHolepunchPacket {
-            dest: addr,
-            data: [0u8],
-        };
+        let mut packet = OutgoingHolepunchPacket::new_init(addr);
         let mut wait = false;
         let mut sent_ack = false;
         let mut received_ack = false;
@@ -273,7 +249,7 @@ impl HolePuncher {
               send = self.udp_send.send(packet.clone()) => {
                   if let Err(err) = send {
                       warn!("Failed to forward holepunch packet to {addr}: {err}");
-                  } else if packet.data == [0u8] {
+                  } else if packet.data == INIT_PUNCH {
                       debug!("sent initial packet to {addr}, waiting");
                       attempts += 1;
                       if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
@@ -383,20 +359,13 @@ impl HolePuncher {
     }
 }
 
-/// The number of sockets to listen on
-const INCOMING_SOCKETS: usize = 256;
-/// The inital holepunch packet sent
-const INIT_PUNCH: [u8; 1] = [0];
-/// The acknowledgement holepunch packet
-const ACK_PUNCH: [u8; 1] = [1];
-
 pub async fn birthday_hard_side(
     target_addr: SocketAddr,
 ) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
     let (socket_tx, socket_rx) = std_mpsc::channel(); // TODO limit
     let (stop_signal_tx, _stop_signal_rx) = broadcast::channel(1);
 
-    for _ in 0..INCOMING_SOCKETS {
+    for _ in 0..UNKNOWN_PORT_INCOMING_SOCKETS {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         let socket_tx = socket_tx.clone();
         let mut stop_signal_rx = stop_signal_tx.subscribe();
