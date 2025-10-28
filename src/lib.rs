@@ -134,7 +134,7 @@ impl SharedState {
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("Message serialized, writing...");
         send.write_all(&buf).await?;
-        send.finish().unwrap(); // TODO
+        send.finish()?;
         debug!("Message sent");
         Ok(recv)
     }
@@ -266,6 +266,8 @@ pub enum RequestError {
     SerializationError,
     #[error(transparent)]
     WriteError(#[from] quinn::WriteError),
+    #[error("Attempted to close an already closed stream")]
+    ClosedStream(#[from] quinn::ClosedStream),
 }
 
 /// A stream of Ls responses
