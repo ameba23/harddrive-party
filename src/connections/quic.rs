@@ -118,7 +118,7 @@ fn configure_server(
     crypto.alpn_protocols = supported_protocols.clone();
 
     let mut server_config =
-        ServerConfig::with_crypto(Arc::<QuicServerConfig>::new(crypto.try_into().unwrap()));
+        ServerConfig::with_crypto(Arc::<QuicServerConfig>::new(crypto.try_into()?));
 
     Arc::get_mut(&mut server_config.transport)
         .ok_or_else(|| anyhow!("Cannot get transport config"))?
@@ -136,8 +136,7 @@ fn configure_server(
 
     client_crypto.alpn_protocols = supported_protocols;
 
-    let client_config =
-        ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto).unwrap()));
+    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
 
     Ok((server_config, client_config))
 }

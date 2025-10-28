@@ -129,10 +129,9 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
         // Transmit (which is for GSO/GRO). For simplicity and standard usage, we
         // assume a single datagram send.
 
-        let sent_bytes = self.socket.try_send_to(
-            transmit.contents,    // The datagram payload
-            transmit.destination, // The destination address
-        )?;
+        let sent_bytes = self
+            .socket
+            .try_send_to(transmit.contents, transmit.destination)?;
 
         if sent_bytes == transmit.contents.len() {
             Ok(())
