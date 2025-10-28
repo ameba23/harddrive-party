@@ -4,7 +4,7 @@ use harddrive_party_shared::wire_messages::AnnounceAddress;
 use crate::errors::UiServerErrorWrapper;
 
 /// Persistent store of known peers for certificate checking and reconnecting
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KnownPeers {
     db: sled::Tree,
 }

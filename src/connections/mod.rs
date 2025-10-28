@@ -24,7 +24,7 @@ use crate::{
 use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
-use rustls::Certificate;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -83,20 +83,22 @@ impl Hdp {
             let existing_cert = config_db.get(b"cert");
             let existing_priv = config_db.get(b"priv");
             match (existing_cert, existing_priv) {
-                (Ok(Some(cert_der)), Ok(Some(priv_key_der))) => {
-                    (cert_der.to_vec(), priv_key_der.to_vec())
-                }
+                (Ok(Some(cert_der)), Ok(Some(priv_key_der))) => (
+                    CertificateDer::from(cert_der.to_vec()),
+                    PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(priv_key_der.to_vec())),
+                ),
                 _ => {
                     let (cert_der, priv_key_der) = generate_certificate()?;
-                    config_db.insert(b"cert", cert_der.clone())?;
-                    config_db.insert(b"priv", priv_key_der.clone())?;
+                    config_db.insert(b"cert", cert_der.as_ref())?;
+                    config_db.insert(b"priv", priv_key_der.secret_der())?;
                     (cert_der, priv_key_der)
                 }
             }
         };
 
         // Derive a human-readable name from the public key
-        let (name, pk_hash) = certificate_to_name(Certificate(cert_der.clone()))?;
+        let (name, pk_hash) =
+            certificate_to_name(CertificateDer::from_slice(&cert_der.clone()).into_owned())?;
 
         let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
 
@@ -252,7 +254,7 @@ impl Hdp {
         conn: quinn::Connection,
         incoming: bool,
         maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
-        remote_cert: Certificate,
+        remote_cert: CertificateDer<'static>,
     ) -> Result<(), UiServerError> {
         let (peer_name, peer_public_key) = certificate_to_name(remote_cert)
             .map_err(|err| UiServerError::PeerDiscovery(err.to_string()))?;
@@ -373,7 +375,7 @@ impl Hdp {
     async fn handle_incoming_connection(
         &mut self,
         maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
-        incoming_conn: quinn::Connecting,
+        incoming_conn: quinn::Incoming,
     ) -> Result<(), UiServerErrorWrapper> {
         let conn = incoming_conn.await?;
         debug!(
@@ -390,7 +392,8 @@ impl Hdp {
             }
         }
 
-        let remote_cert = get_certificate_from_connection(&conn)?;
+        let c = conn.clone();
+        let remote_cert = get_certificate_from_connection(&c)?;
         self.handle_connection(conn, true, maybe_peer_details, remote_cert)
             .await?;
         Ok(())
@@ -444,8 +447,10 @@ impl Hdp {
 /// Given a TLS certificate, get a 32 byte public key and a human-readable
 /// name derived from it.
 /// This internally verifies the signature, and only accepts Ed25519.
-pub fn certificate_to_name(cert: Certificate) -> Result<(String, PublicKey), rustls::Error> {
-    let (_, cert) = X509Certificate::from_der(&cert.0)
+pub fn certificate_to_name(
+    cert: CertificateDer<'static>,
+) -> Result<(String, PublicKey), rustls::Error> {
+    let (_, cert) = X509Certificate::from_der(&cert)
         .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
 
     cert.verify_signature(None)
@@ -480,12 +485,12 @@ async fn accept_incoming_request(
 /// The QUIC server
 /// In the case that our NAT type makes it not possible to have a single UDP endpoint for all peer
 /// connections, this stores the certificate details
-#[derive(Clone)]
+#[derive(Debug)]
 pub enum ServerConnection {
     /// A single endpoint
     WithEndpoint(Endpoint),
     /// Certificate details used to create an endpoint for each peer connection
-    Symmetric(Vec<u8>, Vec<u8>),
+    Symmetric(CertificateDer<'static>, PrivateKeyDer<'static>),
 }
 
 impl std::fmt::Display for ServerConnection {
@@ -506,6 +511,19 @@ impl std::fmt::Display for ServerConnection {
             }
         }
         Ok(())
+    }
+}
+
+impl Clone for ServerConnection {
+    fn clone(&self) -> Self {
+        match self {
+            ServerConnection::WithEndpoint(endpoint) => {
+                ServerConnection::WithEndpoint(endpoint.clone())
+            }
+            ServerConnection::Symmetric(cert, key) => {
+                ServerConnection::Symmetric(cert.clone(), key.clone_key())
+            }
+        }
     }
 }
 

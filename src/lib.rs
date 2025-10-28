@@ -134,7 +134,7 @@ impl SharedState {
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("Message serialized, writing...");
         send.write_all(&buf).await?;
-        send.finish().await?;
+        send.finish().unwrap(); // TODO
         debug!("Message sent");
         Ok(recv)
     }

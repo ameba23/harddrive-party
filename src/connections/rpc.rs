@@ -147,7 +147,7 @@ impl Rpc {
                     output.write_all(&buf).await?;
                     debug!("Written ls response");
                 }
-                output.finish().await?;
+                output.finish().unwrap();
                 Ok(())
             }
             Err(error) => {
@@ -249,7 +249,7 @@ impl Uploader {
                     output.write_all(&buf[..n]).await?;
                     debug!("Uploaded {bytes_read} bytes of {size}");
                 }
-                output.finish().await?;
+                output.finish().unwrap();
                 Ok(())
             }
             Err(rpc_error) => send_read_error(rpc_error, output).await,
@@ -318,7 +318,7 @@ impl Uploader {
 async fn send_read_error(error: RpcError, mut output: quinn::SendStream) -> Result<(), RpcError> {
     // TODO send serialised version of the error
     output.write_all(&[0]).await?;
-    output.finish().await?;
+    output.finish().unwrap();
     Err(error)
 }
 
@@ -340,7 +340,7 @@ async fn send_ls_error(error: RpcError, mut output: quinn::SendStream) -> Result
     output.write_all(&length.to_be_bytes()).await?;
 
     output.write_all(&buf).await?;
-    output.finish().await?;
+    output.finish().unwrap();
     Err(error)
 }
 

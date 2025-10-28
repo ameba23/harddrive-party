@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use std::{
     io,
     net::{IpAddr, SocketAddr},
+    pin::Pin,
     sync::{mpsc as std_mpsc, Arc},
     task::{Context, Poll},
     time::Duration,
@@ -21,10 +22,17 @@ use tokio::{
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
 pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
 
+/// How many attempts to holepunch
 const MAX_HOLEPUNCH_ATTEMPTS: usize = 50;
-const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
-const PACKET_CHANNEL_CAPACITY: usize = 1024;
+
+/// How long to wait between holepunch attempts (milliseconds)
 const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
+
+/// How many attempts to holepunch when guessing the remote port
+const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
+
+/// Maximum capacity of channel used to send/recieve holepunch pakets
+const PACKET_CHANNEL_CAPACITY: usize = 1024;
 
 /// UDP socket which sends holepunch packets using the [HolePuncher]
 #[derive(Debug)]
@@ -41,7 +49,7 @@ impl PunchingUdpSocket {
     pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
         let socket = socket.into_std()?;
 
-        quinn_udp::UdpSocketState::configure((&socket).into())?;
+        quinn_udp::UdpSocketState::new((&socket).into())?;
 
         let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
@@ -69,8 +77,8 @@ impl PunchingUdpSocket {
 
         Ok((
             Self {
-                socket,
-                quinn_socket_state: Arc::new(quinn_udp::UdpSocketState::new()),
+                socket: socket.clone(),
+                quinn_socket_state: Arc::new(quinn_udp::UdpSocketState::new((&socket).into())?),
                 udp_recv_tx: udp_recv_tx.clone(),
             },
             HolePuncher {
@@ -86,24 +94,68 @@ impl PunchingUdpSocket {
     }
 }
 
+#[derive(Debug)]
+struct PunchingUdpPoller {
+    inner: Arc<PunchingUdpSocket>,
+}
+
+impl quinn::UdpPoller for PunchingUdpPoller {
+    fn poll_writable(
+        self: Pin<&mut PunchingUdpPoller>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        // Register the QUIC stack's Waker with the tokio socket for write readiness.
+        // We call poll_send_ready on the inner tokio socket.
+        self.inner.socket.poll_send_ready(cx)
+    }
+}
+
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {
-    fn poll_send(
-        &self,
-        state: &quinn_udp::UdpState,
-        cx: &mut Context,
-        transmits: &[quinn_udp::Transmit],
-    ) -> Poll<io::Result<usize>> {
-        let quinn_socket_state = &*self.quinn_socket_state;
-        let io = &*self.socket;
-        loop {
-            ready!(io.poll_send_ready(cx))?;
-            if let Ok(res) = io.try_io(Interest::WRITABLE, || {
-                quinn_socket_state.send(io.into(), state, transmits)
-            }) {
-                return Poll::Ready(Ok(res));
-            }
+    fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
+        Box::pin(PunchingUdpPoller { inner: self })
+    }
+
+    fn try_send(&self, transmit: &quinn_udp::Transmit<'_>) -> io::Result<()> {
+        // NOTE: tokio::net::UdpSocket does not directly support QUIC's multi-segment
+        // Transmit (which is for GSO/GRO). For simplicity and standard usage, we
+        // assume a single datagram send.
+
+        let sent_bytes = self.socket.try_send_to(
+            transmit.contents,    // The datagram payload
+            transmit.destination, // The destination address
+        )?;
+
+        // If try_send_to succeeds, it returns the number of bytes sent.
+        // We compare this against the expected size.
+        if sent_bytes == transmit.contents.len() {
+            Ok(())
+        } else {
+            // This case should generally not happen for UDP unless the datagram was
+            // partially sent, which is usually not possible with a single UDP send.
+            // If it were a stream, a partial write would be normal.
+            Err(io::Error::other(
+                "Partial UDP datagram send detected, which is unexpected.",
+            ))
         }
     }
+
+    // fn poll_send(
+    //     &self,
+    //     state: &quinn_udp::UdpState,
+    //     cx: &mut Context,
+    //     transmits: &[quinn_udp::Transmit],
+    // ) -> Poll<io::Result<usize>> {
+    //     let quinn_socket_state = &*self.quinn_socket_state;
+    //     let io = &*self.socket;
+    //     loop {
+    //         ready!(io.poll_send_ready(cx))?;
+    //         if let Ok(res) = io.try_io(Interest::WRITABLE, || {
+    //             quinn_socket_state.send(io.into(), state, transmits)
+    //         }) {
+    //             return Poll::Ready(Ok(res));
+    //         }
+    //     }
+    // }
 
     fn poll_recv(
         &self,
@@ -127,6 +179,22 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
                 return Poll::Ready(Ok(res));
             }
         }
+        // self.inner.poll_recv_from(cx, bufs[0].as_mut()).map(|poll| {
+        //            match poll {
+        //                Poll::Ready(Ok((n, addr))) => {
+        //                    meta[0] = RecvMeta {
+        //                        len: n,
+        //                        addr: addr.into(),
+        //                        ecn: None,
+        //                        stride: n,
+        //                        segment_size: n,
+        //                    };
+        //                    Ok(1)
+        //                }
+        //                Poll::Ready(Err(e)) => Err(e),
+        //                Poll::Pending => Ok(0),
+        //            }
+        //        })
     }
 
     fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
