@@ -295,7 +295,7 @@ async fn make_read_request(
     let (mut send, recv) = connection.open_bi().await?;
     let buf = serialize(&request)?;
     send.write_all(&buf).await?;
-    send.finish().await?;
+    send.finish()?;
     Ok(recv)
 }
 
