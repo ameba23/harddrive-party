@@ -127,9 +127,11 @@ impl Shares {
         let path = path_option.unwrap_or_default();
 
         // Check that the given subdir / file exists
-        if let Ok(None) = self.dirs.get(&path) {
-            if let Ok(None) = self.files.get(&path) {
-                return Err(EntryParseError::PathNotFound);
+        if !path.is_empty() {
+            if let Ok(None) = self.dirs.get(&path) {
+                if let Ok(None) = self.files.get(&path) {
+                    return Err(EntryParseError::PathNotFound);
+                }
             }
         }
 
@@ -477,5 +479,19 @@ mod tests {
         }
         // Make sure we found every entry
         assert_eq!(test_entries.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn share_query_with_no_shares() {
+        let storage = TempDir::new().unwrap();
+        let mut db_dir = storage.as_ref().to_owned();
+        db_dir.push("db");
+        let db = sled::open(db_dir).expect("open");
+
+        let shares = Shares::new(db.clone(), Vec::new()).await.unwrap();
+
+        let mut responses = shares.query(None, None, true).unwrap();
+
+        assert!(responses.next().is_none());
     }
 }
