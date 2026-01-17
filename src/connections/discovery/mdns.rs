@@ -4,7 +4,7 @@ use crate::connections::known_peers::KnownPeers;
 use super::{DiscoveredPeer, DiscoveryMethod};
 use anyhow::anyhow;
 use harddrive_party_shared::wire_messages::AnnounceAddress;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{
     cmp::min,
@@ -62,7 +62,10 @@ impl MdnsServer {
                                 } else {
                                     debug!("Found peer on mdns {their_addr:?}");
 
-                                    known_peers.add_peer(&their_announce_address).unwrap();
+                                    if let Err(err) = known_peers.add_peer(&their_announce_address)
+                                    {
+                                        error!("Unable to add peer to known-peers db: {err}");
+                                    }
 
                                     // Only connect if our address is lexicographicaly greater than
                                     // theirs - to prevent duplicate connections

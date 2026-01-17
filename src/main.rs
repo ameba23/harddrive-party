@@ -18,10 +18,16 @@ struct Cli {
     #[clap(subcommand)]
     command: CliCommand,
     /// Where to host UI, or where to expect it to be hosted
-    #[arg(short, long, required = false, default_value = "http://127.0.0.1:3030")]
+    #[arg(
+        short,
+        long,
+        required = false,
+        default_value = "http://127.0.0.1:3030",
+        global = true
+    )]
     ui_address: String,
     /// Verbose mode with additional logging
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     verbose: bool,
 }
 
