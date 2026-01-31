@@ -18,6 +18,7 @@ use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 use super::known_peers::KnownPeers;
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility
 const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
@@ -123,7 +124,8 @@ fn configure_server(
     Arc::get_mut(&mut server_config.transport)
         .ok_or_else(|| anyhow!("Cannot get transport config"))?
         .max_concurrent_uni_streams(0_u8.into())
-        .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+        .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL))
+        .max_idle_timeout(Some(IDLE_TIMEOUT.try_into()?));
 
     let client_crypto_builder = rustls::ClientConfig::builder();
 
@@ -136,7 +138,14 @@ fn configure_server(
 
     client_crypto.alpn_protocols = supported_protocols;
 
-    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+    let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+    transport.max_idle_timeout(Some(IDLE_TIMEOUT.try_into()?));
+    transport.max_concurrent_uni_streams(0_u8.into());
+
+    client_config.transport_config(Arc::new(transport));
 
     Ok((server_config, client_config))
 }
