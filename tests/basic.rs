@@ -29,8 +29,13 @@ async fn setup_peer(share_dirs: Vec<String>) -> (SharedState, reqwest::Url) {
     (shared_state, url)
 }
 
+fn init_logger() {
+    let _ = env_logger::builder().is_test(true).try_init();
+}
+
 #[tokio::test]
 async fn basic() {
+    init_logger();
     let (alice, alice_url) = setup_peer(vec!["tests/test-data".to_string()]).await;
 
     let (bob, bob_url) = setup_peer(vec![]).await;
@@ -45,7 +50,7 @@ async fn basic() {
         }
     }
 
-    // Create clients
+    // Create UI clients
     let alice_client = Client::new(alice_url);
     let bob_client = Client::new(bob_url);
 

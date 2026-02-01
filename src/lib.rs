@@ -200,7 +200,6 @@ impl SharedState {
                 Some(peer) => peer.public_key,
                 None => {
                     warn!("Handling request to download a file from a peer who is not connected");
-                    // TODO return an error
                     return Err(
                         UiServerError::ConnectionError("Peer not connected".to_string()).into(),
                     );

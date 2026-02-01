@@ -24,6 +24,7 @@ use crate::{
 use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
+use rand::Rng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     collections::HashMap,
@@ -44,10 +45,18 @@ const MAX_REQUEST_SIZE: usize = 1024;
 /// The size in bytes of a public key (certificate hash)
 const PUBLIC_KEY_LENGTH: usize = 32;
 
+/// Number of times to attempt to reconnect to a peer following lost connection
+const RECONNECT_MAX_ATTEMPTS: usize = 20;
+/// Initial delay for reconnection attempt (backs off exponentially)
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+/// Maximum backoff delay
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
+
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 
 /// A harddrive-party instance
 pub struct Hdp {
+    /// Shared state between UI server and backend
     pub shared_state: SharedState,
     /// Remote proceduce call for share queries and downloads
     rpc: Rpc,
@@ -401,6 +410,7 @@ impl Hdp {
 
     /// Initiate a Quic connection to a remote peer
     async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<(), UiServerError> {
+        // If we don't have a static endpoint, create one for this connection
         let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
@@ -424,11 +434,8 @@ impl Hdp {
             }
         };
 
-        let connection = endpoint
-            .connect(peer.socket_address, "peer")
-            .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?
-            .await
-            .map_err(|err| UiServerError::ConnectionError(format!("After connecting: {err:?}")))?;
+        // Keep attempting connection with backoff
+        let connection = connect_with_backoff(&endpoint, peer.socket_address, "peer").await?;
 
         let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
             UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
@@ -533,4 +540,52 @@ pub fn get_timestamp() -> Duration {
     system_time
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("Time went backwards")
+}
+
+/// Adds jitter to reconnection (to avoid all peers connecting at the same time)
+fn jittered(delay: Duration) -> Duration {
+    let mut rng = rand::thread_rng();
+
+    let base_ms = delay.as_millis() as i64;
+    let jitter_ms = (base_ms as f64 * 0.2) as i64;
+
+    let offset = rng.gen_range(-jitter_ms..=jitter_ms);
+    let final_ms = (base_ms + offset).max(0) as u64;
+
+    Duration::from_millis(final_ms)
+}
+
+/// Connect to a peer, attempting several times with a backoff delay
+async fn connect_with_backoff(
+    endpoint: &quinn::Endpoint,
+    peer_addr: std::net::SocketAddr,
+    server_name: &str,
+) -> Result<quinn::Connection, UiServerError> {
+    let mut delay = RECONNECT_INITIAL_DELAY;
+
+    for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
+        let connecting = endpoint
+            .connect(peer_addr, server_name)
+            .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?;
+
+        match connecting.await {
+            Ok(conn) => return Ok(conn),
+            Err(err) => {
+                // If this was the last attempt, return the error
+                if attempt >= RECONNECT_MAX_ATTEMPTS {
+                    return Err(UiServerError::ConnectionError(format!(
+                        "After connecting (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
+                    )));
+                }
+
+                warn!("Connection failed: {err} Retrying...");
+                let sleep_for = jittered(delay);
+                tokio::time::sleep(sleep_for).await;
+
+                // Exponential backoff with cap
+                delay = std::cmp::min(delay.saturating_mul(2), RECONNECT_MAX_DELAY);
+            }
+        }
+    }
+    unreachable!("Loop either returns success or error");
 }
