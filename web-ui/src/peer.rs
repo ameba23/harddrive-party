@@ -58,19 +58,21 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                     {root_size}
                     " shared"
                 </div>
-                <Table>
-                    <TableBody>
-                        <For
-                            each=files_iter
-                            key=|file| file.name.clone()
-                            children=move |file: File| {
-                                view! {
-                                    <File file is_shared=is_self context=FileDisplayContext::Peer />
+                <div class="table-scroll">
+                    <Table>
+                        <TableBody>
+                            <For
+                                each=files_iter
+                                key=|file| file.name.clone()
+                                children=move |file: File| {
+                                    view! {
+                                        <File file is_shared=is_self context=FileDisplayContext::Peer />
+                                    }
                                 }
-                            }
-                        />
-                    </TableBody>
-                </Table>
+                            />
+                        </TableBody>
+                    </Table>
+                </div>
             </Flex>
         </div>
     }

@@ -41,19 +41,21 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
             })
         } else {
             Either::Right(view! {
-                <Table>
-                    <TableBody>
-                    <For
-                    each=search_results_iter
-                    key=|file| file.name.clone()
-                    children=move |file: File| {
-                        view! {
-                            <File file is_shared=false context=FileDisplayContext::SearchResult />
+                <div class="table-scroll">
+                    <Table>
+                        <TableBody>
+                        <For
+                        each=search_results_iter
+                        key=|file| file.name.clone()
+                        children=move |file: File| {
+                            view! {
+                                <File file is_shared=false context=FileDisplayContext::SearchResult />
+                            }
                         }
-                    }
-                />
-                    </TableBody>
-                    </Table>
+                    />
+                        </TableBody>
+                        </Table>
+                </div>
             })
         }
     };
