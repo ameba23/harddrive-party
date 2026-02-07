@@ -45,6 +45,8 @@ pub struct AppContext {
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
     pub set_pending_peers: WriteSignal<HashSet<String>>,
+    pub get_known_peers: ReadSignal<Vec<String>>,
+    pub set_known_peers: WriteSignal<Vec<String>>,
 }
 
 impl AppContext {
@@ -60,6 +62,8 @@ impl AppContext {
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
         set_pending_peers: WriteSignal<HashSet<String>>,
+        get_known_peers: ReadSignal<Vec<String>>,
+        set_known_peers: WriteSignal<Vec<String>>,
     ) -> Self {
         let (client, _set_client) = signal(Client::new(ui_url));
         Self {
@@ -74,6 +78,8 @@ impl AppContext {
             set_error_message,
             set_search_results,
             set_pending_peers,
+            get_known_peers,
+            set_known_peers,
         }
     }
 

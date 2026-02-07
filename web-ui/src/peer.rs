@@ -1,4 +1,5 @@
 use crate::{
+    components::announce_address::AnnounceAddressView,
     display_bytes,
     file::{File, FileDisplayContext},
     AppContext, PeerPath,
@@ -79,6 +80,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
 pub fn Peers(
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
+    known_peers: ReadSignal<Vec<String>>,
 ) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
 
@@ -100,6 +102,19 @@ pub fn Peers(
                 </div>
             })
         }
+    };
+
+    let known_peers_iter = move || {
+        let connected = app_context.get_peers.get();
+        known_peers
+            .get()
+            .into_iter()
+            .filter(|announce_address| {
+                !connected
+                    .iter()
+                    .any(|name| announce_address.starts_with(name))
+            })
+            .collect::<Vec<_>>()
     };
 
     let show_pending_peers = move || {
@@ -181,5 +196,19 @@ pub fn Peers(
         {show_pending_peers}
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
+        <h2 class="text-xl">"Known peers"</h2>
+        <ul class="known-peers-list">
+            <For
+                each=known_peers_iter
+                key=|announce_address| announce_address.clone()
+                children=move |announce_address| {
+                    view! {
+                        <li>
+                            <AnnounceAddressView announce_address />
+                        </li>
+                    }
+                }
+            />
+        </ul>
     }
 }

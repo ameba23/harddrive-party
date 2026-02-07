@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 
 # Default build type is release
 BUILD_ARGS="--release"
