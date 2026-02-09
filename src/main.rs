@@ -134,7 +134,16 @@ async fn main() -> anyhow::Result<()> {
             };
             create_dir_all(&download_dir).await?;
 
-            let mut hdp = Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
+            let local_address = None;
+
+            let mut hdp = Hdp::new(
+                storage,
+                initial_share_dirs,
+                download_dir,
+                !no_mdns,
+                local_address,
+            )
+            .await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.shared_state.name.green(),

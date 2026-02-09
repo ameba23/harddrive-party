@@ -300,3 +300,256 @@ pub async fn process_length_prefix(
     };
     Ok(stream.boxed())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::connections::discovery::DiscoveredPeer;
+    use crate::ui_messages::{DownloadInfo, FilesQuery};
+    use crate::wire_messages::Entry;
+    use futures::StreamExt;
+    use harddrive_party_shared::client::ClientError;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    fn init_logger() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, reqwest::Url) {
+        let storage = TempDir::new().unwrap();
+        let downloads = storage.path().to_path_buf();
+        let hdp = Hdp::new(
+            storage,
+            share_dirs,
+            downloads,
+            false,
+            Some("127.0.0.1:0".parse().unwrap()),
+        )
+        .await
+        .unwrap();
+
+        let http_server_addr =
+            ui_server::http_server(hdp.shared_state.clone(), "127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+        let url = format!("http://{}", http_server_addr).parse().unwrap();
+        (hdp, url)
+    }
+
+    fn mock_discovered_peer(announce_address: AnnounceAddress) -> DiscoveredPeer {
+        DiscoveredPeer {
+            socket_address: format!(
+                "127.0.0.1:{}",
+                announce_address.connection_details.port().unwrap()
+            )
+            .parse()
+            .unwrap(),
+            socket_option: None,
+            discovery_method: DiscoveryMethod::Direct,
+            announce_address,
+        }
+    }
+
+    #[tokio::test]
+    async fn basic() {
+        init_logger();
+        let (mut alice_hdp, alice_url) = setup_peer(vec!["tests/test-data".to_string()]).await;
+        let alice = alice_hdp.shared_state.clone();
+        let alice_local_announce = alice.announce_address.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let (mut bob_hdp, bob_url) = setup_peer(vec![]).await;
+        bob_hdp
+            .shared_state
+            .known_peers
+            .add_peer(&alice_local_announce)
+            .unwrap();
+
+        bob_hdp
+            .connect_to_peer(mock_discovered_peer(alice_local_announce))
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            bob_hdp.run().await;
+        });
+
+        let alice_client = ui_server::client::Client::new(alice_url);
+        let bob_client = ui_server::client::Client::new(bob_url);
+
+        let mut response_stream = alice_client
+            .shares(IndexQuery {
+                recursive: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let mut response_entries = HashSet::new();
+        while let Some(item) = response_stream.next().await {
+            if let LsResponse::Success(entries) = item.unwrap() {
+                for entry in entries {
+                    response_entries.insert(entry);
+                }
+            }
+        }
+        assert_eq!(response_entries, create_test_entries());
+
+        let query = FilesQuery {
+            peer_name: None,
+            query: IndexQuery {
+                recursive: true,
+                ..Default::default()
+            },
+        };
+        let mut response_stream = bob_client.files(query).await.unwrap();
+
+        let mut response_entries = HashSet::new();
+        while let Some(item) = response_stream.next().await {
+            if let (LsResponse::Success(entries), peer_name) = item.unwrap() {
+                if peer_name == alice.name {
+                    for entry in entries {
+                        response_entries.insert(entry);
+                    }
+                }
+            }
+        }
+        assert_eq!(response_entries, create_test_entries());
+
+        let request_id = bob_client
+            .download(&PeerPath {
+                path: "test-data/somefile".to_string(),
+                peer_name: alice.name,
+            })
+            .await
+            .unwrap();
+
+        let mut bob_events = bob_client.event_stream().await.unwrap();
+        while let Some(event) = bob_events.next().await {
+            if let Ok(UiEvent::Download(download_event)) = event {
+                if let DownloadInfo::Completed(_) = download_event.download_info {
+                    break;
+                }
+            }
+        }
+
+        let mut requested_files = bob_client.requested_files(request_id).await.unwrap();
+        let requested_file = requested_files.next().await.unwrap().unwrap();
+        assert_eq!(requested_file[0].path, "test-data/somefile");
+    }
+
+    #[tokio::test]
+    async fn add_share_dir() {
+        let (mut alice_hdp, alice_url) = setup_peer(Vec::new()).await;
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let alice_client = ui_server::client::Client::new(alice_url);
+
+        let num_files_added = alice_client
+            .add_share("tests/test-data".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(num_files_added, 3);
+
+        let mut response_stream = alice_client
+            .shares(IndexQuery {
+                recursive: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let mut response_entries = HashSet::new();
+        while let Some(item) = response_stream.next().await {
+            if let LsResponse::Success(entries) = item.unwrap() {
+                for entry in entries {
+                    response_entries.insert(entry);
+                }
+            }
+        }
+        assert_eq!(response_entries, create_test_entries());
+
+        alice_client
+            .remove_share("test-data".to_string())
+            .await
+            .unwrap();
+
+        let mut response_stream = alice_client
+            .shares(IndexQuery {
+                recursive: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let mut response_entries = HashSet::new();
+        while let Some(item) = response_stream.next().await {
+            if let LsResponse::Success(entries) = item.unwrap() {
+                for entry in entries {
+                    response_entries.insert(entry);
+                }
+            }
+        }
+
+        assert_eq!(
+            response_entries,
+            HashSet::from([Entry {
+                name: String::new(),
+                size: 0,
+                is_dir: true
+            }])
+        );
+
+        assert_eq!(
+            alice_client.remove_share("test-data".to_string()).await,
+            Err(ClientError::ServerError(UiServerError::AddShare(
+                "Share dir does not exist in DB".to_string()
+            )))
+        );
+    }
+
+    fn create_test_entries() -> HashSet<Entry> {
+        HashSet::from([
+            Entry {
+                name: "".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data".to_string(),
+                size: 17,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir".to_string(),
+                size: 12,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir".to_string(),
+                size: 6,
+                is_dir: true,
+            },
+            Entry {
+                name: "test-data/somefile".to_string(),
+                size: 5,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/anotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+            Entry {
+                name: "test-data/subdir/subsubdir/yetanotherfile".to_string(),
+                size: 6,
+                is_dir: false,
+            },
+        ])
+    }
+}
