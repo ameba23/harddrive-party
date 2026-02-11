@@ -306,11 +306,13 @@ mod tests {
     use super::*;
     use crate::connections::discovery::DiscoveredPeer;
     use crate::ui_messages::{DownloadInfo, FilesQuery};
-    use crate::wire_messages::Entry;
+    use crate::wire_messages::{AnnouncePeer, Entry, ReadQuery, Request};
     use futures::StreamExt;
     use harddrive_party_shared::client::ClientError;
     use std::collections::HashSet;
     use tempfile::TempDir;
+    use tokio::fs;
+    use tokio::time::{timeout, Duration};
 
     fn init_logger() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -371,6 +373,18 @@ mod tests {
         let bob_client = ui_server::client::Client::new(bob_url);
 
         (alice, bob, alice_client, bob_client)
+    }
+
+    async fn connect_peers(initiator: &mut Hdp, target: &SharedState) {
+        initiator
+            .shared_state
+            .known_peers
+            .add_peer(&target.announce_address)
+            .unwrap();
+        initiator
+            .connect_to_peer(mock_discovered_peer(target.announce_address.clone()))
+            .await
+            .unwrap();
     }
 
     fn mock_discovered_peer(announce_address: AnnounceAddress) -> DiscoveredPeer {
@@ -517,6 +531,141 @@ mod tests {
                 is_dir: false,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn gossiped_peer_connection() {
+        init_logger();
+        let (mut alice_hdp, _alice_url) =
+            setup_peer(vec!["tests/test-data".to_string()]).await;
+        let alice = alice_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let (mut bob_hdp, _bob_url) = setup_peer(vec![]).await;
+        let bob = bob_hdp.shared_state.clone();
+
+        let (mut carol_hdp, _carol_url) = setup_peer(vec![]).await;
+        let carol = carol_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            carol_hdp.run().await;
+        });
+
+        // Bob connects to Alice and Carol
+        connect_peers(&mut bob_hdp, &alice).await;
+        connect_peers(&mut bob_hdp, &carol).await;
+        tokio::spawn(async move {
+            bob_hdp.run().await;
+        });
+
+        // Alice must trust Carol's cert for outgoing verification
+        alice
+            .known_peers
+            .add_peer(&carol.announce_address)
+            .unwrap();
+
+        let mut alice_events = alice.event_broadcaster.subscribe();
+        let announce_peer = AnnouncePeer {
+            announce_address: carol.announce_address.clone(),
+        };
+        let _ = bob
+            .request(Request::AnnouncePeer(announce_peer), &alice.name)
+            .await
+            .unwrap();
+
+        let connected = timeout(Duration::from_secs(5), async move {
+            while let Ok(event) = alice_events.recv().await {
+                if let UiEvent::PeerConnected { name } = event {
+                    if name == carol.name {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(connected, "Alice did not connect to Carol via gossip");
+    }
+
+    #[tokio::test]
+    async fn uploaded_event_emitted_on_read() {
+        init_logger();
+        let (alice, bob, alice_client, bob_client) =
+            setup_connected_peers(vec!["tests/test-data".to_string()]).await;
+
+        let mut alice_events = alice_client.event_stream().await.unwrap();
+        let mut read_stream = bob_client
+            .read(
+                alice.name.clone(),
+                ReadQuery {
+                    path: "test-data/somefile".to_string(),
+                    start: None,
+                    end: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let read_task = tokio::spawn(async move {
+            while let Some(Ok(_chunk)) = read_stream.next().await {}
+        });
+
+        let uploaded = timeout(Duration::from_secs(5), async move {
+            while let Some(event) = alice_events.next().await {
+                if let Ok(UiEvent::Uploaded(upload_info)) = event {
+                    if upload_info.path == "test-data/somefile"
+                        && upload_info.peer_name == bob.name
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+
+        let _ = read_task.await;
+
+        assert!(uploaded, "Did not receive Uploaded event from Alice");
+    }
+
+    #[tokio::test]
+    async fn ranged_read_returns_exact_requested_slice() {
+        init_logger();
+        let (alice, _bob, _alice_client, bob_client) =
+            setup_connected_peers(vec!["tests/test-data".to_string()]).await;
+
+        let path = "test-data/subdir/anotherfile".to_string();
+        let start = 1_u64;
+        let end = 3_u64;
+
+        let mut read_stream = bob_client
+            .read(
+                alice.name.clone(),
+                ReadQuery {
+                    path: path.clone(),
+                    start: Some(start),
+                    end: Some(end),
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut received = Vec::new();
+        while let Some(chunk) = read_stream.next().await {
+            received.extend_from_slice(&chunk.unwrap());
+        }
+
+        let full = fs::read("tests/test-data/subdir/anotherfile")
+            .await
+            .unwrap();
+        let expected = &full[start as usize..end as usize];
+
+        assert_eq!(received, expected);
     }
 
     #[tokio::test]

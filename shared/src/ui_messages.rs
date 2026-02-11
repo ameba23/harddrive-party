@@ -67,6 +67,7 @@ pub struct UiRequestedFile {
 pub struct UploadInfo {
     pub path: String,
     pub bytes_read: u64,
+    pub total_size: u64,
     pub speed: usize,
     pub peer_name: String,
 }
