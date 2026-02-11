@@ -32,6 +32,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};
 
+/// Maximum allowed payload size for a single length-prefixed peer message.
+const MAX_LENGTH_PREFIX_MESSAGE_SIZE: u32 = 1024 * 1024;
+
 /// Key-value store sub-tree names
 pub mod subtree_names {
     pub const CONFIG: &[u8; 1] = b"c";
@@ -282,6 +285,11 @@ pub async fn process_length_prefix(
         while let Ok(()) = recv.read_exact(&mut length_buf).await {
             let length: u32 = u32::from_be_bytes(length_buf);
             debug!("Read prefix {length}");
+            if length > MAX_LENGTH_PREFIX_MESSAGE_SIZE {
+                Err(anyhow::anyhow!(
+                    "Message too large: {length} > {MAX_LENGTH_PREFIX_MESSAGE_SIZE}"
+                ))?;
+            }
 
             // Read a message
             let length_usize: usize = length.try_into()?;
