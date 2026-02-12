@@ -88,15 +88,15 @@ pub async fn post_files(
                     if let Ok(serialized_res) =
                         bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
                             ls_response,
-                                peer_name.to_string(),
-                            )))
-                        {
-                            let serialized_res = create_length_prefixed_message(&serialized_res);
-                            if response_tx.send(serialized_res).await.is_err() {
-                                warn!("Response channel closed");
-                                break;
-                            }
-                        } else {
+                            peer_name.to_string(),
+                        )))
+                    {
+                        let serialized_res = create_length_prefixed_message(&serialized_res);
+                        if response_tx.send(serialized_res).await.is_err() {
+                            warn!("Response channel closed");
+                            break;
+                        }
+                    } else {
                         warn!("Could not serialize response");
                         break;
                     }

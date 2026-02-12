@@ -11,8 +11,8 @@ use harddrive_party_shared::wire_messages::{
 };
 use log::{debug, error, warn};
 use quinn::WriteError;
-use thiserror::Error;
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
