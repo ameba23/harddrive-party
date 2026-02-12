@@ -10,6 +10,7 @@ use crate::{
     search::Search,
     shares::Shares,
     transfers::Transfers,
+    uploads::Uploads,
     ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
     wire_messages::IndexQuery,
     ws::WebsocketService,
@@ -53,6 +54,7 @@ pub fn HdpUi() -> impl IntoView {
         signal(Option::<Result<String, String>>::None);
 
     let (requests, set_requests) = signal(Requests::new());
+    let (uploads, set_uploads) = signal(Uploads::new());
 
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
@@ -69,6 +71,8 @@ pub fn HdpUi() -> impl IntoView {
         files.clone(),
         set_files.clone(),
         set_requests.clone(),
+        uploads,
+        set_uploads.clone(),
         set_add_or_remove_share_message,
         set_error_message.clone(),
         set_search_results,
@@ -141,6 +145,9 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 UiEvent::Uploaded(upload_info) => {
                     debug!("Uploading {:?}", upload_info);
+                    set_uploads.update(|uploads| {
+                        uploads.upsert(upload_info);
+                    });
                 }
                 UiEvent::PeerConnectionFailed { name, error } => {
                     debug!("Peer connection failed {} {}", name, error);
@@ -303,7 +310,7 @@ pub fn HdpUi() -> impl IntoView {
                             />
                             <Route
                                 path=path!("transfers")
-                                view=move || view! { <Transfers requests files /> }
+                                view=move || view! { <Transfers requests files uploads /> }
                             />
                             <Route
                                 path=path!("search")

@@ -28,6 +28,7 @@ use rand::Rng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -80,6 +81,7 @@ impl Hdp {
         share_dirs: Vec<String>,
         download_dir: PathBuf,
         use_mdns: bool,
+        local_addr: Option<SocketAddr>,
     ) -> anyhow::Result<Self> {
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
@@ -114,7 +116,7 @@ impl Hdp {
         // Read the port from storage
         // We attempt to use the same port as last time if possible, so that if the process is
         // stopped and restarted, peers can reconnect without needing to exchange details again
-        let port = config_db
+        let last_used_port = config_db
             .get(b"port")
             .ok()
             .flatten()
@@ -124,8 +126,15 @@ impl Hdp {
         let known_peers_db = db.open_tree(KNOWN_PEERS)?;
 
         // Setup peer discovery
-        let (socket_option, peer_discovery) =
-            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port, known_peers_db).await?;
+        let (socket_option, peer_discovery) = PeerDiscovery::new(
+            use_mdns,
+            pk_hash,
+            peers.clone(),
+            local_addr,
+            last_used_port,
+            known_peers_db,
+        )
+        .await?;
 
         let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
 
@@ -255,6 +264,32 @@ impl Hdp {
                 }
             }
         }
+    }
+
+    /// Connect directly to a peer without discovery or NAT negotiation.
+    /// Intended for tests where both peers run locally.
+    pub async fn connect_to_peer_direct(
+        &mut self,
+        announce_address: AnnounceAddress,
+    ) -> Result<(), UiServerError> {
+        let socket_address = match announce_address.connection_details {
+            PeerConnectionDetails::NoNat(socket_address)
+            | PeerConnectionDetails::Asymmetric(socket_address) => socket_address,
+            PeerConnectionDetails::Symmetric(_) => {
+                return Err(UiServerError::PeerDiscovery(
+                    "Cannot direct-connect to symmetric NAT peer".to_string(),
+                ));
+            }
+        };
+
+        let peer = DiscoveredPeer {
+            socket_address,
+            socket_option: None,
+            discovery_method: DiscoveryMethod::Direct,
+            announce_address,
+        };
+
+        self.connect_to_peer(peer).await
     }
 
     /// Handle a QUIC connection from/to another peer
@@ -409,7 +444,10 @@ impl Hdp {
     }
 
     /// Initiate a Quic connection to a remote peer
-    async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<(), UiServerError> {
+    pub(crate) async fn connect_to_peer(
+        &mut self,
+        peer: DiscoveredPeer,
+    ) -> Result<(), UiServerError> {
         // If we don't have a static endpoint, create one for this connection
         let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,

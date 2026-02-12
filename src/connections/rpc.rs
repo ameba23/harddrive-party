@@ -239,6 +239,7 @@ impl Uploader {
                         .send(UiEvent::Uploaded(UploadInfo {
                             path: path.clone(),
                             bytes_read,
+                            total_size: size,
                             speed: speedometer.measure(),
                             peer_name: requester_name.clone(),
                         }))
@@ -298,8 +299,7 @@ impl Uploader {
                     // If an endpoint is specified, only read until endpoint
                     match end {
                         Some(endpoint) => {
-                            // TODO should this be just endpoint?
-                            Ok((Box::new(file.take(start + endpoint)), size))
+                            Ok((Box::new(file.take(endpoint - start)), size))
                         }
                         None => Ok((Box::new(file), size)),
                     }
