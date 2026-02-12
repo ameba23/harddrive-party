@@ -298,9 +298,7 @@ impl Uploader {
 
                     // If an endpoint is specified, only read until endpoint
                     match end {
-                        Some(endpoint) => {
-                            Ok((Box::new(file.take(endpoint - start)), size))
-                        }
+                        Some(endpoint) => Ok((Box::new(file.take(endpoint - start)), size)),
                         None => Ok((Box::new(file), size)),
                     }
                 }

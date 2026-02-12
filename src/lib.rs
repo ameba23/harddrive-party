@@ -544,8 +544,7 @@ mod tests {
     #[tokio::test]
     async fn gossiped_peer_connection() {
         init_logger();
-        let (mut alice_hdp, _alice_url) =
-            setup_peer(vec!["tests/test-data".to_string()]).await;
+        let (mut alice_hdp, _alice_url) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice = alice_hdp.shared_state.clone();
         tokio::spawn(async move {
             alice_hdp.run().await;
@@ -568,10 +567,7 @@ mod tests {
         });
 
         // Alice must trust Carol's cert for outgoing verification
-        alice
-            .known_peers
-            .add_peer(&carol.announce_address)
-            .unwrap();
+        alice.known_peers.add_peer(&carol.announce_address).unwrap();
 
         let mut alice_events = alice.event_broadcaster.subscribe();
         let announce_peer = AnnouncePeer {
@@ -617,15 +613,13 @@ mod tests {
             .await
             .unwrap();
 
-        let read_task = tokio::spawn(async move {
-            while let Some(Ok(_chunk)) = read_stream.next().await {}
-        });
+        let read_task =
+            tokio::spawn(async move { while let Some(Ok(_chunk)) = read_stream.next().await {} });
 
         let uploaded = timeout(Duration::from_secs(5), async move {
             while let Some(event) = alice_events.next().await {
                 if let Ok(UiEvent::Uploaded(upload_info)) = event {
-                    if upload_info.path == "test-data/somefile"
-                        && upload_info.peer_name == bob.name
+                    if upload_info.path == "test-data/somefile" && upload_info.peer_name == bob.name
                     {
                         return true;
                     }
