@@ -15,7 +15,7 @@ use axum::{
     http::StatusCode,
 };
 use bytes::{BufMut, BytesMut};
-use futures::{channel::mpsc, pin_mut, StreamExt};
+use futures::{channel::mpsc, pin_mut, SinkExt, StreamExt};
 use harddrive_party_shared::{
     ui_messages::{Info, PeerPath, UiDownloadRequest, UiRequestedFile},
     wire_messages::ReadQuery,
@@ -70,30 +70,33 @@ pub async fn post_files(
 
     for (request, peer_name) in requests {
         {
-            let cache = {
+            let cached_responses = {
                 let peers = shared_state.peers.lock().await;
                 let peer = peers.get(&peer_name).ok_or(RequestError::PeerNotFound)?;
                 peer.index_cache.clone()
             };
 
             // First check the local cache for an existing response
-            let mut cache = cache.lock()?;
-            if let Some(responses) = cache.get(&request) {
+            let responses = {
+                let mut cache = cached_responses.lock()?;
+                cache.get(&request).cloned()
+            };
+            if let Some(responses) = responses {
                 debug!("Found existing responses in cache");
-                for entries in responses.iter() {
-                    let ls_response = LsResponse::Success(entries.to_vec());
+                for entries in responses {
+                    let ls_response = LsResponse::Success(entries);
                     if let Ok(serialized_res) =
                         bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
                             ls_response,
-                            peer_name.to_string(),
-                        )))
-                    {
-                        let serialized_res = create_length_prefixed_message(&serialized_res);
-                        if response_tx.try_send(serialized_res).is_err() {
-                            warn!("Response channel closed");
-                            break;
-                        }
-                    } else {
+                                peer_name.to_string(),
+                            )))
+                        {
+                            let serialized_res = create_length_prefixed_message(&serialized_res);
+                            if response_tx.send(serialized_res).await.is_err() {
+                                warn!("Response channel closed");
+                                break;
+                            }
+                        } else {
                         warn!("Could not serialize response");
                         break;
                     }
@@ -132,7 +135,7 @@ pub async fn post_files(
                     )))
                 {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
-                    if response_tx.try_send(serialized_res).is_err() {
+                    if response_tx.send(serialized_res).await.is_err() {
                         warn!("Response channel closed");
                         break;
                     }
@@ -268,7 +271,7 @@ pub async fn post_read(
         while let Ok(Some(n)) = recv.read(&mut buf).await {
             bytes_read += n as u64;
             debug!("Read {bytes_read} bytes");
-            if response_tx.try_send(buf[..n].to_vec()).is_err() {
+            if response_tx.send(buf[..n].to_vec()).await.is_err() {
                 warn!("Response channel closed - probably the UI client disconnected");
                 break;
             };
@@ -309,7 +312,7 @@ where
             match bincode::serialize(&Ok::<T, UiServerError>(res)) {
                 Ok(serialized_res) => {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
-                    if response_tx.try_send(serialized_res).is_err() {
+                    if response_tx.send(serialized_res).await.is_err() {
                         warn!("Response channel closed - probably the UI client disconnected");
                         break;
                     };
