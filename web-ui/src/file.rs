@@ -176,7 +176,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     };
 
     let file_name_and_indentation = move || {
-        let file_name = file_name.get();
+        let full_path = file_name.get();
         let icon = move || match file.is_dir {
             Some(true) => {
                 if file.is_expanded.get() {
@@ -189,15 +189,20 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined /> }),
             None => EitherOf4::D(view! {}),
         };
-        let (name, indentation) = match file_name.rsplit_once('/') {
+        let (display_name, indentation) = match full_path.rsplit_once('/') {
             Some((path, name)) => {
                 let indent = path.split('/').count();
                 let indent_str = "  ".repeat(indent);
                 (name.to_string(), indent_str)
             }
-            None => (file_name, Default::default()),
+            None => (full_path.clone(), Default::default()),
         };
-        view! { <pre>{indentation} {icon} " " <span class="text-sm font-medium">{name}</span></pre> }
+        view! {
+            <pre title=full_path.clone()>
+                {indentation} {icon} " "
+                <span class="text-sm font-medium" title=display_name.clone()>{display_name.clone()}</span>
+            </pre>
+        }
     };
 
     let is_dir = file.is_dir == Some(true);

@@ -41,7 +41,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
             })
         } else {
             Either::Right(view! {
-                <Table>
+                <Table class="search-table">
                     <TableBody>
                     <For
                     each=search_results_iter

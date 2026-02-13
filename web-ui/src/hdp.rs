@@ -10,8 +10,8 @@ use crate::{
     search::Search,
     shares::Shares,
     transfers::Transfers,
-    uploads::Uploads,
     ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
+    uploads::Uploads,
     wire_messages::IndexQuery,
     ws::WebsocketService,
     AppContext,
@@ -274,9 +274,9 @@ pub fn HdpUi() -> impl IntoView {
             <div id="root" class="main">
                 <nav>
                     <HdpHeader peers own_name />
-                    {error_message_display}
                 </nav>
                 <main>
+                    <div class="error-stack">{error_message_display}</div>
                     <Layout>
                         <Routes fallback=|| "Not found">
                             <Route
@@ -358,7 +358,7 @@ pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
         <div role="alert">
             <div>
-                <span class="font-medium">" ✅ " {message}</span>
+                <span class="font-medium status-ok">" ✅ " {message}</span>
             </div>
         </div>
     }

@@ -107,7 +107,7 @@ pub fn Request(file: File) -> impl IntoView {
                             }
                             _ => EitherOf3::C(view! { <span></span> }),
                         }
-                    }} <Table>
+                    }} <Table class="transfer-table">
                         <TableBody>
                             <For
                                 each=child_files

@@ -32,7 +32,7 @@ pub fn Transfers(
     view! {
         <h2 class="text-xl">"Transfers"</h2>
         <h3 class="text-lg">"Requested"</h3>
-        <Flex vertical=true>
+        <Flex vertical=true class="transfer-list">
             <For
                 each=wishlist
                 key=|file| format!("{}{:?}", file.name, file.size)
@@ -40,7 +40,7 @@ pub fn Transfers(
             />
         </Flex>
         <h3 class="text-lg">"Uploads"</h3>
-        <Flex vertical=true>
+        <Flex vertical=true class="transfer-list">
             <For
                 each=uploads_list
                 key=|upload| {

@@ -40,7 +40,7 @@ pub fn UploadRow(upload: RwSignal<UploadInfo>) -> impl IntoView {
         }
     });
     view! {
-        <div>
+        <div class="upload-row">
             <Icon icon=icondata::LuArrowUp />
             " "
             <span>{move || upload_data().peer_name}</span>

@@ -48,7 +48,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     };
 
     view! {
-        <div>
+        <div class="peer-card">
             <Flex vertical=true>
                 <div>
                     <Icon icon=icondata::AiUserOutlined />
@@ -57,7 +57,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                     {root_size}
                     " shared"
                 </div>
-                <Table>
+                <Table class="file-table">
                     <TableBody>
                         <For
                             each=files_iter
