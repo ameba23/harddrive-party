@@ -12,11 +12,7 @@ description = "Share files peer-to-peer"
 homepage = "https://gitlab.com/pegpeg/harddrive-party"
 repository = "https://gitlab.com/pegpeg/harddrive-party"
 keywords = ["peer-to-peer", "filesharing", "file-sharing", "p2p"]
-include = [
-    "src/",
-    "Cargo.toml",
-    "dist/"
-]
+include = ["src/", "Cargo.toml", "dist/"]
 
 [dependencies]
 harddrive-party-shared = { version = "0.0.2", path = "shared" }
@@ -49,9 +45,13 @@ tower-http = { version = "0.6.4", features = ["fs"] }
 rust-embed = "8.7.2"
 mime_guess = "2.0.5"
 serde = { version = "1.0", features = ["derive"] }
-reqwest = { version = "0.12.15", default-features = false, features = ["stream"] }
-bytes= "1.10.1"
+reqwest = { version = "0.12.15", default-features = false, features = [
+  "stream",
+] }
+bytes = "1.10.1"
 x509-parser = { version = "0.17.0", features = ["verify"] }
 
 [dev-dependencies]
 tempfile = "3.3.0"
+stun_codec = "0.3.5"
+bytecodec = "0.4.15"

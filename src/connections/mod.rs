@@ -76,12 +76,14 @@ impl Hdp {
     /// - Initial directories to share, if any
     /// - The path to store downloaded files
     /// - Whether to use mDNS to discover peers on the local network
+    /// - Optional custom STUN servers
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
         download_dir: PathBuf,
         use_mdns: bool,
         local_addr: Option<SocketAddr>,
+        stun_servers: Option<Vec<String>>,
     ) -> anyhow::Result<Self> {
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
@@ -133,6 +135,7 @@ impl Hdp {
             local_addr,
             last_used_port,
             known_peers_db,
+            stun_servers,
         )
         .await?;
 
@@ -264,32 +267,6 @@ impl Hdp {
                 }
             }
         }
-    }
-
-    /// Connect directly to a peer without discovery or NAT negotiation.
-    /// Intended for tests where both peers run locally.
-    pub async fn connect_to_peer_direct(
-        &mut self,
-        announce_address: AnnounceAddress,
-    ) -> Result<(), UiServerError> {
-        let socket_address = match announce_address.connection_details {
-            PeerConnectionDetails::NoNat(socket_address)
-            | PeerConnectionDetails::Asymmetric(socket_address) => socket_address,
-            PeerConnectionDetails::Symmetric(_) => {
-                return Err(UiServerError::PeerDiscovery(
-                    "Cannot direct-connect to symmetric NAT peer".to_string(),
-                ));
-            }
-        };
-
-        let peer = DiscoveredPeer {
-            socket_address,
-            socket_option: None,
-            discovery_method: DiscoveryMethod::Direct,
-            announce_address,
-        };
-
-        self.connect_to_peer(peer).await
     }
 
     /// Handle a QUIC connection from/to another peer
