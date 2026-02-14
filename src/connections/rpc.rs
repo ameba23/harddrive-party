@@ -11,6 +11,7 @@ use harddrive_party_shared::wire_messages::{
 };
 use log::{debug, error, warn};
 use quinn::WriteError;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::{
     fs,
@@ -25,6 +26,12 @@ use super::speedometer::{self, Speedometer};
 
 /// Number of bytes uploaded at a time
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
+/// Minimum bytes written before emitting upload progress.
+const MIN_UPLOAD_UI_UPDATE_BYTES: u64 = 256 * 1024;
+/// Minimum time between upload progress updates on fast links.
+const MIN_UPLOAD_UI_UPDATE_INTERVAL: Duration = Duration::from_millis(300);
+/// Maximum time between upload progress updates on slow links.
+const MAX_UPLOAD_UI_UPDATE_INTERVAL: Duration = Duration::from_secs(2);
 
 struct ReadRequest {
     path: String,
@@ -227,29 +234,55 @@ impl Uploader {
                 let mut buf: [u8; UPLOAD_BLOCK_SIZE] = [0; UPLOAD_BLOCK_SIZE];
                 let mut file = Box::into_pin(file);
                 let mut bytes_read: u64 = start.unwrap_or(0);
+                let mut bytes_read_since_last_ui_update: u64 = 0;
+                let mut last_ui_update = Instant::now();
                 let mut speedometer = Speedometer::new(speedometer::WINDOW_SIZE);
                 while let Ok(n) = file.read(&mut buf).await {
                     if n == 0 {
                         break;
                     }
                     bytes_read += n as u64;
+                    bytes_read_since_last_ui_update += n as u64;
                     speedometer.entry(n);
-                    if self
-                        .event_broadcaster
-                        .send(UiEvent::Uploaded(UploadInfo {
-                            path: path.clone(),
-                            bytes_read,
-                            total_size: size,
-                            speed: speedometer.measure(),
-                            peer_name: requester_name.clone(),
-                        }))
-                        .is_err()
-                    {
-                        warn!("Ui response channel closed");
-                    };
+
+                    let elapsed = last_ui_update.elapsed();
+                    let should_emit = (bytes_read_since_last_ui_update
+                        >= MIN_UPLOAD_UI_UPDATE_BYTES
+                        && elapsed >= MIN_UPLOAD_UI_UPDATE_INTERVAL)
+                        || elapsed >= MAX_UPLOAD_UI_UPDATE_INTERVAL;
+                    if should_emit {
+                        bytes_read_since_last_ui_update = 0;
+                        last_ui_update = Instant::now();
+                        if self
+                            .event_broadcaster
+                            .send(UiEvent::Uploaded(UploadInfo {
+                                path: path.clone(),
+                                bytes_read,
+                                total_size: size,
+                                speed: speedometer.measure(),
+                                peer_name: requester_name.clone(),
+                            }))
+                            .is_err()
+                        {
+                            warn!("Ui response channel closed");
+                        };
+                    }
                     output.write_all(&buf[..n]).await?;
                     debug!("Uploaded {bytes_read} bytes of {size}");
                 }
+                if self
+                    .event_broadcaster
+                    .send(UiEvent::Uploaded(UploadInfo {
+                        path: path.clone(),
+                        bytes_read,
+                        total_size: size,
+                        speed: speedometer.measure(),
+                        peer_name: requester_name,
+                    }))
+                    .is_err()
+                {
+                    warn!("Ui response channel closed");
+                };
                 output.finish()?;
                 Ok(())
             }
