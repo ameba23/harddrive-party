@@ -1,6 +1,8 @@
 pub mod components;
 pub mod file;
 pub mod hdp;
+#[cfg(feature = "mock-ui")]
+pub mod mock;
 pub mod peer;
 mod requests;
 pub mod search;
@@ -11,8 +13,12 @@ pub mod ws;
 
 use crate::{file::File, peer::Peer, ui_messages::FilesQuery};
 use file::DownloadStatus;
-use futures::StreamExt;
-use harddrive_party_shared::{client::Client, ui_messages::PeerPath, wire_messages::IndexQuery};
+use futures::{stream::LocalBoxStream, StreamExt};
+use harddrive_party_shared::{
+    client::Client,
+    ui_messages::{PeerPath, UiRequestedFile, UiServerError},
+    wire_messages::IndexQuery,
+};
 pub use hdp::*;
 use leptos::{prelude::*, task::spawn_local};
 use leptos_router::components::Router;
@@ -34,9 +40,131 @@ pub fn App() -> impl IntoView {
     }
 }
 
+type SharesStream = LocalBoxStream<'static, Result<LsResponse, UiServerError>>;
+type FilesStream = LocalBoxStream<'static, Result<(LsResponse, String), UiServerError>>;
+type RequestsStream = LocalBoxStream<'static, Result<Vec<UiDownloadRequest>, UiServerError>>;
+type RequestedFilesStream = LocalBoxStream<'static, Result<Vec<UiRequestedFile>, UiServerError>>;
+
+#[derive(Clone)]
+pub enum UiClient {
+    Real(Client),
+    #[cfg(feature = "mock-ui")]
+    Mock(crate::mock::MockClient),
+}
+
+impl UiClient {
+    pub fn real(ui_url: url::Url) -> Self {
+        Self::Real(Client::new(ui_url))
+    }
+
+    pub async fn info(&self) -> Result<ui_messages::Info, AppError> {
+        match self {
+            UiClient::Real(client) => client.info().await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.info().await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn shares(&self, query: IndexQuery) -> Result<SharesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .shares(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .shares(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn files(&self, query: FilesQuery) -> Result<FilesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .files(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .files(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn requests(&self) -> Result<RequestsStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .requests()
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .requests()
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn requested_files(&self, id: u32) -> Result<RequestedFilesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .requested_files(id)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .requested_files(id)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn download(&self, peer_path: &PeerPath) -> Result<u32, AppError> {
+        match self {
+            UiClient::Real(client) => client.download(peer_path).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.download(peer_path).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn connect(&self, announce_address: String) -> Result<(), AppError> {
+        match self {
+            UiClient::Real(client) => client.connect(announce_address).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.connect(announce_address).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn add_share(&self, share_dir: String) -> Result<u32, AppError> {
+        match self {
+            UiClient::Real(client) => client.add_share(share_dir).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.add_share(share_dir).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn remove_share(&self, share_dir: String) -> Result<(), AppError> {
+        match self {
+            UiClient::Real(client) => client.remove_share(share_dir).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.remove_share(share_dir).await.map_err(AppError::from),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppContext {
-    pub client: ReadSignal<Client>,
+    pub client: ReadSignal<UiClient>,
     pub own_name: ReadSignal<Option<String>>,
     pub get_peers: ReadSignal<HashSet<String>>,
     pub set_peers: WriteSignal<HashSet<String>>,
@@ -53,7 +181,7 @@ pub struct AppContext {
 
 impl AppContext {
     pub fn new(
-        ui_url: url::Url,
+        client: UiClient,
         own_name: ReadSignal<Option<String>>,
         get_peers: ReadSignal<HashSet<String>>,
         set_peers: WriteSignal<HashSet<String>>,
@@ -67,7 +195,7 @@ impl AppContext {
         set_search_results: WriteSignal<Vec<PeerPath>>,
         set_pending_peers: WriteSignal<HashSet<String>>,
     ) -> Self {
-        let (client, _set_client) = signal(Client::new(ui_url));
+        let (client, _set_client) = signal(client);
         Self {
             client,
             own_name,
@@ -129,7 +257,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -193,7 +321,7 @@ impl AppContext {
                     })
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             };
         });
@@ -209,7 +337,7 @@ impl AppContext {
                     debug!("Connecting to peer...");
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                     set_pending_peers.update(|pending_peers| {
                         pending_peers.remove(&announce_address);
                     });
@@ -265,7 +393,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -336,7 +464,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -396,7 +524,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -423,7 +551,7 @@ impl AppContext {
                     });
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -517,7 +645,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });

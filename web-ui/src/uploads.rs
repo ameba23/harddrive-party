@@ -1,11 +1,10 @@
-use crate::display_bytes;
+use crate::file::{DownloadStatus, File, FileDisplayContext};
 use harddrive_party_shared::ui_messages::UploadInfo;
 use leptos::prelude::*;
 use std::collections::BTreeMap;
-use thaw::*;
 
 #[derive(Clone)]
-pub struct Uploads(BTreeMap<(String, String), RwSignal<UploadInfo>>);
+pub struct Uploads(BTreeMap<(String, String), RwSignal<File>>);
 
 impl Uploads {
     pub fn new() -> Self {
@@ -15,55 +14,30 @@ impl Uploads {
     pub fn upsert(&mut self, upload: UploadInfo) {
         let key = (upload.peer_name.clone(), upload.path.clone());
         if let Some(existing) = self.0.get(&key) {
-            existing.set(upload);
+            existing.update(|file| {
+                file.size = Some(upload.total_size);
+                file.download_status.set(DownloadStatus::Uploading {
+                    bytes_read: upload.bytes_read,
+                    total_size: upload.total_size,
+                    speed: upload.speed as u64,
+                });
+            });
         } else {
-            self.0.insert(key, RwSignal::new(upload));
+            self.0.insert(key, RwSignal::new(upload.into()));
         }
     }
 
-    pub fn iter(
-        &self,
-    ) -> std::collections::btree_map::Values<'_, (String, String), RwSignal<UploadInfo>> {
+    pub fn iter(&self) -> std::collections::btree_map::Values<'_, (String, String), RwSignal<File>> {
         self.0.values()
     }
 }
 
 #[component]
-pub fn UploadRow(upload: RwSignal<UploadInfo>) -> impl IntoView {
-    let upload_data = move || upload.get();
-    let upload_size = Memo::new(move |_| upload.get().total_size);
-    let progress = Memo::new(move |_| {
-        let info = upload.get();
-        match upload_size.get() {
-            0 => 0.0,
-            size => info.bytes_read as f64 / size as f64,
-        }
-    });
+pub fn UploadRow(upload: RwSignal<File>) -> impl IntoView {
     view! {
-        <div class="upload-row">
-            <Icon icon=icondata::LuArrowUp />
-            " "
-            <span>{move || upload_data().peer_name}</span>
-            " "
-            <code>{move || upload_data().path}</code>
-            " "
-            <span>{move || display_bytes(upload_data().bytes_read)}</span>
-            " "
-            <span>{move || format!("{}/s", display_bytes(upload_data().speed as u64))}</span>
-            " "
-            <ProgressBar value=progress />
-            " "
-            <span>
-                {move || {
-                    let info = upload_data();
-                    let total = upload_size.get();
-                    format!(
-                        "Uploading {} of {} bytes",
-                        info.bytes_read,
-                        total
-                    )
-                }}
-            </span>
-        </div>
+        {move || {
+            let file = upload.get();
+            view! { <File file is_shared=true context=FileDisplayContext::Transfer /> }
+        }}
     }
 }

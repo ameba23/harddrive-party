@@ -144,30 +144,71 @@ pre {
 }
 
 .file-table .thaw-table-cell:last-child {
-	white-space: nowrap;
 	width: 190px;
 	min-width: 190px;
 	text-align: right;
 	padding-right: 10px;
+	vertical-align: top;
+}
+
+.file-meta-cell {
+	white-space: normal;
+}
+
+.file-meta-top {
+	display: inline-flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 6px;
+	width: 100%;
+}
+
+.file-meta-status {
+	margin-top: 4px;
+	width: 100%;
+	text-align: right;
+}
+
+.download-progress-text {
+	display: block;
+	overflow-wrap: anywhere;
 }
 
 .transfer-list {
 	gap: 8px;
 }
 
-.upload-row {
-	display: grid;
-	grid-template-columns: auto auto 1fr auto auto;
-	gap: 8px;
-	align-items: center;
-	padding: 8px 10px;
-	border: 1px solid var(--border);
-	border-radius: var(--radius-sm);
-	background: #fff;
+.transfer-table .thaw-table {
+	width: 100%;
+	table-layout: fixed;
 }
 
-.upload-row .thaw-progress-bar {
-	min-width: 140px;
+.transfer-table .thaw-table-cell:first-child {
+	max-width: 0;
+}
+
+.transfer-table .thaw-table-cell:first-child pre {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: pre;
+	padding-right: 8px;
+}
+
+.transfer-table .thaw-table-cell:last-child {
+	width: 220px;
+	min-width: 220px;
+	vertical-align: top;
+}
+
+.upload-file-name {
+	margin: 0;
+}
+
+.transfer-table .thaw-progress-bar {
+	width: 100%;
+	min-width: 120px;
+	margin-bottom: 4px;
 }
 
 .status-ok {
@@ -217,8 +258,9 @@ pre {
 		overflow-x: hidden;
 	}
 
-	.upload-row {
-		grid-template-columns: 1fr;
+	.transfer-table .thaw-table-cell:last-child {
+		width: 160px;
+		min-width: 160px;
 	}
 }
 

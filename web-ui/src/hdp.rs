@@ -14,7 +14,7 @@ use crate::{
     uploads::Uploads,
     wire_messages::IndexQuery,
     ws::WebsocketService,
-    AppContext,
+    AppContext, UiClient,
 };
 use futures::StreamExt;
 use leptos::prelude::*;
@@ -44,8 +44,30 @@ pub fn HdpUi() -> impl IntoView {
 
     let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
-    let (_ws_service, mut ws_rx) =
-        WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+    #[cfg(feature = "mock-ui")]
+    let mock_scenario = crate::mock::scenario_from_location();
+
+    let (client, mut ws_rx) = {
+        #[cfg(feature = "mock-ui")]
+        {
+            if let Some(scenario) = mock_scenario {
+                (
+                    UiClient::Mock(crate::mock::MockClient::new(scenario.clone())),
+                    crate::mock::start_mock_events(scenario),
+                )
+            } else {
+                let (_ws_service, ws_rx) =
+                    WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+                (UiClient::real(ui_url.clone()), ws_rx)
+            }
+        }
+        #[cfg(not(feature = "mock-ui"))]
+        {
+            let (_ws_service, ws_rx) =
+                WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+            (UiClient::real(ui_url.clone()), ws_rx)
+        }
+    };
 
     // Setup signals
     let (peers, set_peers) = signal(HashSet::<String>::new());
@@ -64,7 +86,7 @@ pub fn HdpUi() -> impl IntoView {
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
     let (own_name, set_own_name) = signal(Option::<String>::None);
     let app_context = AppContext::new(
-        ui_url,
+        client,
         own_name,
         peers.clone(),
         set_peers.clone(),
@@ -81,14 +103,21 @@ pub fn HdpUi() -> impl IntoView {
 
     // Get initial info
     let client = app_context.client.get_untracked();
+    let set_error_message_for_info = set_error_message.clone();
     spawn_local(async move {
         let set_announce_address = set_announce_address.clone();
         let set_home_dir = set_home_dir.clone();
         let set_own_name = set_own_name.clone();
-        let info = client.info().await.unwrap();
-        set_announce_address.update(|address| *address = Some(info.announce_address));
-        set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
-        set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+        match client.info().await {
+            Ok(info) => {
+                set_announce_address.update(|address| *address = Some(info.announce_address));
+                set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
+                set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+            }
+            Err(err) => set_error_message_for_info.update(|errors| {
+                errors.insert(err);
+            }),
+        };
     });
     {
         let app_context = app_context.clone();

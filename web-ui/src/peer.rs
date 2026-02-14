@@ -16,16 +16,17 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     // This signal is used below to provide context to File
     let (peer_signal, _set_peer) = signal((name.clone(), is_self));
 
-    // This should probably be in a closure
-    let root_size = display_bytes(
-        match files.get().get(&PeerPath {
-            peer_name: name,
-            path: "".to_string(),
-        }) {
-            Some(file) => file.size.unwrap_or_default(),
-            None => 0,
-        },
-    );
+    let root_size = move || {
+        display_bytes(
+            match files.get().get(&PeerPath {
+                peer_name: peer_signal.get().0,
+                path: "".to_string(),
+            }) {
+                Some(file) => file.size.unwrap_or_default(),
+                None => 0,
+            },
+        )
+    };
 
     let files_iter = move || {
         // Calling .get() clones - we should ideally use .with(|files| files.range...)

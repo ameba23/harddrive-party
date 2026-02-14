@@ -1,12 +1,12 @@
 //! Display a file - either from a remote peer or one of our own shared files
 use crate::{
     hdp::{display_bytes, Entry},
-    ui_messages::{FilesQuery, UiDownloadRequest},
+    ui_messages::{FilesQuery, UiDownloadRequest, UploadInfo},
     AppContext, PeerPath,
 };
 use harddrive_party_shared::wire_messages::IndexQuery;
 use leptos::{
-    either::{Either, EitherOf4, EitherOf5},
+    either::{Either, EitherOf4, EitherOf6},
     prelude::*,
 };
 use log::debug;
@@ -57,6 +57,25 @@ impl File {
             is_expanded: RwSignal::new(false),
             is_visible: RwSignal::new(true),
             download_status: RwSignal::new(download_status),
+            request: RwSignal::new(None),
+        }
+    }
+}
+
+impl From<UploadInfo> for File {
+    fn from(upload: UploadInfo) -> Self {
+        Self {
+            name: upload.path,
+            peer_name: upload.peer_name,
+            size: Some(upload.total_size),
+            is_dir: Some(false),
+            is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
+            download_status: RwSignal::new(DownloadStatus::Uploading {
+                bytes_read: upload.bytes_read,
+                total_size: upload.total_size,
+                speed: upload.speed as u64,
+            }),
             request: RwSignal::new(None),
         }
     }
@@ -210,52 +229,72 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     view! {
         <TableRow on:click=expand_dir>
             <TableCell>{file_name_and_indentation}</TableCell>
-            <TableCell>
-                " " {display_bytes(file.size.unwrap_or_default())} " " {download_button()}
-                {move || {
-                    match file.download_status.get() {
-                        DownloadStatus::Nothing => EitherOf5::A(view! { <span></span> }),
-                        DownloadStatus::Downloaded(_) => {
-                            if is_dir {
-                                EitherOf5::B(view! { <span>"Downloaded"</span> })
-                            } else {
-                                let file_path = file_name.get();
-                                EitherOf5::C(
+            <TableCell class="file-meta-cell">
+                <div class="file-meta-top">
+                    <span>
+                        {match file.size {
+                            Some(size) => display_bytes(size),
+                            None => "-".to_string(),
+                        }}
+                    </span>
+                    {download_button()}
+                </div>
+                <div class="file-meta-status">
+                    {move || {
+                        match file.download_status.get() {
+                            DownloadStatus::Nothing => EitherOf6::A(view! { <span></span> }),
+                            DownloadStatus::Downloaded(_) => {
+                                if is_dir {
+                                    EitherOf6::B(view! { <span>"Downloaded"</span> })
+                                } else {
+                                    let file_path = file_name.get();
+                                    EitherOf6::C(
+                                        view! {
+                                            "Downloaded"
+                                            <Preview file_path=&file_path shared=is_shared />
+                                        },
+                                    )
+                                }
+                            }
+                            DownloadStatus::Requested(_) => {
+                                EitherOf6::D(view! { <span>"Requested"</span> })
+                            }
+                            DownloadStatus::Downloading { bytes_read, .. } => {
+                                EitherOf6::E(
                                     view! {
-                                        "Downloaded"
-                                        <Preview file_path=&file_path shared=is_shared />
+                                        <span>
+                                            <DownloadingFile bytes_read size=file.size />
+                                        </span>
                                     },
                                 )
                             }
-                        }
-                        DownloadStatus::Requested(_) => {
-                            EitherOf5::D(view! { <span>"Requested"</span> })
-                        }
-                        DownloadStatus::Downloading { bytes_read, .. } => {
-                            EitherOf5::E(
+                            DownloadStatus::Uploading {
+                                bytes_read,
+                                total_size,
+                                speed,
+                            } => EitherOf6::F(
                                 view! {
                                     <span>
-                                        <DownloadingFile bytes_read size=file.size />
+                                        <UploadingFile bytes_read total_size speed />
                                     </span>
                                 },
-                            )
+                            ),
                         }
-                    }
-                }} // TODO fix this
-                {move || {
-                    if is_shared {
-                        view! {
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-                            <span></span>
+                    }}
+                    {move || {
+                        if is_shared {
+                            view! {
+                                // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+                                <span></span>
+                            }
+                        } else {
+                            view! {
+                                // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
+                                <span></span>
+                            }
                         }
-                    } else {
-                        view! {
-                            // view! { <span><Preview file_path=&file_name.get() shared=true /></span> }
-                            <span></span>
-                        }
-                    }
-                }}
-
+                    }}
+                </div>
             </TableCell>
         </TableRow>
     }
@@ -266,6 +305,11 @@ pub enum DownloadStatus {
     Nothing,
     Requested(u32),
     Downloading { bytes_read: u64, request_id: u32 },
+    Uploading {
+        bytes_read: u64,
+        total_size: u64,
+        speed: u64,
+    },
     Downloaded(u32),
 }
 
@@ -280,8 +324,39 @@ pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
     let value = RwSignal::new(progress);
     view! {
         <ProgressBar value />
-        <span>
-            {format!("Downloading {} of {} bytes...", bytes_read, size.unwrap_or_default())}
+        <span class="download-progress-text">
+            {match size {
+                Some(size) if size > 0 => {
+                    format!(
+                        "Downloading {} / {}...",
+                        display_bytes(bytes_read),
+                        display_bytes(size),
+                    )
+                }
+                _ => format!("Downloading {}...", display_bytes(bytes_read)),
+            }}
+        </span>
+    }
+}
+
+/// Show progress when currently uploading
+#[component]
+pub fn UploadingFile(bytes_read: u64, total_size: u64, speed: u64) -> impl IntoView {
+    let progress = if total_size == 0 {
+        0.0
+    } else {
+        bytes_read as f64 / total_size as f64
+    };
+    let value = RwSignal::new(progress);
+    view! {
+        <ProgressBar value />
+        <span class="download-progress-text">
+            {format!(
+                "Uploading {} / {} ({}/s)",
+                display_bytes(bytes_read),
+                display_bytes(total_size),
+                display_bytes(speed),
+            )}
         </span>
     }
 }

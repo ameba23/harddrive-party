@@ -39,3 +39,4 @@ wasm-bindgen-test = "0.3.0"
 
 [features]
 dev = []
+mock-ui = []

@@ -40,15 +40,17 @@ pub fn Transfers(
             />
         </Flex>
         <h3 class="text-lg">"Uploads"</h3>
-        <Flex vertical=true class="transfer-list">
-            <For
-                each=uploads_list
-                key=|upload| {
-                    let data = upload.get_untracked();
-                    format!("{}:{}", data.peer_name, data.path)
-                }
-                children=move |upload| view! { <UploadRow upload=upload /> }
-            />
-        </Flex>
+        <Table class="transfer-table file-table">
+            <TableBody>
+                <For
+                    each=uploads_list
+                    key=|upload| {
+                        let data = upload.get_untracked();
+                        format!("{}:{}", data.peer_name, data.name)
+                    }
+                    children=move |upload| view! { <UploadRow upload=upload /> }
+                />
+            </TableBody>
+        </Table>
     }
 }
