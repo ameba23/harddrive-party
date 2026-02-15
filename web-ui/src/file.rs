@@ -82,7 +82,7 @@ impl From<UploadInfo> for File {
 }
 
 /// The context in which we are displaying this file
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 pub enum FileDisplayContext {
     /// List of a peer's files
     Peer,
@@ -98,6 +98,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let set_files = app_context.set_files;
     let (file_name, _set_file_name) = signal(file.name);
     let peer_name = file.peer_name.clone();
+    let peer_name_for_uploader = file.peer_name.clone();
 
     let app_context_1 = app_context.clone();
     let download_request = move |_| {
@@ -196,6 +197,12 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
 
     let file_name_and_indentation = move || {
         let full_path = file_name.get();
+        let uploader_label = match file.download_status.get() {
+            DownloadStatus::Uploading { .. } if context == FileDisplayContext::Transfer => {
+                Some(peer_name_for_uploader.clone())
+            }
+            _ => None,
+        };
         let icon = move || match file.is_dir {
             Some(true) => {
                 if file.is_expanded.get() {
@@ -218,6 +225,19 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         };
         view! {
             <pre title=full_path.clone()>
+                {match uploader_label {
+                    Some(peer_name) => {
+                        let peer_name_title = peer_name.clone();
+                        view! {
+                            <span class="file-peer-label" title=peer_name_title>
+                                {peer_name.clone()}
+                                " "
+                            </span>
+                        }
+                            .into_any()
+                    }
+                    None => view! { <span></span> }.into_any(),
+                }}
                 {indentation} {icon} " "
                 <span class="text-sm font-medium" title=display_name.clone()>{display_name.clone()}</span>
             </pre>
