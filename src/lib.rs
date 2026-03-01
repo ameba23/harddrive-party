@@ -524,17 +524,16 @@ mod tests {
             bob_hdp.run().await;
         });
 
-        // Now listen to Alice's events and see if Carol connects via details gossiped by Bob
-        let mut alice_events = alice.event_broadcaster.subscribe();
+        // Wait until Alice's authoritative peer map includes Carol.
+        // This avoids races where a broadcast event is emitted before we subscribe.
+        let carol_name = carol.name.clone();
         let connected = timeout(Duration::from_secs(5), async move {
-            while let Ok(event) = alice_events.recv().await {
-                if let UiEvent::PeerConnected { name } = event {
-                    if name == carol.name {
-                        return true;
-                    }
+            loop {
+                if alice.peers.lock().await.contains_key(&carol_name) {
+                    return true;
                 }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            false
         })
         .await
         .unwrap_or(false);
