@@ -222,6 +222,10 @@ impl OutgoingHolepunchPacket {
     }
 }
 
+fn random_nonzero_port(rng: &mut impl Rng) -> u16 {
+    rng.gen_range(1..=u16::MAX)
+}
+
 /// Handles requests to connect to a peer by holepunching using a channel to a [PunchingUdpSocket]
 #[derive(Clone, Debug)]
 pub struct HolePuncher {
@@ -307,7 +311,10 @@ impl HolePuncher {
             let mut rng = rand::rngs::StdRng::from_seed(seed);
             for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
                 // Send a packet to a random port
-                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, rng.gen()));
+                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(
+                    addr,
+                    random_nonzero_port(&mut rng),
+                ));
                 if let Err(err) = udp_send.send(packet).await {
                     warn!("Failed to forward holepunch packet to {addr}: {err}");
                 }
@@ -425,4 +432,19 @@ pub enum HolePunchError {
     Join(#[from] tokio::task::JoinError),
     #[error("Could not send holepunch packet - channel closed")]
     MpscSend(#[from] tokio::sync::mpsc::error::SendError<OutgoingHolepunchPacket>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::random_nonzero_port;
+    use rand::{rngs::StdRng, SeedableRng};
+
+    #[test]
+    fn random_nonzero_port_never_returns_zero() {
+        let mut rng = StdRng::seed_from_u64(1);
+
+        for _ in 0..10_000 {
+            assert_ne!(random_nonzero_port(&mut rng), 0);
+        }
+    }
 }
