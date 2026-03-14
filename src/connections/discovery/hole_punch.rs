@@ -7,7 +7,7 @@ use std::{
     io,
     net::{IpAddr, SocketAddr},
     pin::Pin,
-    sync::{mpsc as std_mpsc, Arc},
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
@@ -16,11 +16,11 @@ use tokio::{
     io::Interest,
     net::UdpSocket,
     select, spawn,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{broadcast, mpsc, oneshot, RwLock},
 };
 
 pub type UdpReceive = broadcast::Receiver<IncomingHolepunchPacket>;
-pub type UdpSend = mpsc::Sender<OutgoingHolepunchPacket>;
+pub type UdpSend = mpsc::Sender<OutgoingHolepunchRequest>;
 
 /// How many attempts to holepunch
 const MAX_HOLEPUNCH_ATTEMPTS: usize = 50;
@@ -30,6 +30,9 @@ const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
 
 /// How many attempts to holepunch when guessing the remote port
 const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
+
+/// Maximum time to wait for a hole-punch response
+const HOLEPUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Maximum capacity of channel used to send/recieve holepunch pakets
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
@@ -65,21 +68,24 @@ impl PunchingUdpSocket {
         let (udp_recv_tx, _udp_recv) =
             broadcast::channel::<IncomingHolepunchPacket>(PACKET_CHANNEL_CAPACITY);
         let (udp_send, mut udp_send_rx) =
-            mpsc::channel::<OutgoingHolepunchPacket>(PACKET_CHANNEL_CAPACITY);
+            mpsc::channel::<OutgoingHolepunchRequest>(PACKET_CHANNEL_CAPACITY);
 
         // Loop over outgoing packets from the HolePuncher
         let socket_clone = socket.clone();
-        let mut rng_seed = [0u8; 32];
-        OsRng.fill_bytes(&mut rng_seed);
+        let rng_seed = next_rng_seed();
         tokio::spawn(async move {
-            while let Some(packet) = udp_send_rx.recv().await {
-                match socket_clone.send_to(&packet.data, packet.dest).await {
-                    Ok(_) => {}
-                    Err(err) => warn!(
+            while let Some(request) = udp_send_rx.recv().await {
+                let result = socket_clone
+                    .send_to(&request.packet.data, request.packet.dest)
+                    .await
+                    .map(|_| ());
+                if let Err(err) = &result {
+                    warn!(
                         "Failed to send holepunch packet to {}: {}",
-                        packet.dest, err
-                    ),
+                        request.packet.dest, err
+                    );
                 }
+                let _ = request.result_tx.send(result);
             }
         });
 
@@ -206,6 +212,12 @@ pub struct OutgoingHolepunchPacket {
     dest: SocketAddr,
 }
 
+#[derive(Debug)]
+pub struct OutgoingHolepunchRequest {
+    packet: OutgoingHolepunchPacket,
+    result_tx: oneshot::Sender<io::Result<()>>,
+}
+
 impl OutgoingHolepunchPacket {
     fn new_init(dest: SocketAddr) -> Self {
         Self {
@@ -226,73 +238,109 @@ fn random_nonzero_port(rng: &mut impl Rng) -> u16 {
     rng.gen_range(1..=u16::MAX)
 }
 
+fn next_rng_seed() -> [u8; 32] {
+    let mut rng_seed = [0u8; 32];
+    OsRng.fill_bytes(&mut rng_seed);
+    rng_seed
+}
+
 /// Handles requests to connect to a peer by holepunching using a channel to a [PunchingUdpSocket]
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct HolePuncher {
     udp_send: UdpSend,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
     rng_seed: [u8; 32],
 }
 
+impl Clone for HolePuncher {
+    fn clone(&self) -> Self {
+        Self {
+            udp_send: self.udp_send.clone(),
+            udp_recv_tx: self.udp_recv_tx.clone(),
+            rng_seed: next_rng_seed(),
+        }
+    }
+}
+
+async fn send_holepunch_packet(
+    udp_send: &UdpSend,
+    packet: OutgoingHolepunchPacket,
+) -> Result<(), HolePunchError> {
+    let dest = packet.dest;
+    let (result_tx, result_rx) = oneshot::channel();
+    udp_send
+        .send(OutgoingHolepunchRequest { packet, result_tx })
+        .await
+        .map_err(|_| HolePunchError::ChannelClosed)?;
+
+    match result_rx.await {
+        Ok(result) => result.map_err(HolePunchError::from),
+        Err(_) => Err(HolePunchError::SendTaskClosed(dest)),
+    }
+}
+
 impl HolePuncher {
     /// Make a connection by holepunching
     pub async fn hole_punch_peer(&mut self, addr: SocketAddr) -> Result<(), HolePunchError> {
-        let mut udp_recv = self.udp_recv_tx.subscribe();
-        let mut packet = OutgoingHolepunchPacket::new_init(addr);
-        let mut wait = false;
-        let mut sent_ack = false;
-        let mut received_ack = false;
-        let mut attempts = 0;
-        loop {
-            if wait {
-                tokio::time::sleep(Duration::from_millis(HOLEPUNCH_WAIT_MILLIS)).await;
-            }
-            tokio::select! {
-              send = self.udp_send.send(packet.clone()) => {
-                  if let Err(err) = send {
-                      warn!("Failed to forward holepunch packet to {addr}: {err}");
-                  } else if packet.data == INIT_PUNCH {
-                      debug!("sent initial packet to {addr}, waiting");
-                      attempts += 1;
-                      if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
-                          return Err(HolePunchError::MaxAttempts);
-                      }
-                  } else {
-                      debug!("sent ack packet to {addr}, waiting");
-                      sent_ack = true;
-                      if received_ack {
-                          break
-                      };
-                  }
-                  wait = true;
-              }
-              recv = udp_recv.recv() => {
-                  if let Ok(recv) = recv {
-                      if recv.from == addr {
-                          match recv.data[0] {
-                              0 => {
-                                  debug!("Received initial holepunch packet from {addr}");
-                                  packet.data = [1u8];
-                              }
-                              1 => {
-                                  debug!("Received ack holepunch packet from {addr}");
-                                  packet.data = [1u8];
-                                  received_ack = true;
-                                  if sent_ack {
-                                      break
-                                  };
-                              },
-                              _ => warn!("Received invalid holepunch packet from {addr}")
+        tokio::time::timeout(HOLEPUNCH_TIMEOUT, async {
+            let mut udp_recv = self.udp_recv_tx.subscribe();
+            let mut packet = OutgoingHolepunchPacket::new_init(addr);
+            let mut wait = false;
+            let mut sent_ack = false;
+            let mut received_ack = false;
+            let mut attempts = 0;
+            loop {
+                if wait {
+                    tokio::time::sleep(Duration::from_millis(HOLEPUNCH_WAIT_MILLIS)).await;
+                }
+                tokio::select! {
+                  send_result = send_holepunch_packet(&self.udp_send, packet.clone()) => {
+                      send_result?;
+                      if packet.data == INIT_PUNCH {
+                          debug!("sent initial packet to {addr}, waiting");
+                          attempts += 1;
+                          if attempts >= MAX_HOLEPUNCH_ATTEMPTS {
+                              return Err(HolePunchError::MaxAttempts);
                           }
                       } else {
-                          debug!("Received unrelated packet from {}", recv.from);
+                          debug!("sent ack packet to {addr}, waiting");
+                          sent_ack = true;
+                          if received_ack {
+                              break
+                          };
                       }
+                      wait = true;
                   }
-                  wait = false;
-              }
+                  recv = udp_recv.recv() => {
+                      if let Ok(recv) = recv {
+                          if recv.from == addr {
+                              match recv.data[0] {
+                                  0 => {
+                                      debug!("Received initial holepunch packet from {addr}");
+                                      packet.data = [1u8];
+                                  }
+                                  1 => {
+                                      debug!("Received ack holepunch packet from {addr}");
+                                      packet.data = [1u8];
+                                      received_ack = true;
+                                      if sent_ack {
+                                          break
+                                      };
+                                  },
+                                  _ => warn!("Received invalid holepunch packet from {addr}")
+                              }
+                          } else {
+                              debug!("Received unrelated packet from {}", recv.from);
+                          }
+                      }
+                      wait = false;
+                  }
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
+        .await
+        .map_err(|_| HolePunchError::Timeout)?
     }
 
     /// Hole punch to a peer for who we do not know which port
@@ -315,8 +363,9 @@ impl HolePuncher {
                     addr,
                     random_nonzero_port(&mut rng),
                 ));
-                if let Err(err) = udp_send.send(packet).await {
-                    warn!("Failed to forward holepunch packet to {addr}: {err}");
+                if let Err(err) = send_holepunch_packet(&udp_send, packet).await {
+                    warn!("Failed to send holepunch packet to {addr}: {err}");
+                    return Err(err);
                 }
 
                 if *stop_clone.read().await {
@@ -324,30 +373,31 @@ impl HolePuncher {
                 }
             }
             debug!("Stopped sending");
+            Ok::<(), HolePunchError>(())
         });
 
         // Wait for a response
-        // TODO we should have a timeout here
-        let sender = loop {
-            let recv = udp_recv.recv().await?;
-            // TODO should check the message is a hole punch packet
-            if recv.from.ip() == addr {
-                break recv.from;
+        let sender = tokio::time::timeout(HOLEPUNCH_TIMEOUT, async {
+            loop {
+                let recv = udp_recv.recv().await?;
+                if recv.from.ip() == addr && matches!(recv.data[0], 0 | 1) {
+                    break Ok::<SocketAddr, HolePunchError>(recv.from);
+                }
+                debug!("Got message from unexpected sender - ignoring");
             }
-            debug!("Got message from unexpected sender - ignoring");
-        };
+        })
+        .await
+        .map_err(|_| HolePunchError::Timeout)??;
 
         // Signal to stop trying connections
         {
             let mut stop = stop_signal.write().await;
             *stop = true;
         }
-        join_handle.await?;
+        join_handle.await??;
 
         // Send a packet back
-        self.udp_send
-            .send(OutgoingHolepunchPacket::new_ack(sender))
-            .await?;
+        send_holepunch_packet(&self.udp_send, OutgoingHolepunchPacket::new_ack(sender)).await?;
         Ok(sender)
     }
 
@@ -355,8 +405,8 @@ impl HolePuncher {
         let mut hole_puncher_clone = self.clone();
         tokio::spawn(async move {
             info!("Attempting hole punch...");
-            if hole_puncher_clone.hole_punch_peer(addr).await.is_err() {
-                warn!("Hole punching failed");
+            if let Err(err) = hole_puncher_clone.hole_punch_peer(addr).await {
+                warn!("Hole punching failed: {err}");
             } else {
                 info!("Hole punching succeeded");
             };
@@ -367,7 +417,7 @@ impl HolePuncher {
 pub async fn birthday_hard_side(
     target_addr: SocketAddr,
 ) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
-    let (socket_tx, socket_rx) = std_mpsc::channel(); // TODO limit
+    let (socket_tx, mut socket_rx) = mpsc::channel(1);
     let (stop_signal_tx, _stop_signal_rx) = broadcast::channel(1);
 
     for _ in 0..UNKNOWN_PORT_INCOMING_SOCKETS {
@@ -388,7 +438,7 @@ pub async fn birthday_hard_side(
                                 if let Err(error) = socket.send_to(&ACK_PUNCH, sender).await {
                                     warn!("Send error: {error:?}");
                                 }
-                                if socket_tx.send(socket).is_err() {
+                                if socket_tx.send(socket).await.is_err() {
                                     // This may happen if we get more than one successful punch
                                     warn!("Cannot send success socket - channel closed");
                                 }
@@ -407,8 +457,11 @@ pub async fn birthday_hard_side(
             }
         });
     }
-    // TODO we should have a timeout here
-    let socket = socket_rx.recv()?;
+    drop(socket_tx);
+    let socket = tokio::time::timeout(HOLEPUNCH_TIMEOUT, socket_rx.recv())
+        .await
+        .map_err(|_| HolePunchError::Timeout)?
+        .ok_or(HolePunchError::SocketChannelClosed)?;
     // This stops all the listener tasks
     stop_signal_tx
         .send(true)
@@ -418,20 +471,24 @@ pub async fn birthday_hard_side(
 
 #[derive(Error, Debug)]
 pub enum HolePunchError {
-    #[error("MPSC recv: {0}")]
-    MpSc(#[from] std::sync::mpsc::RecvError),
     #[error("Could not send stop signal due to broadcaster error")]
     Broadcast,
     #[error("IO: {0}")]
     Io(#[from] std::io::Error),
     #[error("Reached max holepunch attempts - giving up")]
     MaxAttempts,
+    #[error("Hole punching timed out")]
+    Timeout,
     #[error("Broadcast receive: {0}")]
     BroadCastRecv(#[from] tokio::sync::broadcast::error::RecvError),
     #[error("Panic during task which sends outgoing packets")]
     Join(#[from] tokio::task::JoinError),
     #[error("Could not send holepunch packet - channel closed")]
-    MpscSend(#[from] tokio::sync::mpsc::error::SendError<OutgoingHolepunchPacket>),
+    ChannelClosed,
+    #[error("Hole punch send task closed before reporting send result for {0}")]
+    SendTaskClosed(SocketAddr),
+    #[error("No hole punch socket was returned")]
+    SocketChannelClosed,
 }
 
 #[cfg(test)]
