@@ -32,7 +32,7 @@ const HOLEPUNCH_WAIT_MILLIS: u64 = 2000;
 const MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS: usize = 2048;
 
 /// Maximum time to wait for a hole-punch response
-const HOLEPUNCH_TIMEOUT: Duration = Duration::from_secs(30);
+const HOLEPUNCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Maximum capacity of channel used to send/recieve holepunch pakets
 const PACKET_CHANNEL_CAPACITY: usize = 1024;
