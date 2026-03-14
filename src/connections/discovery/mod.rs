@@ -11,7 +11,7 @@ use crate::{
 use harddrive_party_shared::{ui_messages::UiServerError, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
 use local_ip_address::local_ip;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use quinn::AsyncUdpSocket;
 use std::{
     collections::HashMap,
@@ -104,6 +104,11 @@ impl PeerDiscovery {
         // TODO make this offline-first by if we have an error and mDNS is enabled, ignore the
         // error
         let local_connection_details = stun_test(&raw_socket, stun_servers).await?;
+        info!(
+            "Peer discovery ready: local_bind={} announce_details={:?}",
+            raw_socket.local_addr()?,
+            local_connection_details
+        );
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
@@ -162,9 +167,13 @@ impl PeerDiscovery {
         // In a separate task, loop over peer announcements
         tokio::spawn(async move {
             while let Some(peer_connect) = peer_announce_rx.recv().await {
-                debug!(
-                    "Attempting to connect to peer {}",
-                    peer_connect.announce_address
+                let discovery_method = peer_connect.discovery_method.clone();
+                let peer_name = peer_connect.announce_address.name.clone();
+                info!(
+                    "Handling {:?} peer announcement for {} ({:?})",
+                    discovery_method,
+                    peer_name,
+                    peer_connect.announce_address.connection_details
                 );
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
@@ -173,7 +182,7 @@ impl PeerDiscovery {
                     pending_peer_connections.clone(),
                     peers.clone(),
                     peer_connect.announce_address,
-                    peer_connect.discovery_method,
+                    discovery_method.clone(),
                     known_peers.clone(),
                 )
                 .await;
@@ -182,6 +191,11 @@ impl PeerDiscovery {
                     let _ = response_tx.send(result);
                 } else if let Err(err) = result {
                     warn!("Failed to handle gossiped peer announcement {err}");
+                } else {
+                    info!(
+                        "Finished handling {:?} peer announcement for {}",
+                        discovery_method, peer_name
+                    );
                 }
             }
         });
@@ -238,6 +252,13 @@ pub async fn handle_peer_announcement(
     known_peers: KnownPeers,
 ) -> Result<(), UiServerErrorWrapper> {
     known_peers.add_peer(&their_announce_address)?;
+    info!(
+        "Peer announcement received via {:?}: local={:?} remote={} ({:?})",
+        discovery_method,
+        our_announce_address.connection_details,
+        their_announce_address.name,
+        their_announce_address.connection_details
+    );
     // Check it is not ourself
     if our_announce_address == their_announce_address {
         return Err(UiServerError::PeerDiscovery("Cannot connect to ourself".to_string()).into());
@@ -266,14 +287,22 @@ pub async fn handle_peer_announcement(
     {
         (Some(discovered_peer), _) => {
             // We connect to them
-            debug!("Connecting to {discovered_peer:?}");
+            info!(
+                "Peer announcement resolved to outgoing connection: peer={} addr={} via {:?}",
+                discovered_peer.announce_address.name,
+                discovered_peer.socket_address,
+                discovered_peer.discovery_method
+            );
             if peers_tx.send(discovered_peer).await.is_err() {
                 error!("Cannot write to channel");
             }
             Ok(())
         }
         (None, socket_address) => {
-            debug!("Successfully handled peer - awaiting connection from their side");
+            info!(
+                "Peer announcement resolved to waiting for incoming connection: peer={} expected_remote_addr={}",
+                their_announce_address.name, socket_address
+            );
             // TODO should we clear poison here?
             // They connect to us
             pending_peer_connections
@@ -299,7 +328,15 @@ pub async fn handle_peer(
             .into()),
             PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
                 Some(mut puncher) => {
+                    info!(
+                        "Starting asymmetric->symmetric hole punch: remote_peer={} remote_ip={}",
+                        announce_address.name, remote_ip
+                    );
                     let socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
+                    info!(
+                        "Asymmetric->symmetric hole punch found remote sender for {} at {}",
+                        announce_address.name, socket_address
+                    );
                     // Wait for them to connect to us
                     Ok((None, socket_address))
                 }
@@ -320,7 +357,21 @@ pub async fn handle_peer(
                     match hole_puncher {
                         Some(mut puncher) => {
                             if our_socket_address.ip() != socket_address.ip() {
+                                info!(
+                                    "Starting asymmetric->asymmetric hole punch: peer={} local_public_addr={} remote_public_addr={}",
+                                    announce_address.name, our_socket_address, socket_address
+                                );
                                 puncher.hole_punch_peer(socket_address).await?;
+                                info!(
+                                    "Asymmetric->asymmetric hole punch completed for peer={} remote_public_addr={}",
+                                    announce_address.name, socket_address
+                                );
+                            } else {
+                                info!(
+                                    "Skipping hole punch for peer={} because both peers share public IP {}",
+                                    announce_address.name,
+                                    our_socket_address.ip()
+                                );
                             }
                             // Decide whether to connect or let them connect, by lexicographically
                             // comparing socket addresses
@@ -345,7 +396,15 @@ pub async fn handle_peer(
                     }
                 }
                 PeerConnectionDetails::Symmetric(_) => {
+                    info!(
+                        "Starting birthday-paradox hard side: peer={} target_addr={}",
+                        announce_address.name, socket_address
+                    );
                     let (socket, socket_address) = birthday_hard_side(socket_address).await?;
+                    info!(
+                        "Birthday-paradox hard side obtained socket for peer={} target_addr={}",
+                        announce_address.name, socket_address
+                    );
                     Ok((
                         Some(DiscoveredPeer {
                             discovery_method,
