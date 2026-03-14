@@ -1,9 +1,9 @@
 //! Public address / NAT type discovery using STUN
 use anyhow::anyhow;
 use harddrive_party_shared::wire_messages::PeerConnectionDetails;
-use log::debug;
+use log::{debug, warn};
 use rand::seq::SliceRandom;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use stunclient::StunClient;
 use tokio::net::UdpSocket;
 
@@ -42,6 +42,7 @@ async fn multipe_attempt_stun_query(
     socket: &UdpSocket,
     stun_servers_override: Option<Vec<String>>,
 ) -> anyhow::Result<(SocketAddr, SocketAddr)> {
+    let local_ip = socket.local_addr()?.ip();
     let selected_stun_servers: Vec<String> = if let Some(stun_servers) = stun_servers_override {
         stun_servers
     } else {
@@ -64,12 +65,16 @@ async fn multipe_attempt_stun_query(
         debug!("Attempting connection to stun server {stun_server}");
         match first_test {
             None => {
-                if let Ok((public_add1, stun_server1)) = stun_query(socket, stun_server).await {
+                if let Ok((public_add1, stun_server1)) =
+                    stun_query(socket, stun_server, local_ip).await
+                {
                     first_test = Some((public_add1, stun_server1));
                 }
             }
             Some((public_add1, stun_server1)) => {
-                if let Ok((public_add2, stun_server2)) = stun_query(socket, stun_server).await {
+                if let Ok((public_add2, stun_server2)) =
+                    stun_query(socket, stun_server, local_ip).await
+                {
                     if stun_server1 != stun_server2 {
                         return Ok((public_add1, public_add2));
                     }
@@ -86,6 +91,7 @@ async fn multipe_attempt_stun_query(
 async fn stun_query(
     socket: &UdpSocket,
     stun_server: &str,
+    local_ip: IpAddr,
 ) -> anyhow::Result<(SocketAddr, SocketAddr)> {
     let stun_server = stun_server
         .to_socket_addrs()?
@@ -93,7 +99,72 @@ async fn stun_query(
         .ok_or_else(|| anyhow!("Failed to get IP of stun server"))?;
     let stun_client1 = StunClient::new(stun_server);
     let public_addr1 = stun_client1.query_external_address_async(socket).await?;
+    if public_addr1.ip() != local_ip && !is_globally_reachable_ip(public_addr1.ip()) {
+        warn!(
+            "Ignoring STUN response from {stun_server} with non-public mapped address {public_addr1}"
+        );
+        return Err(anyhow!(
+            "STUN server returned non-public mapped address {public_addr1}"
+        ));
+    }
     Ok((public_addr1, stun_server))
+}
+
+fn is_globally_reachable_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => is_globally_reachable_ipv4(ip),
+        IpAddr::V6(ip) => is_globally_reachable_ipv6(ip),
+    }
+}
+
+fn is_globally_reachable_ipv4(ip: Ipv4Addr) -> bool {
+    if ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_documentation()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+    {
+        return false;
+    }
+
+    let [a, b, ..] = ip.octets();
+
+    // Carrier-grade NAT shared address space
+    if a == 100 && (64..=127).contains(&b) {
+        return false;
+    }
+
+    // Benchmarking / reserved / future use
+    if a == 198 && (b == 18 || b == 19) {
+        return false;
+    }
+    if a >= 240 {
+        return false;
+    }
+
+    true
+}
+
+fn is_globally_reachable_ipv6(ip: Ipv6Addr) -> bool {
+    if ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+    {
+        return false;
+    }
+
+    let segments = ip.segments();
+
+    // Documentation prefix 2001:db8::/32
+    if segments[0] == 0x2001 && segments[1] == 0x0db8 {
+        return false;
+    }
+
+    true
 }
 
 #[cfg(test)]
@@ -201,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stun_asymmetric_local_servers() {
-        let public_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 45000);
+        let public_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 45000);
         let details = run_stun_with_servers(
             public_addr,
             public_addr,
@@ -214,8 +285,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_stun_symmetric_local_servers() {
-        let public_addr_1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), 45000);
-        let public_addr_2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 2)), 45001);
+        let public_addr_1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 45000);
+        let public_addr_2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 45001);
         let details = run_stun_with_servers(
             public_addr_1,
             public_addr_2,
@@ -226,6 +297,19 @@ mod tests {
         assert!(
             matches!(details, PeerConnectionDetails::Symmetric(ip) if ip == public_addr_2.ip())
         );
+    }
+
+    #[test]
+    fn rejects_private_or_shared_mapped_ipv4_addresses() {
+        assert!(!is_globally_reachable_ip(IpAddr::V4(Ipv4Addr::new(
+            10, 97, 64, 5
+        ))));
+        assert!(!is_globally_reachable_ip(IpAddr::V4(Ipv4Addr::new(
+            100, 64, 0, 1
+        ))));
+        assert!(is_globally_reachable_ip(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
     }
 }
 
