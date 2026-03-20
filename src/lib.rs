@@ -126,14 +126,25 @@ impl SharedState {
 
     /// Open a request stream and write a request to the peer with the given name
     pub async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let peers = self.peers.lock().await;
-        let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        Self::request_peer(request, peer).await
+        let connection = {
+            let peers = self.peers.lock().await;
+            let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+            peer.connection.clone()
+        };
+        Self::request_connection(request, &connection).await
     }
 
     /// Static method to open a request stream and write a request to the given peer
     pub async fn request_peer(request: Request, peer: &Peer) -> Result<RecvStream, RequestError> {
-        let (mut send, recv) = peer.connection.open_bi().await?;
+        Self::request_connection(request, &peer.connection).await
+    }
+
+    /// Static method to open a request stream and write a request on the given connection
+    pub async fn request_connection(
+        request: Request,
+        connection: &quinn::Connection,
+    ) -> Result<RecvStream, RequestError> {
+        let (mut send, recv) = connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("Message serialized, writing...");
         send.write_all(&buf).await?;

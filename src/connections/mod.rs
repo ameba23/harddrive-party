@@ -191,6 +191,8 @@ impl Hdp {
                 shared_state.shares,
                 shared_state.event_broadcaster,
                 peer_discovery.peer_announce_tx.clone(),
+                shared_state.peers.clone(),
+                shared_state.known_peers.clone(),
             ),
             server_connection,
             peer_discovery,
@@ -305,38 +307,68 @@ impl Hdp {
                     shared_state.wishlist.clone(),
                     announce_address.clone(),
                 );
-                let mut peers = shared_state.peers.lock().await;
 
+                // Announce ourselves to peers we connect to directly.
+                if !incoming {
+                    let self_announce = Request::AnnouncePeer(AnnouncePeer {
+                        announce_address: shared_state.announce_address.clone(),
+                    });
+                    if let Err(err) =
+                        SharedState::request_connection(self_announce, &peer.connection).await
+                    {
+                        warn!("Could not self-announce to {peer_name}: {err}");
+                    }
+                }
+
+                // Snapshot connected peers so we don't hold locks while awaiting network sends
+                let (other_connections, other_announces) = {
+                    let peers = shared_state.peers.lock().await;
+                    (
+                        peers
+                            .values()
+                            .map(|other_peer| other_peer.connection.clone())
+                            .collect::<Vec<_>>(),
+                        peers
+                            .values()
+                            .filter_map(|other_peer| other_peer.announce_address.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+
+                // If we have the remote peer's announce address, gossip it
                 if let Some(ref announce_address) = announce_address {
-                    let announce_peer = AnnouncePeer {
+                    let announce_peer = Request::AnnouncePeer(AnnouncePeer {
                         announce_address: announce_address.clone(),
-                    };
+                    });
 
-                    // Send their announce details to other peers who we are connected to
-                    // TODO we could clone peers here in order to run this loop after dropping the
-                    // mutex gaurd
-                    for other_peer in peers.values() {
-                        let request = Request::AnnouncePeer(announce_peer.clone());
-                        if let Err(err) = SharedState::request_peer(request, other_peer).await {
-                            error!("Failed to send announce message to {other_peer:?} - {err:?}");
+                    for other_connection in other_connections {
+                        if let Err(err) = SharedState::request_connection(
+                            announce_peer.clone(),
+                            &other_connection,
+                        )
+                        .await
+                        {
+                            error!("Failed to send announce message: {err:?}");
                         }
+                    }
+                }
 
-                        // We must also send the announce details of these other peers to this peer
-                        if let Some(ref announce_address_other) = peer.announce_address {
-                            let announce_other_peer = AnnouncePeer {
-                                announce_address: announce_address_other.clone(),
-                            };
-                            let request = Request::AnnouncePeer(announce_other_peer);
-                            if let Err(err) = SharedState::request_peer(request, &peer).await {
-                                error!("Failed to send announce message to {peer:?} - {err:?}");
-                            }
-                        }
+                // Send existing peers' announce details to the newly connected peer
+                for announce_address_other in other_announces {
+                    let request = Request::AnnouncePeer(AnnouncePeer {
+                        announce_address: announce_address_other,
+                    });
+                    if let Err(err) =
+                        SharedState::request_connection(request, &peer.connection).await
+                    {
+                        error!("Failed to send announce message to new peer: {err:?}");
                     }
                 }
 
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
 
+                let mut peers = shared_state.peers.lock().await;
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
