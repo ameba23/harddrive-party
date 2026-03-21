@@ -214,6 +214,24 @@ impl PeerConnectionDetails {
     }
 }
 
+impl std::fmt::Display for PeerConnectionDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let nat_type = match self {
+            PeerConnectionDetails::NoNat(_) => "No NAT",
+            PeerConnectionDetails::Asymmetric(_) => "Asymmetric NAT",
+            PeerConnectionDetails::Symmetric(_) => "Symmetric NAT",
+        };
+        let ip = self.ip().to_string();
+        let port = self.port();
+        let ip_port = match port {
+            Some(port) => format!("{ip}:{port}"),
+            None => ip.clone(),
+        };
+
+        write!(f, "{} {}", ip_port, nat_type)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
