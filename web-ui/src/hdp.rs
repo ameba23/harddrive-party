@@ -282,12 +282,7 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("")
                                 view=move || {
-                                    view! {
-                                        <Peers
-                                            announce_address
-                                            pending_peers
-                                        />
-                                    }
+                                    view! { <Peers announce_address pending_peers /> }
                                 }
                             />
                             <Route
@@ -300,12 +295,7 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("peers")
                                 view=move || {
-                                    view! {
-                                        <Peers
-                                            announce_address
-                                            pending_peers
-                                        />
-                                    }
+                                    view! { <Peers announce_address pending_peers /> }
                                 }
                             />
                             <Route
