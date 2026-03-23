@@ -145,10 +145,9 @@ impl AppContext {
             match client.download(&peer_path).await {
                 Ok(id) => {
                     debug!("Download requested with id: {}", id);
-                    let total_size = files
-                        .get()
-                        .get(&peer_path)
-                        .map_or(0, |file| file.size.unwrap_or_default());
+                    let cached_file = files.get().get(&peer_path).cloned();
+                    let total_size =
+                        cached_file.as_ref().map_or(0, |file| file.size.unwrap_or_default());
                     let request = UiDownloadRequest {
                         path: peer_path.path.clone(),
                         peer_name: peer_path.peer_name.clone(),
@@ -156,6 +155,7 @@ impl AppContext {
                         total_size,
                         request_id: id,
                         timestamp: std::time::Duration::from_secs(0), // TODO
+                        is_dir: cached_file.is_some_and(|file| file.is_dir.unwrap_or(false)),
                     };
                     set_requests.update(|requests| {
                         if requests.get_by_id(id).is_none() {
@@ -174,7 +174,7 @@ impl AppContext {
                                 size: None,
                                 download_status: RwSignal::new(DownloadStatus::Requested(id)),
                                 request: RwSignal::new(Some(request.clone())),
-                                is_dir: None,
+                                is_dir: Some(request.is_dir),
                                 is_expanded: RwSignal::new(true),
                                 is_visible: RwSignal::new(true),
                             });
@@ -302,6 +302,7 @@ impl AppContext {
                                     .entry(peer_path.clone())
                                     .and_modify(|file| {
                                         file.request.set(Some(request.clone()));
+                                        file.is_dir = Some(request.is_dir);
                                     })
                                     .or_insert(File {
                                         name: request.path.clone(),
@@ -309,7 +310,7 @@ impl AppContext {
                                         size: Some(request.total_size),
                                         download_status: RwSignal::new(download_status.clone()),
                                         request: RwSignal::new(Some(request.clone())),
-                                        is_dir: None, // We don't know whether it is a dir or a file
+                                        is_dir: Some(request.is_dir),
                                         is_expanded: RwSignal::new(true),
                                         is_visible: RwSignal::new(true),
                                     });
@@ -351,7 +352,6 @@ impl AppContext {
                 Ok(mut stream) => {
                     while let Some(Ok(requested_files)) = stream.next().await {
                         set_files.update(|files| {
-                            let is_dir_request = requested_files.len() > 0;
                             for requested_file in requested_files {
                                 let download_status = if requested_file.downloaded {
                                     DownloadStatus::Downloaded(request.request_id)
@@ -380,18 +380,12 @@ impl AppContext {
                                         is_visible: RwSignal::new(true),
                                     });
                             }
-                            // TODO here we should set the state of the parent request
-                            // - if request_files > 1 (or 0?) is_dir = Some(true) else
-                            // Some(false)
-                            let peer_path = PeerPath {
-                                peer_name: request.peer_name.clone(),
-                                path: request.path.clone(),
-                            };
-                            files.entry(peer_path).and_modify(|file| {
-                                if file.is_dir.is_none() {
-                                    file.is_dir = Some(is_dir_request);
-                                }
-                            });
+                            files
+                                .entry(PeerPath {
+                                    peer_name: request.peer_name.clone(),
+                                    path: request.path.clone(),
+                                })
+                                .and_modify(|file| file.is_dir = Some(request.is_dir));
                         });
                     }
                 }
