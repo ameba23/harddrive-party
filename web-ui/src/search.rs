@@ -66,7 +66,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
 
     view! {
         <form on:submit=do_search>
-            <Flex>
+            <Flex class="form-row">
                 <Input
                     rules=vec![InputRule::required(true.into())]
                     value=input_value

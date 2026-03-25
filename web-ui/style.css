@@ -197,6 +197,10 @@ pre {
 	gap: 8px;
 }
 
+.transfer-request-status {
+	margin-bottom: 6px;
+}
+
 .transfer-table .thaw-table {
 	width: 100%;
 	table-layout: fixed;
@@ -251,6 +255,61 @@ pre {
 	padding-left: 0;
 }
 
+.announce-card {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 14px;
+	align-items: center;
+	margin-bottom: 1rem;
+	padding: 14px;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+}
+
+.announce-card__qr {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 72px;
+}
+
+.announce-card__body {
+	min-width: 0;
+}
+
+.announce-card__label {
+	display: block;
+	margin-bottom: 6px;
+	font-weight: 600;
+}
+
+.announce-card__value-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.announce-card__value {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	white-space: nowrap;
+}
+
+.form-row {
+	gap: 8px;
+	align-items: stretch;
+}
+
+.form-row .thaw-input,
+.form-row .thaw-select,
+.form-row > :first-child {
+	flex: 1;
+	min-width: 0;
+}
+
 @media screen and (max-width: 720px) {
 	.file-table .thaw-table-cell:last-child {
 		width: 140px;
@@ -279,7 +338,7 @@ pre {
 	}
 
 	.tab-list {
-		overflow-x: hidden;
+		overflow-x: auto;
 	}
 
 	.transfer-table .thaw-table-cell:last-child {
@@ -289,7 +348,7 @@ pre {
 }
 
 @media screen and (max-width: 600px) {
-	.body, html {
+	body, html {
 		padding: 0 4px;
 	}
 
@@ -304,7 +363,8 @@ pre {
 
 	.tab-list .thaw-flex {
 		gap: 6px;
-		width: 100%;
+		width: max-content;
+		flex-wrap: nowrap;
 	}
 
 	.tab-list .thaw-tab {
@@ -314,6 +374,37 @@ pre {
 
 	.tab-list .thaw-tab .thaw-flex {
 		gap: 6px;
+	}
+
+	.announce-card {
+		grid-template-columns: 1fr;
+		gap: 10px;
+		padding: 12px;
+	}
+
+	.announce-card__qr {
+		justify-content: flex-start;
+	}
+
+	.announce-card__value-row {
+		align-items: stretch;
+	}
+
+	.form-row,
+	.form-row.thaw-flex {
+		flex-direction: column !important;
+		align-items: stretch !important;
+	}
+
+	.form-row > *,
+	.form-row.thaw-flex > * {
+		width: 100%;
+		min-width: 0;
+	}
+
+	.form-row > .thaw-button,
+	.form-row > button {
+		width: 100%;
 	}
 }
 

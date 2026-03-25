@@ -1,11 +1,10 @@
 use crate::{
-    display_bytes,
     file::{DownloadStatus, DownloadingFile, File, FileDisplayContext},
     ui_messages::UiDownloadRequest,
     AppContext, PeerPath,
 };
 use leptos::{
-    either::{Either, EitherOf3, EitherOf4},
+    either::EitherOf3,
     prelude::*,
 };
 use std::collections::BTreeMap;
@@ -70,22 +69,35 @@ pub fn Request(file: File) -> impl IntoView {
                     .map(|(_, file)| file.clone()) // TODO ideally dont clone
                     .collect::<Vec<File>>()
             };
-            let icon = move || match file.is_dir {
-                Some(true) => {
-                    if file.is_expanded.get() {
-                        EitherOf4::A(view! { <Icon icon=icondata::AiFolderOpenOutlined /> })
-                    } else {
-                        EitherOf4::B(view! { <Icon icon=icondata::AiFolderOutlined /> })
-                    }
-                }
+            let child_files_snapshot = child_files();
 
-                Some(false) => EitherOf4::C(view! { <Icon icon=icondata::AiFileOutlined /> }),
-                None => EitherOf4::D(view! {}),
-            };
-            Either::Left(view! {
+            if file.is_dir != Some(true) {
+                return view! {
+                    <Table class="transfer-table">
+                        <TableBody>
+                            <File file is_shared=false context=FileDisplayContext::Transfer />
+                        </TableBody>
+                    </Table>
+                }
+                    .into_any();
+            }
+
+            if child_files_snapshot.len() == 1 && child_files_snapshot[0].is_dir != Some(true) {
+                let child_file = child_files_snapshot[0].clone();
+                return view! {
+                    <Table class="transfer-table">
+                        <TableBody>
+                            <File file=child_file is_shared=false context=FileDisplayContext::Transfer />
+                        </TableBody>
+                    </Table>
+                }
+                    .into_any();
+            }
+
+            view! {
                 <div>
-                    {icon}{request.peer_name} " " {display_bytes(request.total_size)} " "
-                    {move || {
+                    <div class="transfer-request-status">
+                        {move || {
                         match file.download_status.get() {
                             DownloadStatus::Downloading { bytes_read, request_id: _ } => {
                                 EitherOf3::A(
@@ -107,7 +119,8 @@ pub fn Request(file: File) -> impl IntoView {
                             }
                             _ => EitherOf3::C(view! { <span></span> }),
                         }
-                    }}
+                        }}
+                    </div>
                     <div class="table-scroll">
                         <Table class="transfer-table">
                             <TableBody>
@@ -129,8 +142,9 @@ pub fn Request(file: File) -> impl IntoView {
                         </Table>
                     </div>
                 </div>
-            })
+            }
+                .into_any()
         }
-        None => Either::Right(view! { <li>"Never happens"</li> }),
+        None => view! { <li>"Never happens"</li> }.into_any(),
     }
 }

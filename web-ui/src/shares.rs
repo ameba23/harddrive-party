@@ -36,7 +36,7 @@ pub fn Shares(
         <Flex vertical=true>
             <div>
                 <p>"Add a directory to share"</p>
-                <Flex>
+                <Flex class="form-row">
                     <Input value=add_share_value>
                         <InputPrefix slot>
                             <Icon icon=icondata::AiFolderAddOutlined />

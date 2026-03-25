@@ -188,27 +188,33 @@ pub fn Peers(
     };
 
     view! {
-        <div style="margin-bottom: 1rem;">
+        <div class="announce-card">
             {move || {
                 qr_svg()
                     .map(|qr_svg| {
-                        view! { <div inner_html=qr_svg /> }
+                        view! { <div class="announce-card__qr" inner_html=qr_svg /> }
                     })
-            }} <span style="margin-right: 1rem;">Announce address</span> <code>{announce}</code>
-            <Popover trigger_type=PopoverTriggerType::Click>
-                <PopoverTrigger slot>
-                    <span title="Copy to clipboard">
-                        <Button
-                            icon=icondata::ChCopy
-                            on:click=copy_to_clipboard
-                            size=ButtonSize::Small
-                        />
-                    </span>
-                </PopoverTrigger>
-                "Copied"
-            </Popover>
+            }}
+            <div class="announce-card__body">
+                <span class="announce-card__label">"Announce address"</span>
+                <div class="announce-card__value-row">
+                    <code class="announce-card__value">{announce}</code>
+                    <Popover trigger_type=PopoverTriggerType::Click>
+                        <PopoverTrigger slot>
+                            <span title="Copy to clipboard">
+                                <Button
+                                    icon=icondata::ChCopy
+                                    on:click=copy_to_clipboard
+                                    size=ButtonSize::Small
+                                />
+                            </span>
+                        </PopoverTrigger>
+                        "Copied"
+                    </Popover>
+                </div>
+            </div>
         </div>
-        <Flex>
+        <Flex class="form-row form-row--peer-connect">
             <Input value=input_value placeholder="Enter an announce address">
                 <InputPrefix slot>
                     <Icon icon=icondata::AiUserOutlined />

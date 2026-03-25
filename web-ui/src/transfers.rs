@@ -159,4 +159,142 @@ mod tests {
         drop(handle);
         host.remove();
     }
+
+    #[wasm_bindgen_test]
+    fn renders_single_file_download_with_one_progress_bar() {
+        let host = mount_host();
+        let request = UiDownloadRequest {
+            path: "music/single.mp3".to_string(),
+            progress: 512,
+            total_size: 1024,
+            request_id: 2001,
+            timestamp: Duration::from_secs(1_710_000_001),
+            peer_name: "asphericKingCrab".to_string(),
+        };
+        let request_file = File {
+            name: request.path.clone(),
+            peer_name: request.peer_name.clone(),
+            size: Some(request.total_size),
+            is_dir: Some(false),
+            is_expanded: RwSignal::new(true),
+            is_visible: RwSignal::new(true),
+            download_status: RwSignal::new(DownloadStatus::Downloading {
+                bytes_read: request.progress,
+                request_id: request.request_id,
+            }),
+            request: RwSignal::new(Some(request.clone())),
+        };
+        let request_peer_path = PeerPath {
+            peer_name: request.peer_name.clone(),
+            path: request.path.clone(),
+        };
+        let mut files = BTreeMap::new();
+        files.insert(request_peer_path, request_file);
+
+        let app_context = AppContext::for_tests();
+        app_context.set_files.set(files.clone());
+
+        let mut requests = Requests::new();
+        requests.insert(&request);
+        let (requests, _set_requests) = signal(requests);
+        let (files, _set_files) = signal(files);
+        let (uploads, _set_uploads) = signal(Uploads::new());
+
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context.clone());
+            view! {
+                <ConfigProvider>
+                    <Transfers requests files uploads />
+                </ConfigProvider>
+            }
+        });
+
+        let progress_bars = host
+            .query_selector_all(".thaw-progress-bar")
+            .expect("progress bars should be queryable");
+        assert_eq!(progress_bars.length(), 1);
+
+        drop(handle);
+        host.remove();
+    }
+
+    #[wasm_bindgen_test]
+    fn renders_single_child_request_with_one_progress_bar() {
+        let host = mount_host();
+        let request = UiDownloadRequest {
+            path: "music".to_string(),
+            progress: 512,
+            total_size: 1024,
+            request_id: 2002,
+            timestamp: Duration::from_secs(1_710_000_002),
+            peer_name: "asphericKingCrab".to_string(),
+        };
+        let request_root = File {
+            name: request.path.clone(),
+            peer_name: request.peer_name.clone(),
+            size: Some(request.total_size),
+            is_dir: Some(true),
+            is_expanded: RwSignal::new(true),
+            is_visible: RwSignal::new(true),
+            download_status: RwSignal::new(DownloadStatus::Downloading {
+                bytes_read: request.progress,
+                request_id: request.request_id,
+            }),
+            request: RwSignal::new(Some(request.clone())),
+        };
+        let child_file = File {
+            name: "music/single.mp3".to_string(),
+            peer_name: request.peer_name.clone(),
+            size: Some(request.total_size),
+            is_dir: Some(false),
+            is_expanded: RwSignal::new(false),
+            is_visible: RwSignal::new(true),
+            download_status: RwSignal::new(DownloadStatus::Downloading {
+                bytes_read: request.progress,
+                request_id: request.request_id,
+            }),
+            request: RwSignal::new(Some(request.clone())),
+        };
+        let mut files = BTreeMap::new();
+        files.insert(
+            PeerPath {
+                peer_name: request.peer_name.clone(),
+                path: request.path.clone(),
+            },
+            request_root,
+        );
+        files.insert(
+            PeerPath {
+                peer_name: request.peer_name.clone(),
+                path: "music/single.mp3".to_string(),
+            },
+            child_file,
+        );
+
+        let app_context = AppContext::for_tests();
+        app_context.set_files.set(files.clone());
+
+        let mut requests = Requests::new();
+        requests.insert(&request);
+        let (requests, _set_requests) = signal(requests);
+        let (files, _set_files) = signal(files);
+        let (uploads, _set_uploads) = signal(Uploads::new());
+
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context.clone());
+            view! {
+                <ConfigProvider>
+                    <Transfers requests files uploads />
+                </ConfigProvider>
+            }
+        });
+
+        let progress_bars = host
+            .query_selector_all(".thaw-progress-bar")
+            .expect("progress bars should be queryable");
+        assert_eq!(progress_bars.length(), 1);
+
+        drop(handle);
+        host.remove();
+    }
 }
