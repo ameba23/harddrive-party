@@ -1,20 +1,15 @@
 use harddrive_party_shared::wire_messages::AnnounceAddress;
-use leptos::{either::Either, prelude::*};
+use leptos::prelude::*;
 use thaw::*;
 
 #[component]
-pub fn AnnounceAddressView(announce_address: String) -> impl IntoView {
-    match AnnounceAddress::from_string(announce_address.clone()) {
-        Ok(addr) => {
-            Either::Left(view! {
-                <span>
-                    <Icon icon=icondata::AiUserOutlined />
-                    " "
-                    <span>{format!("{} {}", addr.name, addr.connection_details)}</span>
-                </span>
-            })
-        }
-        Err(_) => Either::Right(view! { <span><code>{announce_address}</code></span> }),
+pub fn AnnounceAddressView(announce_address: AnnounceAddress) -> impl IntoView {
+    view! {
+        <span>
+            <Icon icon=icondata::AiUserOutlined />
+            " "
+            <span>{format!("{} {}", announce_address.name, announce_address.connection_details)}</span>
+        </span>
     }
 }
 
@@ -48,7 +43,11 @@ mod tests {
     fn renders_decoded_announce_address() {
         let host = mount_host();
         let handle = mount_to(host.clone(), || {
-            view! { <AnnounceAddressView announce_address="asphericKingCrabEJLLAHEK2".to_string() /> }
+            view! {
+                <AnnounceAddressView
+                    announce_address=AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string()).unwrap()
+                />
+            }
         });
 
         let html = host.inner_html();
@@ -60,14 +59,19 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    fn falls_back_to_raw_string_for_invalid_announce_address() {
+    fn renders_announced_name_and_connection_details() {
         let host = mount_host();
         let handle = mount_to(host.clone(), || {
-            view! { <AnnounceAddressView announce_address="not-a-real-announce-address".to_string() /> }
+            view! {
+                <AnnounceAddressView
+                    announce_address=AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string()).unwrap()
+                />
+            }
         });
 
         let html = host.inner_html();
-        assert!(html.contains("<code>not-a-real-announce-address</code>"));
+        assert!(html.contains("amberCloudYak"));
+        assert!(html.contains("203.0.113.88:7007 No NAT"));
 
         drop(handle);
         host.remove();

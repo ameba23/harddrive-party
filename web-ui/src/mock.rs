@@ -9,7 +9,7 @@ use harddrive_party_shared::{
         DownloadEvent, DownloadInfo, FilesQuery, Info, PeerPath, UiDownloadRequest, UiEvent,
         UiRequestedFile, UiServerError, UploadInfo,
     },
-    wire_messages::{Entry, IndexQuery, LsResponse},
+    wire_messages::{AnnounceAddress, Entry, IndexQuery, LsResponse},
 };
 use leptos::prelude::document;
 use std::{
@@ -122,12 +122,12 @@ impl MockClient {
         Ok(())
     }
 
-    pub async fn known_peers(&self) -> Result<Vec<String>, ClientError> {
+    pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, ClientError> {
         Ok(vec![
-            "asphericKingCrabEJLLAHEK2".to_string(),
-            "lunarTulipOxxjNkTQ1".to_string(),
-            "amberCloudYakG1/LAHFY0".to_string(),
-            "cinderDeltaFoxxjNkyQ1".to_string(),
+            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string())?,
+            AnnounceAddress::from_string("lunarTulipOxxjNkTQ1".to_string())?,
+            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string())?,
+            AnnounceAddress::from_string("cinderDeltaFoxxjNkyQ1".to_string())?,
         ])
     }
 

@@ -4,6 +4,7 @@ use crate::{
     file::{File, FileDisplayContext},
     AppContext, PeerPath,
 };
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 use leptos::{either::Either, prelude::*};
 use qrcode::{render::svg, QrCode};
 use std::collections::HashSet;
@@ -84,7 +85,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
 pub fn Peers(
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
-    known_peers: ReadSignal<Vec<String>>,
+    known_peers: ReadSignal<Vec<AnnounceAddress>>,
 ) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let qr_svg = move || {
@@ -131,11 +132,7 @@ pub fn Peers(
         known_peers
             .get()
             .into_iter()
-            .filter(|announce_address| {
-                !connected
-                    .iter()
-                    .any(|name| announce_address.starts_with(name))
-            })
+            .filter(|announce_address| !connected.contains(&announce_address.name))
             .collect::<Vec<_>>()
     };
 
@@ -226,7 +223,7 @@ pub fn Peers(
         <ul class="known-peers-list">
             <For
                 each=known_peers_iter
-                key=|announce_address| announce_address.clone()
+                key=|announce_address: &AnnounceAddress| announce_address.to_string()
                 children=move |announce_address| {
                     view! {
                         <li>
@@ -271,13 +268,15 @@ mod tests {
         let host = mount_host();
         let mut connected = HashSet::new();
         connected.insert("asphericKingCrab".to_string());
+        connected.insert("bob".to_string());
         let app_context = AppContext::for_tests();
         app_context.set_peers.set(connected);
         let (announce_address, _set_announce_address) = signal(None::<String>);
         let (pending_peers, _set_pending_peers) = signal(HashSet::<String>::new());
         let (known_peers, _set_known_peers) = signal(vec![
-            "asphericKingCrabEJLLAHEK2".to_string(),
-            "amberCloudYakG1/LAHFY0".to_string(),
+            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string()).unwrap(),
+            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string()).unwrap(),
+            AnnounceAddress::from_string("bobbyxjNkTQ1".to_string()).unwrap(),
         ]);
 
         let handle = mount_to(host.clone(), move || {
@@ -297,6 +296,7 @@ mod tests {
         let all_text = host.text_content().unwrap_or_default();
 
         assert!(known_text.contains("amberCloudYak"));
+        assert!(known_text.contains("bobby"));
         assert!(!known_text.contains("asphericKingCrab"));
         assert!(all_text.contains("asphericKingCrab"));
 

@@ -1,6 +1,7 @@
 pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
 use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 
 use crate::{
     components::header::HdpHeader,
@@ -81,7 +82,7 @@ pub fn HdpUi() -> impl IntoView {
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
     let (search_results, set_search_results) = signal(Vec::<PeerPath>::new());
-    let (known_peers, set_known_peers) = signal(Vec::<String>::new());
+    let (known_peers, set_known_peers) = signal(Vec::<AnnounceAddress>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
@@ -133,7 +134,7 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 Err(err) => {
                     set_error_message.update(|error_messages| {
-                        error_messages.insert(err.into());
+                        error_messages.insert(err);
                     });
                 }
             }

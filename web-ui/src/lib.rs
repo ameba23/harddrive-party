@@ -17,7 +17,7 @@ use futures::{stream::LocalBoxStream, StreamExt};
 use harddrive_party_shared::{
     client::Client,
     ui_messages::{PeerPath, UiRequestedFile, UiServerError},
-    wire_messages::IndexQuery,
+    wire_messages::{AnnounceAddress, IndexQuery},
 };
 pub use hdp::*;
 use leptos::{prelude::*, task::spawn_local};
@@ -145,7 +145,7 @@ impl UiClient {
         }
     }
 
-    pub async fn known_peers(&self) -> Result<Vec<String>, AppError> {
+    pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, AppError> {
         match self {
             UiClient::Real(client) => client.known_peers().await.map_err(AppError::from),
             #[cfg(feature = "mock-ui")]
@@ -185,8 +185,8 @@ pub struct AppContext {
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
     pub set_pending_peers: WriteSignal<HashSet<String>>,
-    pub get_known_peers: ReadSignal<Vec<String>>,
-    pub set_known_peers: WriteSignal<Vec<String>>,
+    pub get_known_peers: ReadSignal<Vec<AnnounceAddress>>,
+    pub set_known_peers: WriteSignal<Vec<AnnounceAddress>>,
 }
 
 impl AppContext {
@@ -204,8 +204,8 @@ impl AppContext {
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
         set_pending_peers: WriteSignal<HashSet<String>>,
-        get_known_peers: ReadSignal<Vec<String>>,
-        set_known_peers: WriteSignal<Vec<String>>,
+        get_known_peers: ReadSignal<Vec<AnnounceAddress>>,
+        set_known_peers: WriteSignal<Vec<AnnounceAddress>>,
     ) -> Self {
         let (client, _set_client) = signal(client);
         Self {
@@ -238,7 +238,7 @@ impl AppContext {
         let (_errors, set_errors) = signal(HashSet::new());
         let (_search_results, set_search_results) = signal(Vec::<PeerPath>::new());
         let (_pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
-        let (known_peers, set_known_peers) = signal(Vec::<String>::new());
+        let (known_peers, set_known_peers) = signal(Vec::<AnnounceAddress>::new());
 
         Self::new(
             UiClient::real("http://127.0.0.1:3030".parse().expect("url should parse")),
