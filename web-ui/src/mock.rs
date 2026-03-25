@@ -82,7 +82,7 @@ impl MockClient {
         Ok(Info {
             name: "mock-ui".to_string(),
             os_home_dir: Some("/home/pumkin".to_string()),
-            announce_address: "mockAnnounceAddress".to_string(),
+            announce_address: "mock-uiC9Z/AAAB0".to_string(),
         })
     }
 
@@ -124,8 +124,10 @@ impl MockClient {
 
     pub async fn known_peers(&self) -> Result<Vec<String>, ClientError> {
         Ok(vec![
-            "asphericKingCrab@mock.example:1111".to_string(),
-            "lunarTulipOx@mock.example:2222".to_string(),
+            "asphericKingCrabEJLLAHEK2".to_string(),
+            "lunarTulipOxxjNkTQ1".to_string(),
+            "amberCloudYakG1/LAHFY0".to_string(),
+            "cinderDeltaFoxxjNkyQ1".to_string(),
         ])
     }
 
@@ -155,7 +157,15 @@ impl MockClient {
         &self,
     ) -> Result<LocalBoxStream<'static, Result<Vec<UiDownloadRequest>, UiServerError>>, ClientError>
     {
-        Ok(stream::iter(vec![Ok(Vec::new())]).boxed_local())
+        Ok(stream::iter(vec![Ok(vec![UiDownloadRequest {
+            path: "film/trailer.mov".to_string(),
+            progress: 0,
+            total_size: 3 * 1024 * 1024 * 1024,
+            request_id: 2000,
+            timestamp: Duration::from_secs(1_710_000_000),
+            peer_name: "asphericKingCrab".to_string(),
+        }])])
+        .boxed_local())
     }
 
     pub async fn add_share(&self, _share_dir: String) -> Result<u32, ClientError> {

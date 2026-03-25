@@ -211,12 +211,14 @@ pub fn Peers(
                 "Copied"
             </Popover>
         </div>
-        <Input value=input_value placeholder="Enter an announce address">
-            <InputPrefix slot>
-                <Icon icon=icondata::AiUserOutlined />
-            </InputPrefix>
-        </Input>
-        <Button on:click=add_peer>Add peer</Button>
+        <Flex>
+            <Input value=input_value placeholder="Enter an announce address">
+                <InputPrefix slot>
+                    <Icon icon=icondata::AiUserOutlined />
+                </InputPrefix>
+            </Input>
+            <Button on:click=add_peer>Add peer</Button>
+        </Flex>
         {show_pending_peers}
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
