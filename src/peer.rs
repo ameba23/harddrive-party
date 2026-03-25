@@ -144,7 +144,7 @@ async fn process_requests(
                                 }))
                                 .is_err()
                         {
-                            warn!("Response channel closed");
+                            warn!("No UI listeners for completed download event");
                         };
                     }
                     Err(e) => {
@@ -241,8 +241,10 @@ async fn download(
                             }))
                             .is_err()
                         {
-                            warn!("Response channel closed");
-                            break;
+                            warn!(
+                                "No UI listeners for download progress on {}",
+                                requested_file.path
+                            );
                         };
                     }
                 }
@@ -276,7 +278,10 @@ async fn download(
         }))
         .is_err()
     {
-        warn!("Response channel closed");
+        warn!(
+            "No UI listeners for final download progress on {}",
+            requested_file.path
+        );
     }
 
     if bytes_read < requested_file.size {

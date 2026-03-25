@@ -365,9 +365,6 @@ impl Hdp {
                     }
                 }
 
-                // TODO here we should check our wishlist and make any outstanding requests to this
-                // peer
-
                 let mut peers = shared_state.peers.lock().await;
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
