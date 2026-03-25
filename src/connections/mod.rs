@@ -206,9 +206,16 @@ impl Hdp {
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
             tokio::spawn(async move {
                 loop {
-                    if let Some(incoming_conn) = endpoint.accept().await {
-                        if incoming_connection_tx.send(incoming_conn).await.is_err() {
-                            warn!("Cannot handle incoming connections - channel closed");
+                    match endpoint.accept().await {
+                        Some(incoming_conn) => {
+                            if incoming_connection_tx.send(incoming_conn).await.is_err() {
+                                warn!("Cannot handle incoming connections - channel closed");
+                                break;
+                            }
+                        }
+                        None => {
+                            debug!("Endpoint closed; stopping incoming connection task");
+                            break;
                         }
                     }
                 }
@@ -262,10 +269,21 @@ impl Hdp {
                 // A signal for graceful shutdown
                 Some(()) = self.graceful_shutdown_rx.recv() => {
                     debug!("Shutting down");
+                    let connections = {
+                        let peers = self.shared_state.peers.lock().await;
+                        peers
+                            .values()
+                            .map(|peer| peer.connection.clone())
+                            .collect::<Vec<_>>()
+                    };
+                    for connection in connections {
+                        connection.close(0u32.into(), b"shutdown");
+                    }
                     if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                        endpoint.close(0u32.into(), b"shutdown");
                         endpoint.wait_idle().await;
                     }
-                    std::process::exit(0);
+                    return;
                 }
             }
         }
@@ -401,7 +419,7 @@ impl Hdp {
             }
 
             // Inform the UI the the peer has disconnected
-            debug!("Connection closed - removed peer");
+            info!("Peer disconnected: {} ({})", peer_name, err);
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
                     name: peer_name.clone(),
@@ -412,7 +430,12 @@ impl Hdp {
             // Now try to reconnect
             // TODO consider waiting a moment for network interface to come up if following sleep
             // TODO only do this when the error type means it makes sense to attempt reconnection
-            if let Some(announce_address) = announce_address {
+            if shared_state
+                .shutting_down
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                debug!("Skipping reconnect to {} because shutdown is in progress", peer_name);
+            } else if let Some(announce_address) = announce_address {
                 if let Err(err) = shared_state.connect_to_peer(announce_address).await {
                     warn!("Could not reconnect to peer following disconnect: {err}");
                 }
