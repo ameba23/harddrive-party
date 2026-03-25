@@ -107,24 +107,27 @@ pub fn Request(file: File) -> impl IntoView {
                             }
                             _ => EitherOf3::C(view! { <span></span> }),
                         }
-                    }} <Table>
-                        <TableBody>
-                            <For
-                                each=child_files
-                                key=|file| format!("{}{:?}", file.name, file.size)
-                                children=move |file: File| {
-                                    view! {
-                                        <File
-                                            file
-                                            is_shared=false
-                                            context=FileDisplayContext::Transfer
-                                        />
+                    }}
+                    <div class="table-scroll">
+                        <Table>
+                            <TableBody>
+                                <For
+                                    each=child_files
+                                    key=|file| format!("{}{:?}", file.name, file.size)
+                                    children=move |file: File| {
+                                        view! {
+                                            <File
+                                                file
+                                                is_shared=false
+                                                context=FileDisplayContext::Transfer
+                                            />
+                                        }
                                     }
-                                }
-                            />
+                                />
 
-                        </TableBody>
-                    </Table>
+                            </TableBody>
+                        </Table>
+                    </div>
                 </div>
             })
         }

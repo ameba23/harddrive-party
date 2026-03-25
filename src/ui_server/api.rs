@@ -228,6 +228,19 @@ pub async fn get_info(
     ))
 }
 
+/// GET `/known-peers`
+/// Returns the list of known peer announce addresses as strings.
+pub async fn get_known_peers(
+    State(shared_state): State<SharedState>,
+) -> Result<(StatusCode, Bincode<Vec<String>>), UiServerErrorWrapper> {
+    let peers = shared_state
+        .known_peers
+        .iter()
+        .map(|announce_address| announce_address.to_string())
+        .collect::<Vec<_>>();
+    Ok((StatusCode::OK, Bincode(peers)))
+}
+
 /// PUT /shares
 /// Add a directory to share
 /// Returns the number of items added if successful
