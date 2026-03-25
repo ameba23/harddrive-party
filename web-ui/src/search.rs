@@ -8,7 +8,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let input_value = RwSignal::new(String::new());
     let ac_c = app_context.clone();
-    let do_search = move |e: leptos::ev::MouseEvent| {
+    let do_search = move |e: leptos::ev::SubmitEvent| {
         e.prevent_default();
         let searchterm = input_value.get();
         let searchterm = searchterm.trim();
@@ -65,7 +65,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
     };
 
     view! {
-        <form>
+        <form on:submit=do_search>
             <Flex>
                 <Input
                     rules=vec![InputRule::required(true.into())]
@@ -76,7 +76,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
                         <Icon icon=icondata::ImSearch />
                     </InputPrefix>
                 </Input>
-                <Button button_type=ButtonType::Submit on_click=do_search>
+                <Button button_type=ButtonType::Submit>
                     "Search"
                 </Button>
             </Flex>
