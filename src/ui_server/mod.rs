@@ -6,8 +6,8 @@ pub use harddrive_party_shared::client;
 use crate::{
     ui_server::{
         api::{
-            delete_shares, get_info, get_request, get_requests, post_close, post_connect,
-            post_download, post_files, post_read, post_shares, put_shares,
+            delete_shares, get_info, get_known_peers, get_request, get_requests, post_close,
+            post_connect, post_download, post_files, post_read, post_shares, put_shares,
         },
         ws::handle_socket,
     },
@@ -45,6 +45,7 @@ pub async fn http_server(
                 .route("/download", post(post_download))
                 .route("/shares", post(post_shares))
                 .route("/info", get(get_info))
+                .route("/known-peers", get(get_known_peers))
                 .route("/read", post(post_read))
                 .route("/shares", put(put_shares))
                 .route("/shares", delete(delete_shares))
