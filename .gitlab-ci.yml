@@ -19,6 +19,15 @@ test-code:
   only:
     - main
 
+test-web-ui:
+  stage: test
+  script:
+    - apt-get update
+    - apt-get install -y firefox-esr geckodriver
+    - rustup target add wasm32-unknown-unknown
+    - cargo install wasm-bindgen-cli --version 0.2.114
+    - cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
+
 # - cargo install cargo-audit
 # - cargo audit
 # - cargo install cargo-tarpaulin
