@@ -23,7 +23,10 @@ test-web-ui:
   stage: test
   script:
     - apt-get update
-    - apt-get install -y firefox-esr geckodriver
+    - apt-get install -y firefox-esr wget tar
+    - wget -qO /tmp/geckodriver.tar.gz https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux64.tar.gz
+    - tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin
+    - chmod +x /usr/local/bin/geckodriver
     - rustup target add wasm32-unknown-unknown
     - cargo install wasm-bindgen-cli --version 0.2.114
     - cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
