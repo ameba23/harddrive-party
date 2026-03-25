@@ -262,10 +262,21 @@ impl Hdp {
                 // A signal for graceful shutdown
                 Some(()) = self.graceful_shutdown_rx.recv() => {
                     debug!("Shutting down");
+                    let connections = {
+                        let peers = self.shared_state.peers.lock().await;
+                        peers
+                            .values()
+                            .map(|peer| peer.connection.clone())
+                            .collect::<Vec<_>>()
+                    };
+                    for connection in connections {
+                        connection.close(0u32.into(), b"shutdown");
+                    }
                     if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                        endpoint.close(0u32.into(), b"shutdown");
                         endpoint.wait_idle().await;
                     }
-                    std::process::exit(0);
+                    return;
                 }
             }
         }
@@ -401,7 +412,7 @@ impl Hdp {
             }
 
             // Inform the UI the the peer has disconnected
-            debug!("Connection closed - removed peer");
+            info!("Peer disconnected: {} ({})", peer_name, err);
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
                     name: peer_name.clone(),

@@ -9,6 +9,7 @@ use harddrive_party::{
     Hdp,
 };
 use std::{env, path::PathBuf};
+use tokio::signal;
 use tokio::fs::create_dir_all;
 
 #[derive(Parser, Debug, Clone)]
@@ -177,7 +178,20 @@ async fn main() -> anyhow::Result<()> {
                 hdp.shared_state.get_ui_announce_address()
             );
 
-            hdp.run().await;
+            tokio::select! {
+                _ = hdp.run() => {}
+                result = signal::ctrl_c() => {
+                    match result {
+                        Ok(()) => {
+                            println!("Received Ctrl+C, shutting down...");
+                            hdp.shared_state.shut_down().await;
+                        }
+                        Err(err) => {
+                            return Err(anyhow!("Failed to listen for Ctrl+C: {err}"));
+                        }
+                    }
+                }
+            }
         }
         CliCommand::Ls {
             path,
