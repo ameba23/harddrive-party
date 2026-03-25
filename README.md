@@ -25,7 +25,34 @@ Allows two or more peers to share files. Peers can choose directories to share, 
 
 `harddrive-party start --share-dir ~/my-dir-to-share`
 
-Open `http://localhost:3030` in your browser.
+Open `http://127.0.0.1:3030` in your browser.
+
+### CLI quick reference
+
+- `start`
+  - Starts the peer process and local UI server.
+  - Options:
+    - `--share-dir <PATH>` (repeatable)
+    - `--storage <PATH>` (defaults to `$XDG_DATA_HOME/harddrive-party` or `~/.local/share/harddrive-party`)
+    - `--download-dir <PATH>` (defaults to `~/Downloads`)
+    - `--no-mdns` (disable local-network discovery)
+- `connect <announce-address>`
+  - Ask the running process to connect to a peer.
+- `ls [peer/path]`
+  - Query remote peer indexes.
+- `shares [path]`
+  - Query your own indexed shares.
+- `download <peer/path>`
+  - Start a download request.
+- `read <peer/path> [--start <N>] [--end <N>]`
+  - Stream a remote file (or range) directly to stdout.
+- `stop`
+  - Gracefully shut down the running process.
+
+Global options:
+
+- `--ui-address <URL>` (default `http://127.0.0.1:3030`) for commands that talk to the UI server.
+- `--verbose` to enable debug logging (`harddrive_party=debug`).
 
 Send your 'announce address' to someone you want to connect to (using some external messaging system).
 
@@ -54,19 +81,29 @@ UDP hole-punching is used to connect peers who are behind a NAT or firewall.
 
 ### Transport
 
-Peers connect to each other using [Quic](https://en.wikipedia.org/wiki/QUIC), with client authentication using ed25519. A Quic stream is opened for each RPC request to a peer. There are three types of wire message:
+Peers connect to each other using [QUIC](https://en.wikipedia.org/wiki/QUIC), with client authentication using Ed25519. A QUIC stream is opened for each RPC request to a peer. There are three types of wire message:
 
 - `Ls` - for querying the shared file index (with a sub-path, or search term).
 - `Read` - for downloading a file, or portion of a file. 
-- `AnnoucePeer` - for passing on connection details of another peer.
+- `AnnouncePeer` - for passing on connection details of another peer.
 
 These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode](https://docs.rs/bincode).
 
 ### Shared files
 
-To speed up file index queries, shared directory is indexed using a key-value store ([sled](https://docs.rs/sled)). The only metadata stored is the filenames and their size.
+To speed up file index queries, shared directories are indexed using a key-value store ([sled](https://docs.rs/sled)). The only metadata stored is filenames and sizes.
 
 A 'wishlist' of requested files is also stored in the database so that if a connection is lost, the files will be re-requested next time you connect to that peer.
+
+### HTTP / WebSocket control interface
+
+The UI server exposes:
+
+- WebSocket events on `/ws`
+- HTTP endpoints under `/api/*` used by both the web UI and CLI client helpers
+- Static access to downloaded files under `/downloads/*`
+
+Most `/api/*` payloads are bincode-encoded rather than JSON (see [`shared/src/client/mod.rs`](./shared/src/client/mod.rs)).
 
 ### Peer names
 
@@ -78,7 +115,7 @@ You can switch on logging by setting the environment variable `RUST_LOG=harddriv
 
 ## Web user interface
 
-There is a work-in-progress web-based front end build with [Leptos](https://docs.rs/leptos) and [ThawUI](https://github.com/thaw-ui/thaw), served by default to `http://localhost:3030`. Source code in [`./web-ui`](./web-ui)
+There is a work-in-progress web-based front end build with [Leptos](https://docs.rs/leptos) and [ThawUI](https://github.com/thaw-ui/thaw), served by default to `http://127.0.0.1:3030`. Source code in [`./web-ui`](./web-ui)
 
 ## Contributing
 

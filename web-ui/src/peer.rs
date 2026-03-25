@@ -5,6 +5,7 @@ use crate::{
     AppContext, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
+use qrcode::{render::svg, QrCode};
 use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
@@ -85,6 +86,24 @@ pub fn Peers(
     known_peers: ReadSignal<Vec<String>>,
 ) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
+    let qr_svg = move || {
+        announce_address.get().and_then(|announce_address| {
+            let announce_address = announce_address.trim().to_string();
+            if announce_address.is_empty() {
+                return None;
+            }
+
+            QrCode::new(announce_address)
+                .ok()
+                .map(|code| {
+                    code.render::<svg::Color<'_>>()
+                        .min_dimensions(50, 50)
+                        .dark_color(svg::Color("#111111"))
+                        .light_color(svg::Color("#ffffff"))
+                        .build()
+                })
+        })
+    };
 
     let show_peers = move || {
         if app_context.get_peers.get().is_empty() {
@@ -171,24 +190,26 @@ pub fn Peers(
     };
 
     view! {
-        <p>
-            <Flex>
-                <span>Announce address</span>
-                <code>{announce}</code>
-                <Popover trigger_type=PopoverTriggerType::Click>
-                    <PopoverTrigger slot>
-                        <span title="Copy to clipboard">
-                            <Button
-                                icon=icondata::ChCopy
-                                on:click=copy_to_clipboard
-                                size=ButtonSize::Small
-                            />
-                        </span>
-                    </PopoverTrigger>
-                    "Copied"
-                </Popover>
-            </Flex>
-        </p>
+        <div style="margin-bottom: 1rem;">
+            {move || {
+                qr_svg()
+                    .map(|qr_svg| {
+                        view! { <div inner_html=qr_svg /> }
+                    })
+            }} <span style="margin-right: 1rem;">Announce address</span> <code>{announce}</code>
+            <Popover trigger_type=PopoverTriggerType::Click>
+                <PopoverTrigger slot>
+                    <span title="Copy to clipboard">
+                        <Button
+                            icon=icondata::ChCopy
+                            on:click=copy_to_clipboard
+                            size=ButtonSize::Small
+                        />
+                    </span>
+                </PopoverTrigger>
+                "Copied"
+            </Popover>
+        </div>
         <Input value=input_value placeholder="Enter an announce address">
             <InputPrefix slot>
                 <Icon icon=icondata::AiUserOutlined />

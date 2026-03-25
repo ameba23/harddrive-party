@@ -48,6 +48,9 @@ enum CliCommand {
         /// If set, will not use mDNS to discover peers on the local network
         #[arg(long)]
         no_mdns: bool,
+        /// Custom STUN server to use for discovery (may be given multiple times)
+        #[arg(long, value_name = "HOST:PORT")]
+        stun_server: Vec<String>,
     },
     /// Download a file or dir
     Download {
@@ -112,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
             share_dir,
             download_dir,
             no_mdns,
+            stun_server,
         } => {
             let storage = match storage {
                 Some(storage) => PathBuf::from(storage),
@@ -134,7 +138,21 @@ async fn main() -> anyhow::Result<()> {
             };
             create_dir_all(&download_dir).await?;
 
-            let mut hdp = Hdp::new(storage, initial_share_dirs, download_dir, !no_mdns).await?;
+            let local_address = None;
+
+            let mut hdp = Hdp::new(
+                storage,
+                initial_share_dirs,
+                download_dir,
+                !no_mdns,
+                local_address,
+                if stun_server.is_empty() {
+                    None
+                } else {
+                    Some(stun_server)
+                },
+            )
+            .await?;
             println!(
                 "{} listening for peers on {}",
                 hdp.shared_state.name.green(),

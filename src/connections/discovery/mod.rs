@@ -68,8 +68,10 @@ impl PeerDiscovery {
         use_mdns: bool,
         public_key: [u8; 32],
         peers: Arc<Mutex<HashMap<String, Peer>>>,
-        port: Option<u16>,
+        local_addr: Option<SocketAddr>,
+        last_used_port: Option<u16>,
         known_peers_db: sled::Tree,
+        stun_servers: Option<Vec<String>>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
@@ -77,23 +79,31 @@ impl PeerDiscovery {
         // Channel for announcing peers to be handled
         let (peer_announce_tx, mut peer_announce_rx) = channel(1024);
 
-        let my_local_ip = local_ip()?;
-
-        let raw_socket = if let Some(given_port) = port {
-            // If we get an error with a given port try again with the port set to 0
-            if let Ok(socket) = UdpSocket::bind(SocketAddr::new(my_local_ip, given_port)).await {
-                socket
-            } else {
-                UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
-            }
+        let mut local_addr = if let Some(local_addr) = local_addr {
+            local_addr
         } else {
-            UdpSocket::bind(SocketAddr::new(my_local_ip, 0)).await?
+            SocketAddr::new(local_ip()?, 0)
         };
 
-        // Get our public address and NAT type from a STUN server
-        // TODO make this offline-first by if we have an error and mqtt is disabled, ignore the
+        // If port is unspecified, used the same port as last time
+        if let Some(given_port) = last_used_port {
+            if local_addr.port() == 0 {
+                local_addr.set_port(given_port);
+            }
+        }
+
+        // If we get an error with a given port try again with the port set to 0
+        let raw_socket = if let Ok(socket) = UdpSocket::bind(local_addr).await {
+            socket
+        } else {
+            warn!("Failed to bind to {local_addr} - trying another port");
+            UdpSocket::bind(SocketAddr::new(local_addr.ip(), 0)).await?
+        };
+
+        // Get our public address and NAT type from a STUN server.
+        // TODO make this offline-first by if we have an error and mDNS is enabled, ignore the
         // error
-        let local_connection_details = stun_test(&raw_socket).await?;
+        let local_connection_details = stun_test(&raw_socket, stun_servers).await?;
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
@@ -121,7 +131,7 @@ impl PeerDiscovery {
         };
 
         // Only use mdns if we are on a local network
-        let _mdns_server = if use_mdns && is_private(my_local_ip) {
+        let _mdns_server = if use_mdns && is_private(local_addr.ip()) {
             Some(
                 MdnsServer::new(
                     &id,

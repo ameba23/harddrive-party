@@ -65,24 +65,27 @@ impl Speedometer {
 
     /// Measure the speed.
     pub fn measure(&mut self) -> usize {
-        let mut max = 0;
-        for (index, entry) in self.queue.iter_mut().enumerate() {
-            if entry.timestamp.elapsed() > self.window_size {
-                self.total_value -= entry.value;
+        // Drop expired entries from the front so queue and total_value stay in sync.
+        while let Some(front) = self.queue.front() {
+            if front.timestamp.elapsed() > self.window_size {
+                let expired = self.queue.pop_front().expect("front exists");
+                self.total_value = self.total_value.saturating_sub(expired.value);
             } else {
-                max = index;
                 break;
             }
-        }
-
-        for _ in 0..max {
-            self.queue.pop_front();
         }
 
         if self.queue.is_empty() {
             0
         } else {
-            self.total_value / self.queue.len()
+            // Estimate bytes/s over the active sample span (clamped away from zero).
+            let oldest = self
+                .queue
+                .front()
+                .expect("queue is non-empty so front must exist")
+                .timestamp;
+            let elapsed_secs = oldest.elapsed().as_secs_f64().max(0.001);
+            (self.total_value as f64 / elapsed_secs) as usize
         }
     }
 }
@@ -102,7 +105,7 @@ mod tests {
     use super::*;
     #[test]
     fn measures_entries() {
-        let window_size = Duration::from_secs(1);
+        let window_size = Duration::from_millis(100);
         let mut meter = Speedometer::new(window_size);
         meter.entry(10);
         meter.entry(10);
@@ -117,5 +120,17 @@ mod tests {
         let window_size = Duration::from_secs(1);
         let mut meter = Speedometer::new(window_size);
         assert_eq!(meter.measure(), 0, "should not crash on empty queue");
+    }
+
+    #[test]
+    fn repeated_measure_after_expiry_does_not_underflow() {
+        let window_size = Duration::from_millis(50);
+        let mut meter = Speedometer::new(window_size);
+        meter.entry(10);
+        meter.entry(10);
+        std::thread::sleep(Duration::from_millis(75));
+
+        assert_eq!(meter.measure(), 0);
+        assert_eq!(meter.measure(), 0);
     }
 }

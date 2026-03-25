@@ -6,6 +6,7 @@ mod requests;
 pub mod search;
 pub mod shares;
 pub mod transfers;
+pub mod uploads;
 pub mod ws;
 
 use crate::{file::File, peer::Peer, ui_messages::FilesQuery};
@@ -17,6 +18,7 @@ use leptos::{prelude::*, task::spawn_local};
 use leptos_router::components::Router;
 use log::{debug, warn};
 use requests::Requests;
+use uploads::Uploads;
 use std::collections::{BTreeMap, HashSet};
 use thaw::*;
 use ui_messages::UiDownloadRequest;
@@ -41,6 +43,8 @@ pub struct AppContext {
     pub get_files: ReadSignal<BTreeMap<PeerPath, File>>,
     pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
     pub set_requests: WriteSignal<Requests>,
+    pub uploads: ReadSignal<Uploads>,
+    pub set_uploads: WriteSignal<Uploads>,
     pub set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
@@ -58,6 +62,8 @@ impl AppContext {
         get_files: ReadSignal<BTreeMap<PeerPath, File>>,
         set_files: WriteSignal<BTreeMap<PeerPath, File>>,
         set_requests: WriteSignal<Requests>,
+        uploads: ReadSignal<Uploads>,
+        set_uploads: WriteSignal<Uploads>,
         set_add_or_remove_share_message: WriteSignal<Option<Result<String, String>>>,
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
@@ -74,6 +80,8 @@ impl AppContext {
             get_files,
             set_files,
             set_requests,
+            uploads,
+            set_uploads,
             set_add_or_remove_share_message,
             set_error_message,
             set_search_results,

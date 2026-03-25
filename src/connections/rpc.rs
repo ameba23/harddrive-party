@@ -1,16 +1,26 @@
 //! Remote procedure call for share index queries and file uploading
 
 use crate::{
-    connections::discovery::{DiscoveryMethod, PeerConnect},
+    connections::{
+        discovery::{DiscoveryMethod, PeerConnect},
+        known_peers::KnownPeers,
+    },
+    peer::Peer,
     shares::{EntryParseError, Shares},
     ui_messages::{UiEvent, UploadInfo},
+    SharedState,
 };
 use bincode::{deserialize, serialize};
 use harddrive_party_shared::wire_messages::{
-    IndexQuery, LsResponse, LsResponseError, ReadQuery, Request,
+    AnnouncePeer, IndexQuery, LsResponse, LsResponseError, ReadQuery, Request,
 };
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use quinn::WriteError;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
 use tokio::{
     fs,
@@ -18,6 +28,7 @@ use tokio::{
     sync::{
         broadcast,
         mpsc::{channel, Receiver, Sender},
+        Mutex,
     },
 };
 
@@ -25,6 +36,12 @@ use super::speedometer::{self, Speedometer};
 
 /// Number of bytes uploaded at a time
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
+/// Minimum bytes written before emitting upload progress.
+const MIN_UPLOAD_UI_UPDATE_BYTES: u64 = 256 * 1024;
+/// Minimum time between upload progress updates on fast links.
+const MIN_UPLOAD_UI_UPDATE_INTERVAL: Duration = Duration::from_millis(300);
+/// Maximum time between upload progress updates on slow links.
+const MAX_UPLOAD_UI_UPDATE_INTERVAL: Duration = Duration::from_secs(2);
 
 struct ReadRequest {
     path: String,
@@ -42,6 +59,8 @@ pub struct Rpc {
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
     peer_announce_tx: Sender<PeerConnect>,
+    peers: Arc<Mutex<HashMap<String, Peer>>>,
+    known_peers: KnownPeers,
 }
 
 impl Rpc {
@@ -49,6 +68,8 @@ impl Rpc {
         shares: Shares,
         event_broadcaster: broadcast::Sender<UiEvent>,
         peer_announce_tx: Sender<PeerConnect>,
+        peers: Arc<Mutex<HashMap<String, Peer>>>,
+        known_peers: KnownPeers,
     ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
@@ -66,6 +87,8 @@ impl Rpc {
             shares,
             upload_tx,
             peer_announce_tx,
+            peers,
+            known_peers,
         }
     }
 
@@ -95,26 +118,66 @@ impl Rpc {
                         }
                     }
                     Request::AnnouncePeer(announce_peer) => {
-                        log::info!(
-                            "Discovered peer through existing peer connection {announce_peer:?}"
-                        );
-                        if self
-                            .peer_announce_tx
-                            .send(PeerConnect {
-                                discovery_method: DiscoveryMethod::Gossip,
-                                announce_address: announce_peer.announce_address,
-                                response_tx: None,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            error!("Unable to announce peer - channel closed");
+                        if announce_peer.announce_address.name == peer_name {
+                            info!("Received self-announcement {announce_peer:?}");
+                            self.handle_self_announcement(&announce_peer, &peer_name)
+                                .await;
+                        } else {
+                            info!(
+                                "Discovered peer through existing peer connection {announce_peer:?}"
+                            );
+                            if self
+                                .peer_announce_tx
+                                .send(PeerConnect {
+                                    discovery_method: DiscoveryMethod::Gossip,
+                                    announce_address: announce_peer.announce_address,
+                                    response_tx: None,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                error!("Unable to announce peer - channel closed");
+                            }
                         }
                     }
                 }
             }
             Err(_) => {
                 warn!("Cannot decode wire message");
+            }
+        }
+    }
+
+    /// Handle a self-announcement and relay it to existing peers
+    async fn handle_self_announcement(&self, announce_peer: &AnnouncePeer, sender: &str) {
+        let other_connections = {
+            let mut peers = self.peers.lock().await;
+
+            // Add the announce details to the Peer struct
+            if let Some(sender_peer) = peers.get_mut(sender) {
+                sender_peer.announce_address = Some(announce_peer.announce_address.clone());
+            } else {
+                warn!("Got self-announcement from peer we are not connected to");
+            }
+
+            // Snapshot peers so we don't hold locks while awaiting network sends
+            peers
+                .iter()
+                .filter(|(other_name, _)| other_name.as_str() != sender)
+                .map(|(_, peer)| peer.connection.clone())
+                .collect::<Vec<_>>()
+        };
+
+        // Also add it to the known peers list
+        if let Err(err) = self.known_peers.add_peer(&announce_peer.announce_address) {
+            warn!("Could not persist announce details for {sender}: {err}");
+        }
+
+        // Tell all existing peers about this sender
+        for other_connection in other_connections {
+            let request = Request::AnnouncePeer(announce_peer.clone());
+            if let Err(err) = SharedState::request_connection(request, &other_connection).await {
+                error!("Failed to relay announce message to peer connection: {err:?}");
             }
         }
     }
@@ -227,28 +290,55 @@ impl Uploader {
                 let mut buf: [u8; UPLOAD_BLOCK_SIZE] = [0; UPLOAD_BLOCK_SIZE];
                 let mut file = Box::into_pin(file);
                 let mut bytes_read: u64 = start.unwrap_or(0);
+                let mut bytes_read_since_last_ui_update: u64 = 0;
+                let mut last_ui_update = Instant::now();
                 let mut speedometer = Speedometer::new(speedometer::WINDOW_SIZE);
                 while let Ok(n) = file.read(&mut buf).await {
                     if n == 0 {
                         break;
                     }
                     bytes_read += n as u64;
+                    bytes_read_since_last_ui_update += n as u64;
                     speedometer.entry(n);
-                    if self
-                        .event_broadcaster
-                        .send(UiEvent::Uploaded(UploadInfo {
-                            path: path.clone(),
-                            bytes_read,
-                            speed: speedometer.measure(),
-                            peer_name: requester_name.clone(),
-                        }))
-                        .is_err()
-                    {
-                        warn!("Ui response channel closed");
-                    };
+
+                    let elapsed = last_ui_update.elapsed();
+                    let should_emit = (bytes_read_since_last_ui_update
+                        >= MIN_UPLOAD_UI_UPDATE_BYTES
+                        && elapsed >= MIN_UPLOAD_UI_UPDATE_INTERVAL)
+                        || elapsed >= MAX_UPLOAD_UI_UPDATE_INTERVAL;
+                    if should_emit {
+                        bytes_read_since_last_ui_update = 0;
+                        last_ui_update = Instant::now();
+                        if self
+                            .event_broadcaster
+                            .send(UiEvent::Uploaded(UploadInfo {
+                                path: path.clone(),
+                                bytes_read,
+                                total_size: size,
+                                speed: speedometer.measure(),
+                                peer_name: requester_name.clone(),
+                            }))
+                            .is_err()
+                        {
+                            warn!("Ui response channel closed");
+                        };
+                    }
                     output.write_all(&buf[..n]).await?;
                     debug!("Uploaded {bytes_read} bytes of {size}");
                 }
+                if self
+                    .event_broadcaster
+                    .send(UiEvent::Uploaded(UploadInfo {
+                        path: path.clone(),
+                        bytes_read,
+                        total_size: size,
+                        speed: speedometer.measure(),
+                        peer_name: requester_name,
+                    }))
+                    .is_err()
+                {
+                    warn!("Ui response channel closed");
+                };
                 output.finish()?;
                 Ok(())
             }
@@ -297,10 +387,7 @@ impl Uploader {
 
                     // If an endpoint is specified, only read until endpoint
                     match end {
-                        Some(endpoint) => {
-                            // TODO should this be just endpoint?
-                            Ok((Box::new(file.take(start + endpoint)), size))
-                        }
+                        Some(endpoint) => Ok((Box::new(file.take(endpoint - start)), size)),
                         None => Ok((Box::new(file), size)),
                     }
                 }

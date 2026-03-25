@@ -24,9 +24,11 @@ use crate::{
 use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
+use rand::Rng;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -44,10 +46,18 @@ const MAX_REQUEST_SIZE: usize = 1024;
 /// The size in bytes of a public key (certificate hash)
 const PUBLIC_KEY_LENGTH: usize = 32;
 
+/// Number of times to attempt to reconnect to a peer following lost connection
+const RECONNECT_MAX_ATTEMPTS: usize = 20;
+/// Initial delay for reconnection attempt (backs off exponentially)
+const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+/// Maximum backoff delay
+const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
+
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 
 /// A harddrive-party instance
 pub struct Hdp {
+    /// Shared state between UI server and backend
     pub shared_state: SharedState,
     /// Remote proceduce call for share queries and downloads
     rpc: Rpc,
@@ -66,11 +76,14 @@ impl Hdp {
     /// - Initial directories to share, if any
     /// - The path to store downloaded files
     /// - Whether to use mDNS to discover peers on the local network
+    /// - Optional custom STUN servers
     pub async fn new(
         storage: impl AsRef<Path>,
         share_dirs: Vec<String>,
         download_dir: PathBuf,
         use_mdns: bool,
+        local_addr: Option<SocketAddr>,
+        stun_servers: Option<Vec<String>>,
     ) -> anyhow::Result<Self> {
         // Local storage db
         let mut db_dir = storage.as_ref().to_owned();
@@ -105,7 +118,7 @@ impl Hdp {
         // Read the port from storage
         // We attempt to use the same port as last time if possible, so that if the process is
         // stopped and restarted, peers can reconnect without needing to exchange details again
-        let port = config_db
+        let last_used_port = config_db
             .get(b"port")
             .ok()
             .flatten()
@@ -115,8 +128,16 @@ impl Hdp {
         let known_peers_db = db.open_tree(KNOWN_PEERS)?;
 
         // Setup peer discovery
-        let (socket_option, peer_discovery) =
-            PeerDiscovery::new(use_mdns, pk_hash, peers.clone(), port, known_peers_db).await?;
+        let (socket_option, peer_discovery) = PeerDiscovery::new(
+            use_mdns,
+            pk_hash,
+            peers.clone(),
+            local_addr,
+            last_used_port,
+            known_peers_db,
+            stun_servers,
+        )
+        .await?;
 
         let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
 
@@ -170,6 +191,8 @@ impl Hdp {
                 shared_state.shares,
                 shared_state.event_broadcaster,
                 peer_discovery.peer_announce_tx.clone(),
+                shared_state.peers.clone(),
+                shared_state.known_peers.clone(),
             ),
             server_connection,
             peer_discovery,
@@ -284,38 +307,68 @@ impl Hdp {
                     shared_state.wishlist.clone(),
                     announce_address.clone(),
                 );
-                let mut peers = shared_state.peers.lock().await;
 
+                // Announce ourselves to peers we connect to directly.
+                if !incoming {
+                    let self_announce = Request::AnnouncePeer(AnnouncePeer {
+                        announce_address: shared_state.announce_address.clone(),
+                    });
+                    if let Err(err) =
+                        SharedState::request_connection(self_announce, &peer.connection).await
+                    {
+                        warn!("Could not self-announce to {peer_name}: {err}");
+                    }
+                }
+
+                // Snapshot connected peers so we don't hold locks while awaiting network sends
+                let (other_connections, other_announces) = {
+                    let peers = shared_state.peers.lock().await;
+                    (
+                        peers
+                            .values()
+                            .map(|other_peer| other_peer.connection.clone())
+                            .collect::<Vec<_>>(),
+                        peers
+                            .values()
+                            .filter_map(|other_peer| other_peer.announce_address.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+
+                // If we have the remote peer's announce address, gossip it
                 if let Some(ref announce_address) = announce_address {
-                    let announce_peer = AnnouncePeer {
+                    let announce_peer = Request::AnnouncePeer(AnnouncePeer {
                         announce_address: announce_address.clone(),
-                    };
+                    });
 
-                    // Send their announce details to other peers who we are connected to
-                    // TODO we could clone peers here in order to run this loop after dropping the
-                    // mutex gaurd
-                    for other_peer in peers.values() {
-                        let request = Request::AnnouncePeer(announce_peer.clone());
-                        if let Err(err) = SharedState::request_peer(request, other_peer).await {
-                            error!("Failed to send announce message to {other_peer:?} - {err:?}");
+                    for other_connection in other_connections {
+                        if let Err(err) = SharedState::request_connection(
+                            announce_peer.clone(),
+                            &other_connection,
+                        )
+                        .await
+                        {
+                            error!("Failed to send announce message: {err:?}");
                         }
+                    }
+                }
 
-                        // We must also send the announce details of these other peers to this peer
-                        if let Some(ref announce_address_other) = peer.announce_address {
-                            let announce_other_peer = AnnouncePeer {
-                                announce_address: announce_address_other.clone(),
-                            };
-                            let request = Request::AnnouncePeer(announce_other_peer);
-                            if let Err(err) = SharedState::request_peer(request, &peer).await {
-                                error!("Failed to send announce message to {peer:?} - {err:?}");
-                            }
-                        }
+                // Send existing peers' announce details to the newly connected peer
+                for announce_address_other in other_announces {
+                    let request = Request::AnnouncePeer(AnnouncePeer {
+                        announce_address: announce_address_other,
+                    });
+                    if let Err(err) =
+                        SharedState::request_connection(request, &peer.connection).await
+                    {
+                        error!("Failed to send announce message to new peer: {err:?}");
                     }
                 }
 
                 // TODO here we should check our wishlist and make any outstanding requests to this
                 // peer
 
+                let mut peers = shared_state.peers.lock().await;
                 if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
                     warn!("Adding connection for already connected peer!");
                 };
@@ -400,7 +453,11 @@ impl Hdp {
     }
 
     /// Initiate a Quic connection to a remote peer
-    async fn connect_to_peer(&mut self, peer: DiscoveredPeer) -> Result<(), UiServerError> {
+    pub(crate) async fn connect_to_peer(
+        &mut self,
+        peer: DiscoveredPeer,
+    ) -> Result<(), UiServerError> {
+        // If we don't have a static endpoint, create one for this connection
         let endpoint = match self.server_connection.clone() {
             ServerConnection::WithEndpoint(endpoint) => endpoint,
             ServerConnection::Symmetric(cert_der, priv_key_der) => {
@@ -424,11 +481,8 @@ impl Hdp {
             }
         };
 
-        let connection = endpoint
-            .connect(peer.socket_address, "peer")
-            .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?
-            .await
-            .map_err(|err| UiServerError::ConnectionError(format!("After connecting: {err:?}")))?;
+        // Keep attempting connection with backoff
+        let connection = connect_with_backoff(&endpoint, peer.socket_address, "peer").await?;
 
         let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
             UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
@@ -533,4 +587,52 @@ pub fn get_timestamp() -> Duration {
     system_time
         .duration_since(SystemTime::UNIX_EPOCH)
         .expect("Time went backwards")
+}
+
+/// Adds jitter to reconnection (to avoid all peers connecting at the same time)
+fn jittered(delay: Duration) -> Duration {
+    let mut rng = rand::thread_rng();
+
+    let base_ms = delay.as_millis() as i64;
+    let jitter_ms = (base_ms as f64 * 0.2) as i64;
+
+    let offset = rng.gen_range(-jitter_ms..=jitter_ms);
+    let final_ms = (base_ms + offset).max(0) as u64;
+
+    Duration::from_millis(final_ms)
+}
+
+/// Connect to a peer, attempting several times with a backoff delay
+async fn connect_with_backoff(
+    endpoint: &quinn::Endpoint,
+    peer_addr: std::net::SocketAddr,
+    server_name: &str,
+) -> Result<quinn::Connection, UiServerError> {
+    let mut delay = RECONNECT_INITIAL_DELAY;
+
+    for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
+        let connecting = endpoint
+            .connect(peer_addr, server_name)
+            .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?;
+
+        match connecting.await {
+            Ok(conn) => return Ok(conn),
+            Err(err) => {
+                // If this was the last attempt, return the error
+                if attempt >= RECONNECT_MAX_ATTEMPTS {
+                    return Err(UiServerError::ConnectionError(format!(
+                        "After connecting (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
+                    )));
+                }
+
+                warn!("Connection failed: {err} Retrying...");
+                let sleep_for = jittered(delay);
+                tokio::time::sleep(sleep_for).await;
+
+                // Exponential backoff with cap
+                delay = std::cmp::min(delay.saturating_mul(2), RECONNECT_MAX_DELAY);
+            }
+        }
+    }
+    unreachable!("Loop either returns success or error");
 }

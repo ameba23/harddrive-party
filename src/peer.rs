@@ -2,7 +2,7 @@
 use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -30,8 +30,12 @@ use tokio::{
 // once per download
 pub const DOWNLOAD_BLOCK_SIZE: usize = 64 * 1024;
 
-// How often (in bytes) to update the UI on process during downloading
-const UPDATE_EVERY: u64 = 10 * 1024;
+// Minimum data delta before sending a progress update to the UI.
+const MIN_UI_UPDATE_BYTES: u64 = 256 * 1024;
+// Minimum time between progress updates when transferring quickly.
+const MIN_UI_UPDATE_INTERVAL: Duration = Duration::from_millis(300);
+// Maximum time between progress updates on slow links.
+const MAX_UI_UPDATE_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The number of records which will be cached when doing index (`Ls`) queries to a remote peer
 /// This saves making subsequent requests with a duplicate query
@@ -190,6 +194,7 @@ async fn download(
 
         let mut bytes_read_since_last_ui_update = 0;
         let mut speedometer = Speedometer::new(Duration::from_secs(5));
+        let mut last_ui_update = Instant::now();
 
         loop {
             // TODO try reading chunks with offset to avoid head of line blocking
@@ -204,7 +209,11 @@ async fn download(
                         break;
                     }
 
-                    if bytes_read_since_last_ui_update > UPDATE_EVERY {
+                    let elapsed = last_ui_update.elapsed();
+                    let should_emit = (bytes_read_since_last_ui_update >= MIN_UI_UPDATE_BYTES
+                        && elapsed >= MIN_UI_UPDATE_INTERVAL)
+                        || elapsed >= MAX_UI_UPDATE_INTERVAL;
+                    if should_emit {
                         bytes_read += bytes_read_since_last_ui_update;
                         total_bytes_read += bytes_read_since_last_ui_update;
                         if bytes_read > requested_file.size {
@@ -216,6 +225,7 @@ async fn download(
                             bytes_read_since_last_ui_update, bytes_read, requested_file.size
                         );
                         bytes_read_since_last_ui_update = 0;
+                        last_ui_update = Instant::now();
 
                         if event_broadcaster
                             .send(UiEvent::Download(DownloadEvent {

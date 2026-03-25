@@ -4,7 +4,7 @@ use harddrive_party_shared::ui_messages::UiServerError;
 use log::{debug, warn};
 use quinn::{
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
-    AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig,
+    AsyncUdpSocket, ClientConfig, Connection, Endpoint, ServerConfig, TransportConfig,
 };
 use ring::signature::Ed25519KeyPair;
 use rustls::{
@@ -18,6 +18,7 @@ use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 use super::known_peers::KnownPeers;
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility
 const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
@@ -91,6 +92,15 @@ pub fn get_certificate_from_connection(
         .clone())
 }
 
+/// Transport configuration
+fn create_transport_config() -> anyhow::Result<TransportConfig> {
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+    transport_config.max_idle_timeout(Some(IDLE_TIMEOUT.try_into()?));
+    transport_config.max_concurrent_uni_streams(0_u8.into());
+    Ok(transport_config)
+}
+
 /// Returns default server configuration along with its certificate.
 fn configure_server(
     cert_der: CertificateDer<'static>,
@@ -120,23 +130,22 @@ fn configure_server(
     let mut server_config =
         ServerConfig::with_crypto(Arc::<QuicServerConfig>::new(crypto.try_into()?));
 
-    Arc::get_mut(&mut server_config.transport)
-        .ok_or_else(|| anyhow!("Cannot get transport config"))?
-        .max_concurrent_uni_streams(0_u8.into())
-        .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL));
+    *Arc::get_mut(&mut server_config.transport)
+        .ok_or_else(|| anyhow!("Cannot get transport config"))? = create_transport_config()?;
 
-    let client_crypto_builder = rustls::ClientConfig::builder();
-
+    // Now set client config (a peer is both server and client)
     let client_crypto_builder = rustls::client::danger::DangerousClientConfigBuilder {
-        cfg: client_crypto_builder,
+        cfg: rustls::ClientConfig::builder(),
     };
+
     let mut client_crypto = client_crypto_builder
         .with_custom_certificate_verifier(ServerVerification::new(known_peers))
         .with_client_cert_resolver(SimpleClientCertResolver::new(cert_chain, priv_key));
 
     client_crypto.alpn_protocols = supported_protocols;
 
-    let client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+    let mut client_config = ClientConfig::new(Arc::new(QuicClientConfig::try_from(client_crypto)?));
+    client_config.transport_config(create_transport_config()?.into());
 
     Ok((server_config, client_config))
 }
