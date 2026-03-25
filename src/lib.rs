@@ -126,14 +126,25 @@ impl SharedState {
 
     /// Open a request stream and write a request to the peer with the given name
     pub async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
-        let peers = self.peers.lock().await;
-        let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
-        Self::request_peer(request, peer).await
+        let connection = {
+            let peers = self.peers.lock().await;
+            let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+            peer.connection.clone()
+        };
+        Self::request_connection(request, &connection).await
     }
 
     /// Static method to open a request stream and write a request to the given peer
     pub async fn request_peer(request: Request, peer: &Peer) -> Result<RecvStream, RequestError> {
-        let (mut send, recv) = peer.connection.open_bi().await?;
+        Self::request_connection(request, &peer.connection).await
+    }
+
+    /// Static method to open a request stream and write a request on the given connection
+    pub async fn request_connection(
+        request: Request,
+        connection: &quinn::Connection,
+    ) -> Result<RecvStream, RequestError> {
+        let (mut send, recv) = connection.open_bi().await?;
         let buf = serialize(&request).map_err(|_| RequestError::SerializationError)?;
         debug!("Message serialized, writing...");
         send.write_all(&buf).await?;
@@ -177,24 +188,7 @@ impl SharedState {
             searchterm: None,
             recursive: true,
         });
-        //             // let mut cache = self.ls_cache.lock().await;
-        //             //
-        //             // if let hash_map::Entry::Occupied(mut peer_cache_entry) =
-        //             //     cache.entry(peer_name.clone())
-        //             // {
-        //             //     let peer_cache = peer_cache_entry.get_mut();
-        //             //     if let Some(responses) = peer_cache.get(&ls_request) {
-        //             //         debug!("Found existing responses in cache");
-        //             //         for entries in responses.iter() {
-        //             //             for entry in entries.iter() {
-        //             //                 debug!("Adding {} to wishlist dir: {}", entry.name, entry.is_dir);
-        //             //             }
-        //             //         }
-        //             //     } else {
-        //             //         debug!("Found nothing in cache");
-        //             //     }
-        //             // }
-        //
+
         let recv = self.request(ls_request, &peer_path.peer_name).await?;
 
         let peer_public_key = {
@@ -312,9 +306,9 @@ pub async fn process_length_prefix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connections::discovery::DiscoveredPeer;
+    use crate::connections::discovery::stun::test_utils::spawn_mock_stun_server;
     use crate::ui_messages::{DownloadInfo, FilesQuery};
-    use crate::wire_messages::{AnnouncePeer, Entry, ReadQuery, Request};
+    use crate::wire_messages::{Entry, ReadQuery};
     use futures::StreamExt;
     use harddrive_party_shared::client::ClientError;
     use std::collections::HashSet;
@@ -329,15 +323,20 @@ mod tests {
     async fn setup_peer(share_dirs: Vec<String>) -> (Hdp, reqwest::Url) {
         let storage = TempDir::new().unwrap();
         let downloads = storage.path().to_path_buf();
+        let (stun_server_1, stun_handle_1) = spawn_mock_stun_server(None).await;
+        let (stun_server_2, stun_handle_2) = spawn_mock_stun_server(None).await;
         let hdp = Hdp::new(
             storage,
             share_dirs,
             downloads,
             false,
             Some("127.0.0.1:0".parse().unwrap()),
+            Some(vec![stun_server_1, stun_server_2]),
         )
         .await
         .unwrap();
+        stun_handle_1.abort();
+        stun_handle_2.abort();
 
         let http_server_addr =
             ui_server::http_server(hdp.shared_state.clone(), "127.0.0.1:0".parse().unwrap())
@@ -364,15 +363,8 @@ mod tests {
 
         let (mut bob_hdp, bob_url) = setup_peer(vec![]).await;
         let bob = bob_hdp.shared_state.clone();
-        bob_hdp
-            .shared_state
-            .known_peers
-            .add_peer(&alice_local_announce)
-            .unwrap();
-        bob_hdp
-            .connect_to_peer(mock_discovered_peer(alice_local_announce))
-            .await
-            .unwrap();
+
+        bob.connect_to_peer(alice_local_announce).await.unwrap();
         tokio::spawn(async move {
             bob_hdp.run().await;
         });
@@ -381,32 +373,6 @@ mod tests {
         let bob_client = ui_server::client::Client::new(bob_url);
 
         (alice, bob, alice_client, bob_client)
-    }
-
-    async fn connect_peers(initiator: &mut Hdp, target: &SharedState) {
-        initiator
-            .shared_state
-            .known_peers
-            .add_peer(&target.announce_address)
-            .unwrap();
-        initiator
-            .connect_to_peer(mock_discovered_peer(target.announce_address.clone()))
-            .await
-            .unwrap();
-    }
-
-    fn mock_discovered_peer(announce_address: AnnounceAddress) -> DiscoveredPeer {
-        DiscoveredPeer {
-            socket_address: format!(
-                "127.0.0.1:{}",
-                announce_address.connection_details.port().unwrap()
-            )
-            .parse()
-            .unwrap(),
-            socket_option: None,
-            discovery_method: DiscoveryMethod::Direct,
-            announce_address,
-        }
     }
 
     #[tokio::test]
@@ -544,6 +510,7 @@ mod tests {
     #[tokio::test]
     async fn gossiped_peer_connection() {
         init_logger();
+        // Setup 3 peers
         let (mut alice_hdp, _alice_url) = setup_peer(vec!["tests/test-data".to_string()]).await;
         let alice = alice_hdp.shared_state.clone();
         tokio::spawn(async move {
@@ -560,33 +527,24 @@ mod tests {
         });
 
         // Bob connects to Alice and Carol
-        connect_peers(&mut bob_hdp, &alice).await;
-        connect_peers(&mut bob_hdp, &carol).await;
+        bob.connect_to_peer(alice.announce_address).await.unwrap();
+        bob.connect_to_peer(carol.announce_address.clone())
+            .await
+            .unwrap();
         tokio::spawn(async move {
             bob_hdp.run().await;
         });
 
-        // Alice must trust Carol's cert for outgoing verification
-        alice.known_peers.add_peer(&carol.announce_address).unwrap();
-
-        let mut alice_events = alice.event_broadcaster.subscribe();
-        let announce_peer = AnnouncePeer {
-            announce_address: carol.announce_address.clone(),
-        };
-        let _ = bob
-            .request(Request::AnnouncePeer(announce_peer), &alice.name)
-            .await
-            .unwrap();
-
+        // Wait until Alice's authoritative peer map includes Carol.
+        // This avoids races where a broadcast event is emitted before we subscribe.
+        let carol_name = carol.name.clone();
         let connected = timeout(Duration::from_secs(5), async move {
-            while let Ok(event) = alice_events.recv().await {
-                if let UiEvent::PeerConnected { name } = event {
-                    if name == carol.name {
-                        return true;
-                    }
+            loop {
+                if alice.peers.lock().await.contains_key(&carol_name) {
+                    return true;
                 }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            false
         })
         .await
         .unwrap_or(false);

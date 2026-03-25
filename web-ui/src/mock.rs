@@ -122,6 +122,13 @@ impl MockClient {
         Ok(())
     }
 
+    pub async fn known_peers(&self) -> Result<Vec<String>, ClientError> {
+        Ok(vec![
+            "asphericKingCrab@mock.example:1111".to_string(),
+            "lunarTulipOx@mock.example:2222".to_string(),
+        ])
+    }
+
     pub async fn requested_files(
         &self,
         request_id: u32,

@@ -2,7 +2,7 @@
 //! A lot of this is copied from <https://github.com/Frando/quinn-holepunch>
 use futures::ready;
 use log::{debug, info, warn};
-use rand::{Rng, SeedableRng};
+use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 use std::{
     io,
     net::{IpAddr, SocketAddr},
@@ -69,9 +69,8 @@ impl PunchingUdpSocket {
 
         // Loop over outgoing packets from the HolePuncher
         let socket_clone = socket.clone();
-        let mut rng = rand::thread_rng();
-        // TODO this could be a bigger seed (eg: [u8; 32])
-        let rng_seed: u64 = rng.gen();
+        let mut rng_seed = [0u8; 32];
+        OsRng.fill_bytes(&mut rng_seed);
         tokio::spawn(async move {
             while let Some(packet) = udp_send_rx.recv().await {
                 match socket_clone.send_to(&packet.data, packet.dest).await {
@@ -228,7 +227,7 @@ impl OutgoingHolepunchPacket {
 pub struct HolePuncher {
     udp_send: UdpSend,
     udp_recv_tx: broadcast::Sender<IncomingHolepunchPacket>,
-    rng_seed: u64,
+    rng_seed: [u8; 32],
 }
 
 impl HolePuncher {
@@ -305,7 +304,7 @@ impl HolePuncher {
         let udp_send = self.udp_send.clone();
         let seed = self.rng_seed;
         let join_handle = tokio::spawn(async move {
-            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+            let mut rng = rand::rngs::StdRng::from_seed(seed);
             for _ in 0..MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
                 // Send a packet to a random port
                 let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, rng.gen()));

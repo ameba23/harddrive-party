@@ -71,6 +71,7 @@ impl PeerDiscovery {
         local_addr: Option<SocketAddr>,
         last_used_port: Option<u16>,
         known_peers_db: sled::Tree,
+        stun_servers: Option<Vec<String>>,
     ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
@@ -100,14 +101,9 @@ impl PeerDiscovery {
         };
 
         // Get our public address and NAT type from a STUN server.
-        // In tests, skip STUN and assume local NoNat.
-        let local_connection_details = if cfg!(test) {
-            PeerConnectionDetails::NoNat(raw_socket.local_addr()?)
-        } else {
-            // TODO make this offline-first by if we have an error and mDNS is enabled, ignore the
-            // error
-            stun_test(&raw_socket).await?
-        };
+        // TODO make this offline-first by if we have an error and mDNS is enabled, ignore the
+        // error
+        let local_connection_details = stun_test(&raw_socket, stun_servers).await?;
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 

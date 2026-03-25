@@ -1,9 +1,11 @@
 use crate::{
+    components::announce_address::AnnounceAddressView,
     display_bytes,
     file::{File, FileDisplayContext},
     AppContext, PeerPath,
 };
 use leptos::{either::Either, prelude::*};
+use qrcode::{render::svg, QrCode};
 use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
@@ -58,19 +60,21 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                     {root_size}
                     " shared"
                 </div>
-                <Table class="file-table">
-                    <TableBody>
-                        <For
-                            each=files_iter
-                            key=|file| file.name.clone()
-                            children=move |file: File| {
-                                view! {
-                                    <File file is_shared=is_self context=FileDisplayContext::Peer />
+                <div class="table-scroll">
+                    <Table class="file-table">
+                        <TableBody>
+                            <For
+                                each=files_iter
+                                key=|file| file.name.clone()
+                                children=move |file: File| {
+                                    view! {
+                                        <File file is_shared=is_self context=FileDisplayContext::Peer />
+                                    }
                                 }
-                            }
-                        />
-                    </TableBody>
-                </Table>
+                            />
+                        </TableBody>
+                    </Table>
+                </div>
             </Flex>
         </div>
     }
@@ -80,8 +84,27 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
 pub fn Peers(
     announce_address: ReadSignal<Option<String>>,
     pending_peers: ReadSignal<HashSet<String>>,
+    known_peers: ReadSignal<Vec<String>>,
 ) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
+    let qr_svg = move || {
+        announce_address.get().and_then(|announce_address| {
+            let announce_address = announce_address.trim().to_string();
+            if announce_address.is_empty() {
+                return None;
+            }
+
+            QrCode::new(announce_address)
+                .ok()
+                .map(|code| {
+                    code.render::<svg::Color<'_>>()
+                        .min_dimensions(50, 50)
+                        .dark_color(svg::Color("#111111"))
+                        .light_color(svg::Color("#ffffff"))
+                        .build()
+                })
+        })
+    };
 
     let show_peers = move || {
         if app_context.get_peers.get().is_empty() {
@@ -101,6 +124,19 @@ pub fn Peers(
                 </div>
             })
         }
+    };
+
+    let known_peers_iter = move || {
+        let connected = app_context.get_peers.get();
+        known_peers
+            .get()
+            .into_iter()
+            .filter(|announce_address| {
+                !connected
+                    .iter()
+                    .any(|name| announce_address.starts_with(name))
+            })
+            .collect::<Vec<_>>()
     };
 
     let show_pending_peers = move || {
@@ -155,24 +191,26 @@ pub fn Peers(
     };
 
     view! {
-        <p>
-            <Flex>
-                <span>Announce address</span>
-                <code>{announce}</code>
-                <Popover trigger_type=PopoverTriggerType::Click>
-                    <PopoverTrigger slot>
-                        <span title="Copy to clipboard">
-                            <Button
-                                icon=icondata::ChCopy
-                                on:click=copy_to_clipboard
-                                size=ButtonSize::Small
-                            />
-                        </span>
-                    </PopoverTrigger>
-                    "Copied"
-                </Popover>
-            </Flex>
-        </p>
+        <div style="margin-bottom: 1rem;">
+            {move || {
+                qr_svg()
+                    .map(|qr_svg| {
+                        view! { <div inner_html=qr_svg /> }
+                    })
+            }} <span style="margin-right: 1rem;">Announce address</span> <code>{announce}</code>
+            <Popover trigger_type=PopoverTriggerType::Click>
+                <PopoverTrigger slot>
+                    <span title="Copy to clipboard">
+                        <Button
+                            icon=icondata::ChCopy
+                            on:click=copy_to_clipboard
+                            size=ButtonSize::Small
+                        />
+                    </span>
+                </PopoverTrigger>
+                "Copied"
+            </Popover>
+        </div>
         <Input value=input_value placeholder="Enter an announce address">
             <InputPrefix slot>
                 <Icon icon=icondata::AiUserOutlined />
@@ -182,5 +220,19 @@ pub fn Peers(
         {show_pending_peers}
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
+        <h2 class="text-xl">"Known peers"</h2>
+        <ul class="known-peers-list">
+            <For
+                each=known_peers_iter
+                key=|announce_address| announce_address.clone()
+                children=move |announce_address| {
+                    view! {
+                        <li>
+                            <AnnounceAddressView announce_address />
+                        </li>
+                    }
+                }
+            />
+        </ul>
     }
 }

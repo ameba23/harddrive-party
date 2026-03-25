@@ -81,6 +81,7 @@ pub fn HdpUi() -> impl IntoView {
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
     let (search_results, set_search_results) = signal(Vec::<PeerPath>::new());
+    let (known_peers, set_known_peers) = signal(Vec::<String>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
@@ -99,6 +100,8 @@ pub fn HdpUi() -> impl IntoView {
         set_error_message.clone(),
         set_search_results,
         set_pending_peers.clone(),
+        known_peers,
+        set_known_peers.clone(),
     );
 
     // Get initial info
@@ -119,6 +122,23 @@ pub fn HdpUi() -> impl IntoView {
             }),
         };
     });
+    {
+        let set_known_peers = set_known_peers.clone();
+        let set_error_message = set_error_message.clone();
+        let client = app_context.client.get_untracked();
+        spawn_local(async move {
+            match client.known_peers().await {
+                Ok(peers) => {
+                    set_known_peers.update(|known_peers| *known_peers = peers);
+                }
+                Err(err) => {
+                    set_error_message.update(|error_messages| {
+                        error_messages.insert(err.into());
+                    });
+                }
+            }
+        });
+    }
     {
         let app_context = app_context.clone();
         Effect::new(move || {
@@ -315,6 +335,7 @@ pub fn HdpUi() -> impl IntoView {
                                         <Peers
                                             announce_address
                                             pending_peers
+                                            known_peers
                                         />
                                     }
                                 }
@@ -333,6 +354,7 @@ pub fn HdpUi() -> impl IntoView {
                                         <Peers
                                             announce_address
                                             pending_peers
+                                            known_peers
                                         />
                                     }
                                 }

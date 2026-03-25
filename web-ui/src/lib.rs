@@ -145,6 +145,14 @@ impl UiClient {
         }
     }
 
+    pub async fn known_peers(&self) -> Result<Vec<String>, AppError> {
+        match self {
+            UiClient::Real(client) => client.known_peers().await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.known_peers().await.map_err(AppError::from),
+        }
+    }
+
     pub async fn add_share(&self, share_dir: String) -> Result<u32, AppError> {
         match self {
             UiClient::Real(client) => client.add_share(share_dir).await.map_err(AppError::from),
@@ -177,6 +185,8 @@ pub struct AppContext {
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
     pub set_pending_peers: WriteSignal<HashSet<String>>,
+    pub get_known_peers: ReadSignal<Vec<String>>,
+    pub set_known_peers: WriteSignal<Vec<String>>,
 }
 
 impl AppContext {
@@ -194,6 +204,8 @@ impl AppContext {
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
         set_pending_peers: WriteSignal<HashSet<String>>,
+        get_known_peers: ReadSignal<Vec<String>>,
+        set_known_peers: WriteSignal<Vec<String>>,
     ) -> Self {
         let (client, _set_client) = signal(client);
         Self {
@@ -210,6 +222,8 @@ impl AppContext {
             set_error_message,
             set_search_results,
             set_pending_peers,
+            get_known_peers,
+            set_known_peers,
         }
     }
 
