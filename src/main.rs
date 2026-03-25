@@ -9,6 +9,7 @@ use harddrive_party::{
     Hdp,
 };
 use std::{env, path::PathBuf};
+use tokio::signal;
 use tokio::fs::create_dir_all;
 
 #[derive(Parser, Debug, Clone)]
@@ -176,6 +177,19 @@ async fn main() -> anyhow::Result<()> {
                 "Announce address {}",
                 hdp.shared_state.get_ui_announce_address()
             );
+
+            let shared_state = hdp.shared_state.clone();
+            tokio::spawn(async move {
+                match signal::ctrl_c().await {
+                    Ok(()) => {
+                        println!("Received Ctrl+C, shutting down...");
+                        shared_state.shut_down().await;
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to listen for Ctrl+C: {err}");
+                    }
+                }
+            });
 
             hdp.run().await;
         }
