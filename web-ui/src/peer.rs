@@ -238,3 +238,69 @@ pub fn Peers(
         </ul>
     }
 }
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests {
+    use super::*;
+    use crate::AppContext;
+    use leptos::mount::mount_to;
+    use leptos::wasm_bindgen::JsCast;
+    use thaw::ConfigProvider;
+    use web_sys::HtmlElement;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn mount_host() -> HtmlElement {
+        let document = document();
+        let host = document
+            .create_element("div")
+            .expect("host element should be created")
+            .dyn_into::<HtmlElement>()
+            .expect("host should be an HtmlElement");
+        document
+            .body()
+            .expect("document body should exist")
+            .append_child(&host)
+            .expect("host should be appended");
+        host
+    }
+
+    #[wasm_bindgen_test]
+    fn filters_connected_peers_from_known_peers_list() {
+        let host = mount_host();
+        let mut connected = HashSet::new();
+        connected.insert("asphericKingCrab".to_string());
+        let app_context = AppContext::for_tests();
+        app_context.set_peers.set(connected);
+        let (announce_address, _set_announce_address) = signal(None::<String>);
+        let (pending_peers, _set_pending_peers) = signal(HashSet::<String>::new());
+        let (known_peers, _set_known_peers) = signal(vec![
+            "asphericKingCrabEJLLAHEK2".to_string(),
+            "amberCloudYakG1/LAHFY0".to_string(),
+        ]);
+
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context.clone());
+            view! {
+                <ConfigProvider>
+                    <Peers announce_address pending_peers known_peers />
+                </ConfigProvider>
+            }
+        });
+
+        let known_list = host
+            .query_selector(".known-peers-list")
+            .expect("query should succeed")
+            .expect("known peers list should exist");
+        let known_text = known_list.text_content().unwrap_or_default();
+        let all_text = host.text_content().unwrap_or_default();
+
+        assert!(known_text.contains("amberCloudYak"));
+        assert!(!known_text.contains("asphericKingCrab"));
+        assert!(all_text.contains("asphericKingCrab"));
+
+        drop(handle);
+        host.remove();
+    }
+}

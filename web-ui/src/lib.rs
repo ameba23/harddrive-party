@@ -227,6 +227,38 @@ impl AppContext {
         }
     }
 
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        let (own_name, _) = signal(Some("mock-ui".to_string()));
+        let (get_peers, set_peers) = signal(HashSet::<String>::new());
+        let (get_files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
+        let (_requests, set_requests) = signal(Requests::new());
+        let (uploads, set_uploads) = signal(Uploads::new());
+        let (_share_message, set_share_message) = signal(None::<Result<String, String>>);
+        let (_errors, set_errors) = signal(HashSet::new());
+        let (_search_results, set_search_results) = signal(Vec::<PeerPath>::new());
+        let (_pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
+        let (known_peers, set_known_peers) = signal(Vec::<String>::new());
+
+        Self::new(
+            UiClient::real("http://127.0.0.1:3030".parse().expect("url should parse")),
+            own_name,
+            get_peers,
+            set_peers,
+            get_files,
+            set_files,
+            set_requests,
+            uploads,
+            set_uploads,
+            set_share_message,
+            set_errors,
+            set_search_results,
+            set_pending_peers,
+            known_peers,
+            set_known_peers,
+        )
+    }
+
     pub fn shares_query(&self, query: IndexQuery) {
         let client = self.client.get_untracked();
         let set_files = self.set_files.clone();
