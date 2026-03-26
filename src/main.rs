@@ -9,8 +9,8 @@ use harddrive_party::{
     Hdp,
 };
 use std::{env, path::PathBuf};
-use tokio::signal;
 use tokio::fs::create_dir_all;
+use tokio::signal;
 
 #[derive(Parser, Debug, Clone)]
 #[clap(version, about, long_about = None)]

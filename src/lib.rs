@@ -31,7 +31,10 @@ use rand::{rngs::OsRng, Rng};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{atomic::{AtomicBool, Ordering}, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};

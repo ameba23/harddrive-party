@@ -434,7 +434,10 @@ impl Hdp {
                 .shutting_down
                 .load(std::sync::atomic::Ordering::SeqCst)
             {
-                debug!("Skipping reconnect to {} because shutdown is in progress", peer_name);
+                debug!(
+                    "Skipping reconnect to {} because shutdown is in progress",
+                    peer_name
+                );
             } else if let Some(announce_address) = announce_address {
                 if let Err(err) = shared_state.connect_to_peer(announce_address).await {
                     warn!("Could not reconnect to peer following disconnect: {err}");
