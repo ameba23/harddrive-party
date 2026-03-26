@@ -109,6 +109,14 @@ async fn process_requests(
     pin_mut!(request_stream);
     // Handle download requests for this peer in serial
     while let Some(mut request) = request_stream.next().await {
+        if let Some(reason) = connection.close_reason() {
+            debug!(
+                "Stopping request processing for {} because the connection is closed: {}",
+                peer_name, reason
+            );
+            break;
+        }
+
         let progress = wishlist
             .get_download_progress_for_request(request.request_id)
             .unwrap_or_default();
@@ -144,7 +152,7 @@ async fn process_requests(
                                 }))
                                 .is_err()
                         {
-                            warn!("Response channel closed");
+                            warn!("No UI listeners for completed download event");
                         };
                     }
                     Err(e) => {
@@ -154,6 +162,13 @@ async fn process_requests(
             }
             Err(e) => {
                 warn!("Error downloading {e:?}");
+                if let Some(reason) = connection.close_reason() {
+                    debug!(
+                        "Stopping request processing for {} after download error because the connection is closed: {}",
+                        peer_name, reason
+                    );
+                    break;
+                }
             }
         }
     }
@@ -241,8 +256,10 @@ async fn download(
                             }))
                             .is_err()
                         {
-                            warn!("Response channel closed");
-                            break;
+                            warn!(
+                                "No UI listeners for download progress on {}",
+                                requested_file.path
+                            );
                         };
                     }
                 }
@@ -276,7 +293,10 @@ async fn download(
         }))
         .is_err()
     {
-        warn!("Response channel closed");
+        warn!(
+            "No UI listeners for final download progress on {}",
+            requested_file.path
+        );
     }
 
     if bytes_read < requested_file.size {

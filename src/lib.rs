@@ -28,7 +28,14 @@ use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
 use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 use thiserror::Error;
 use tokio::sync::{broadcast, mpsc::Sender, oneshot, Mutex};
 
@@ -72,6 +79,8 @@ pub struct SharedState {
     pub announce_address: AnnounceAddress,
     /// Our OS home directory path
     pub os_home_dir: Option<String>,
+    /// Whether graceful shutdown has started
+    pub shutting_down: Arc<AtomicBool>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
@@ -113,6 +122,7 @@ impl SharedState {
             name,
             announce_address,
             os_home_dir,
+            shutting_down: Arc::new(AtomicBool::new(false)),
             graceful_shutdown_tx,
         })
     }
@@ -161,6 +171,12 @@ impl SharedState {
         &self,
         announce_address: AnnounceAddress,
     ) -> Result<(), UiServerErrorWrapper> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(UiServerError::ConnectionError(
+                "Shutting down; not connecting to peer".to_string(),
+            )
+            .into());
+        }
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -241,6 +257,7 @@ impl SharedState {
 
     /// Gracefully shut down the process
     pub async fn shut_down(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
         // TODO tidy up peer discovery / active transfers
         self.shares.flush().await;
         self.wishlist.flush().await;

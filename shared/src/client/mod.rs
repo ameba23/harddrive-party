@@ -164,6 +164,26 @@ impl Client {
         Ok(bincode::deserialize(&res.bytes().await?)?)
     }
 
+    /// GET `/known-peers`
+    /// Returns the list of known peer announce addresses as strings.
+    pub async fn known_peers(&self) -> Result<Vec<String>, ClientError> {
+        let res = self
+            .http_client
+            .get(
+                self.ui_url
+                    .join("api/known-peers")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::from_response(res).await);
+        }
+
+        Ok(bincode::deserialize(&res.bytes().await?)?)
+    }
+
     pub async fn requested_files(
         &self,
         id: u32,

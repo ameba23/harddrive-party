@@ -11,6 +11,20 @@
 	position: relative;
 }
 
+.tab-list .thaw-flex {
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.table-scroll {
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+}
+
+.table-scroll table {
+	min-width: 520px;
+}
+
 .hover-invert:hover {
 	filter: invert(1);
 }
@@ -23,9 +37,37 @@
 	width: 60px;
 }
 
+.known-peers-list {
+	list-style: none;
+	padding-left: 0;
+}
+
 @media screen and (max-width: 600px) {
         .body, html {
 		padding: 0 4px;
+	}
+
+	.hdp-header img {
+		width: 44px;
+	}
+
+	.hdp-header {
+		height: auto;
+		align-items: flex-start;
+	}
+
+	.tab-list .thaw-flex {
+		gap: 6px;
+		width: 100%;
+	}
+
+	.tab-list .thaw-tab {
+		padding: 6px 10px;
+		font-size: 0.9rem;
+	}
+
+	.tab-list .thaw-tab .thaw-flex {
+		gap: 6px;
 	}
 }
 

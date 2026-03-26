@@ -57,11 +57,7 @@ pub fn UploadRow(upload: RwSignal<UploadInfo>) -> impl IntoView {
                 {move || {
                     let info = upload_data();
                     let total = upload_size.get();
-                    format!(
-                        "Uploading {} of {} bytes",
-                        info.bytes_read,
-                        total
-                    )
+                    format!("Uploading {} of {} bytes", info.bytes_read, total)
                 }}
             </span>
         </div>

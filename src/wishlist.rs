@@ -397,7 +397,11 @@ impl WishList {
         Ok(Box::new(chunked))
     }
 
-    /// Subscribe to requested files for a particular peer
+    /// Subscribe to requested files for a particular peer.
+    ///
+    /// The returned stream first yields all currently outstanding files for the peer, then
+    /// continues with new requests as they are inserted. This is what allows downloads to resume
+    /// when a peer reconnects and a new per-peer worker subscribes.
     pub fn requests_for_peer(
         &self,
         peer_public_key: &[u8; 32],
@@ -546,6 +550,7 @@ pub enum DbError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use tempfile::TempDir;
 
     #[test]
@@ -616,5 +621,35 @@ mod tests {
         let request_complete = wishlist.file_completed(requested_file.clone()).unwrap();
 
         assert!(request_complete);
+    }
+
+    #[tokio::test]
+    async fn requests_for_peer_yields_existing_requests_before_subscribing_to_new_ones() {
+        let storage = TempDir::new().unwrap();
+        let mut db_dir = storage.as_ref().to_owned();
+        db_dir.push("db");
+        let db = sled::open(db_dir).expect("open");
+        let wishlist = WishList::new(&db).unwrap();
+
+        let peer_public_key = *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd";
+        let request_id = 7;
+        let request = DownloadRequest::new(
+            "music/single.mp3".to_string(),
+            1024,
+            request_id,
+            peer_public_key,
+        );
+        let requested_file = RequestedFile {
+            path: "music/single.mp3".to_string(),
+            size: 1024,
+            request_id,
+            downloaded: false,
+        };
+
+        wishlist.add_request(&request).unwrap();
+        wishlist.add_requested_file(&requested_file).unwrap();
+
+        let mut request_stream = wishlist.requests_for_peer(&peer_public_key);
+        assert_eq!(request_stream.next().await, Some(requested_file));
     }
 }
