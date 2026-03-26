@@ -250,9 +250,18 @@ impl Hdp {
 
                     if let Err(err) = self.handle_incoming_connection(maybe_peer_details.clone(), incoming_conn).await {
                         error!("Error when handling incoming peer connection {err:?}");
-                         if let Some((_, announce_address)) = maybe_peer_details {
+                         if let Some((discovery_method, announce_address)) = maybe_peer_details {
+                            if discovery_method == DiscoveryMethod::Gossip {
+                                self.peer_discovery
+                                    .schedule_gossip_retry_if_needed(announce_address.clone(), &err)
+                                    .await;
+                            }
                             let name = announce_address.name;
                              self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                        }
+                    } else if let Some((discovery_method, announce_address)) = maybe_peer_details {
+                        if discovery_method == DiscoveryMethod::Gossip {
+                            self.peer_discovery.clear_gossip_retry(&announce_address.name).await;
                         }
                     }
                 }
@@ -260,10 +269,19 @@ impl Hdp {
                 Some(peer) = self.peer_discovery.peers_rx.recv() => {
                     debug!("Discovered peer {peer:?}");
                     let name = peer.announce_address.name.clone();
+                    let discovery_method = peer.discovery_method.clone();
+                    let announce_address = peer.announce_address.clone();
 
                     if let Err(err) = self.connect_to_peer(peer).await {
                         error!("Cannot connect to discovered peer {err:?}");
+                        if discovery_method == DiscoveryMethod::Gossip {
+                            self.peer_discovery
+                                .schedule_gossip_retry_if_needed_ui(announce_address.clone(), &err)
+                                .await;
+                        }
                         self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                    } else if discovery_method == DiscoveryMethod::Gossip {
+                        self.peer_discovery.clear_gossip_retry(&announce_address.name).await;
                     };
                 }
                 // A signal for graceful shutdown
