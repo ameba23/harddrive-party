@@ -217,6 +217,7 @@ impl SharedState {
                             entry.size,
                             id,
                             peer_public_key,
+                            entry.is_dir,
                         )) {
                             error!("Cannot add download request {err:?}");
                         }
