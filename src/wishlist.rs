@@ -657,6 +657,7 @@ mod tests {
             1024,
             request_id,
             peer_public_key,
+            false,
         );
         let requested_file = RequestedFile {
             path: "music/single.mp3".to_string(),
