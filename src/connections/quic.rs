@@ -18,7 +18,7 @@ use crate::{connections::certificate_to_name, errors::UiServerErrorWrapper};
 use super::known_peers::KnownPeers;
 
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility
 const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
