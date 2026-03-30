@@ -209,10 +209,8 @@ mod tests {
             }
         });
 
-        let progress_bars = host
-            .query_selector_all(".thaw-progress-bar")
-            .expect("progress bars should be queryable");
-        assert_eq!(progress_bars.length(), 1);
+        let text = host.text_content().unwrap_or_default();
+        assert_eq!(text.matches("Downloading").count(), 1);
 
         drop(handle);
         host.remove();
@@ -289,10 +287,8 @@ mod tests {
             }
         });
 
-        let progress_bars = host
-            .query_selector_all(".thaw-progress-bar")
-            .expect("progress bars should be queryable");
-        assert_eq!(progress_bars.length(), 1);
+        let text = host.text_content().unwrap_or_default();
+        assert_eq!(text.matches("Downloading").count(), 1);
 
         drop(handle);
         host.remove();

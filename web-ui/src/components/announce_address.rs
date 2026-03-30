@@ -8,7 +8,9 @@ pub fn AnnounceAddressView(announce_address: AnnounceAddress) -> impl IntoView {
         <span>
             <Icon icon=icondata::AiUserOutlined />
             " "
-            <span>{format!("{} {}", announce_address.name, announce_address.connection_details)}</span>
+            <span>
+                {format!("{} {}", announce_address.name, announce_address.connection_details)}
+            </span>
         </span>
     }
 }
@@ -44,9 +46,10 @@ mod tests {
         let host = mount_host();
         let handle = mount_to(host.clone(), || {
             view! {
-                <AnnounceAddressView
-                    announce_address=AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string()).unwrap()
-                />
+                <AnnounceAddressView announce_address=AnnounceAddress::from_string(
+                        "asphericKingCrabEJLLAHEK2".to_string(),
+                    )
+                    .unwrap() />
             }
         });
 
@@ -63,9 +66,10 @@ mod tests {
         let host = mount_host();
         let handle = mount_to(host.clone(), || {
             view! {
-                <AnnounceAddressView
-                    announce_address=AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string()).unwrap()
-                />
+                <AnnounceAddressView announce_address=AnnounceAddress::from_string(
+                        "amberCloudYakG1/LAHFY0".to_string(),
+                    )
+                    .unwrap() />
             }
         });
 

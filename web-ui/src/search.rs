@@ -76,9 +76,7 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
                         <Icon icon=icondata::ImSearch />
                     </InputPrefix>
                 </Input>
-                <Button button_type=ButtonType::Submit>
-                    "Search"
-                </Button>
+                <Button button_type=ButtonType::Submit>"Search"</Button>
             </Flex>
         </form>
         {show_results}

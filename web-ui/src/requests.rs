@@ -66,6 +66,7 @@ pub fn Request(file: File) -> impl IntoView {
                             path: upper_bound,
                         },
                     )
+                    .filter(|(_, file)| file.name != peer_path.path)
                     .map(|(_, file)| file.clone()) // TODO ideally dont clone
                     .collect::<Vec<File>>()
             };
@@ -87,7 +88,11 @@ pub fn Request(file: File) -> impl IntoView {
                 return view! {
                     <Table class="transfer-table">
                         <TableBody>
-                            <File file=child_file is_shared=false context=FileDisplayContext::Transfer />
+                            <File
+                                file=child_file
+                                is_shared=false
+                                context=FileDisplayContext::Transfer
+                            />
                         </TableBody>
                     </Table>
                 }
@@ -98,27 +103,27 @@ pub fn Request(file: File) -> impl IntoView {
                 <div>
                     <div class="transfer-request-status">
                         {move || {
-                        match file.download_status.get() {
-                            DownloadStatus::Downloading { bytes_read, request_id: _ } => {
-                                EitherOf3::A(
-                                    view! {
-                                        <span>
-                                            <DownloadingFile bytes_read size=file.size />
-                                        </span>
-                                    },
-                                )
+                            match file.download_status.get() {
+                                DownloadStatus::Downloading { bytes_read, request_id: _ } => {
+                                    EitherOf3::A(
+                                        view! {
+                                            <span>
+                                                <DownloadingFile bytes_read size=file.size />
+                                            </span>
+                                        },
+                                    )
+                                }
+                                DownloadStatus::Downloaded(_) => {
+                                    EitherOf3::B(
+                                        view! {
+                                            <span title="Download complete">
+                                                <Icon icon=icondata::AiCheckCircleTwotone />
+                                            </span>
+                                        },
+                                    )
+                                }
+                                _ => EitherOf3::C(view! { <span></span> }),
                             }
-                            DownloadStatus::Downloaded(_) => {
-                                EitherOf3::B(
-                                    view! {
-                                        <span title="Download complete">
-                                            <Icon icon=icondata::AiCheckCircleTwotone />
-                                        </span>
-                                    },
-                                )
-                            }
-                            _ => EitherOf3::C(view! { <span></span> }),
-                        }
                         }}
                     </div>
                     <div class="table-scroll">

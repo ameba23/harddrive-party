@@ -228,7 +228,8 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             None => (full_path.clone(), Default::default()),
         };
         view! {
-            <pre title=full_path.clone()>
+            <pre title=full_path
+                .clone()>
                 {match uploader_label {
                     Some(peer_name) => {
                         let peer_name_title = peer_name.clone();
@@ -241,9 +242,10 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             .into_any()
                     }
                     None => view! { <span></span> }.into_any(),
-                }}
-                {indentation} {icon} " "
-                <span class="text-sm font-medium" title=display_name.clone()>{display_name.clone()}</span>
+                }} {indentation} {icon} " "
+                <span class="text-sm font-medium" title=display_name.clone()>
+                    {display_name.clone()}
+                </span>
             </pre>
         }
     };
@@ -292,17 +294,15 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                                     },
                                 )
                             }
-                            DownloadStatus::Uploading {
-                                bytes_read,
-                                total_size,
-                                speed,
-                            } => EitherOf6::F(
-                                view! {
-                                    <span>
-                                        <UploadingFile bytes_read total_size speed />
-                                    </span>
-                                },
-                            ),
+                            DownloadStatus::Uploading { bytes_read, total_size, speed } => {
+                                EitherOf6::F(
+                                    view! {
+                                        <span>
+                                            <UploadingFile bytes_read total_size speed />
+                                        </span>
+                                    },
+                                )
+                            }
                         }
                     }}
                     {move || {

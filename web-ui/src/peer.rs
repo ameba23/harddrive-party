@@ -69,7 +69,11 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                                 key=|file| file.name.clone()
                                 children=move |file: File| {
                                     view! {
-                                        <File file is_shared=is_self context=FileDisplayContext::Peer />
+                                        <File
+                                            file
+                                            is_shared=is_self
+                                            context=FileDisplayContext::Peer
+                                        />
                                     }
                                 }
                             />
@@ -194,8 +198,7 @@ pub fn Peers(
                     .map(|qr_svg| {
                         view! { <div class="announce-card__qr" inner_html=qr_svg /> }
                     })
-            }}
-            <div class="announce-card__body">
+            }} <div class="announce-card__body">
                 <span class="announce-card__label">"Announce address"</span>
                 <div class="announce-card__value-row">
                     <code class="announce-card__value">{announce}</code>
