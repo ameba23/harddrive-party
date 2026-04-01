@@ -51,7 +51,7 @@ jobs:
         sudo chmod +x /usr/local/bin/geckodriver
 
     - name: Install wasm-bindgen-cli
-      run: cargo install wasm-bindgen-cli --version 0.2.114
+      run: cargo install --force wasm-bindgen-cli --version 0.2.114
 
     - name: Run web-ui wasm tests
       run: cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
