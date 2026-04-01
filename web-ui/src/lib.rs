@@ -319,10 +319,11 @@ impl AppContext {
             match client.download(&peer_path).await {
                 Ok(id) => {
                     debug!("Download requested with id: {}", id);
-                    let total_size = files
-                        .get()
-                        .get(&peer_path)
-                        .map_or(0, |file| file.size.unwrap_or_default());
+                    let total_size = files.with_untracked(|files| {
+                        files
+                            .get(&peer_path)
+                            .map_or(0, |file| file.size.unwrap_or_default())
+                    });
                     let request = UiDownloadRequest {
                         path: peer_path.path.clone(),
                         peer_name: peer_path.peer_name.clone(),
