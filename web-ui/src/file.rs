@@ -250,7 +250,12 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let is_dir = file.is_dir == Some(true);
 
     view! {
-        <TableRow on:click=expand_dir>
+        <TableRow
+            class:file-row--downloaded=move || {
+                !is_dir && matches!(file.download_status.get(), DownloadStatus::Downloaded(_))
+            }
+            on:click=expand_dir
+        >
             <TableCell>{file_name_and_indentation}</TableCell>
             <TableCell class="file-meta-cell">
                 <div class="file-meta-top">

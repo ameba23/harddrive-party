@@ -139,6 +139,14 @@ pre {
 	background: #f6f9ff;
 }
 
+.thaw-table-row.file-row--downloaded {
+	background: #f1fbf3;
+}
+
+.thaw-table-row.file-row--downloaded:hover {
+	background: #e6f7ea;
+}
+
 .file-table .thaw-table-cell:first-child {
 	max-width: 0;
 	width: auto;
