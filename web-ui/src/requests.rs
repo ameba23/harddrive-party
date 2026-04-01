@@ -1,12 +1,9 @@
 use crate::{
-    file::{DownloadStatus, DownloadingFile, File, FileDisplayContext},
+    file::{DownloadStatus, File, FileDisplayContext},
     ui_messages::UiDownloadRequest,
     AppContext, PeerPath,
 };
-use leptos::{
-    either::{Either, EitherOf3},
-    prelude::*,
-};
+use leptos::prelude::*;
 use std::collections::BTreeMap;
 use thaw::*;
 
@@ -111,40 +108,6 @@ pub fn Request(file: File) -> impl IntoView {
                         <span class="file-peer-label" title=request_peer_name.clone()>
                             {request_peer_name.clone()}
                         </span>
-                        {move || {
-                            if file.is_dir == Some(true) {
-                                Either::Left(view! {
-                                    <span class="transfer-request-status-detail">
-                                        {move || {
-                                            match file.download_status.get() {
-                                                DownloadStatus::Downloading { bytes_read, request_id: _ } => {
-                                                    EitherOf3::A(
-                                                        view! {
-                                                            <span>
-                                                                <DownloadingFile bytes_read size=file.size />
-                                                            </span>
-                                                        },
-                                                    )
-                                                }
-                                                DownloadStatus::Downloaded(_) => {
-                                                    EitherOf3::B(
-                                                        view! {
-                                                            <span title="Download complete">
-                                                                <Icon icon=icondata::AiCheckCircleTwotone />
-                                                                " Downloaded"
-                                                            </span>
-                                                        },
-                                                    )
-                                                }
-                                                _ => EitherOf3::C(view! { <span></span> }),
-                                            }
-                                        }}
-                                    </span>
-                                })
-                            } else {
-                                Either::Right(view! { <span></span> })
-                            }
-                        }}
                     </div>
                     <div class="table-scroll transfer-request-files">
                         <RequestFilesTable peer_path=peer_path.clone() />

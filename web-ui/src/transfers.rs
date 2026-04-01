@@ -293,7 +293,7 @@ mod tests {
         });
 
         let text = host.text_content().unwrap_or_default();
-        assert_eq!(text.matches("Downloading").count(), 3);
+        assert_eq!(text.matches("Downloading").count(), 2);
         assert!(text.contains("asphericKingCrab"));
         assert!(text.contains("music"));
         assert!(text.contains("single.mp3"));

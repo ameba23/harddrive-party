@@ -218,7 +218,7 @@ pub fn HdpUi() -> impl IntoView {
                         DownloadInfo::Downloading {
                             path,
                             bytes_read,
-                            total_bytes_read: _,
+                            total_bytes_read,
                             speed: _,
                         } => {
                             set_files.update(|files| {
@@ -248,6 +248,28 @@ pub fn HdpUi() -> impl IntoView {
                                             request_id: download_event.request_id,
                                         },
                                     ));
+
+                                if let Some((_peer_path, request_root)) = files.iter_mut().find(
+                                    |(_peer_path, file)| {
+                                        file.request
+                                            .get_untracked()
+                                            .is_some_and(|request| {
+                                                request.request_id == download_event.request_id
+                                            })
+                                    },
+                                ) {
+                                    let request_status = if total_bytes_read
+                                        >= request_root.size.unwrap_or_default()
+                                    {
+                                        DownloadStatus::Downloaded(download_event.request_id)
+                                    } else {
+                                        DownloadStatus::Downloading {
+                                            bytes_read: total_bytes_read,
+                                            request_id: download_event.request_id,
+                                        }
+                                    };
+                                    request_root.download_status.set(request_status);
+                                }
                             });
 
                             set_requests.update(|_requests| {
