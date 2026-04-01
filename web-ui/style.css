@@ -204,16 +204,17 @@ pre {
 	background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
 }
 
+.transfer-request-group--complete {
+	border-color: #9ed8b2;
+	background: linear-gradient(180deg, #f7fff9 0%, #ecfaf0 100%);
+}
+
 .transfer-request-status {
 	display: flex;
 	flex-wrap: wrap;
 	align-items: flex-start;
 	gap: 8px;
 	padding-bottom: 8px;
-}
-
-.transfer-request-path {
-	overflow-wrap: anywhere;
 }
 
 .transfer-request-status-detail {
@@ -228,6 +229,10 @@ pre {
 
 .transfer-request-group .transfer-table {
 	border-color: #dbe5f2;
+}
+
+.transfer-request-group--complete .transfer-table {
+	border-color: #b8dfc4;
 }
 
 .transfer-table .thaw-table {

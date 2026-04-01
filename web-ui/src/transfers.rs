@@ -212,7 +212,9 @@ mod tests {
         });
 
         let text = host.text_content().unwrap_or_default();
-        assert_eq!(text.matches("Downloading").count(), 1);
+        assert_eq!(text.matches("Downloading").count(), 2);
+        assert!(text.contains("asphericKingCrab"));
+        assert!(text.contains("single.mp3"));
 
         drop(handle);
         host.remove();
@@ -291,7 +293,10 @@ mod tests {
         });
 
         let text = host.text_content().unwrap_or_default();
-        assert_eq!(text.matches("Downloading").count(), 1);
+        assert_eq!(text.matches("Downloading").count(), 3);
+        assert!(text.contains("asphericKingCrab"));
+        assert!(text.contains("music"));
+        assert!(text.contains("single.mp3"));
 
         drop(handle);
         host.remove();
@@ -393,6 +398,7 @@ mod tests {
         sleep(Duration::from_millis(1)).await;
 
         let text = host.text_content().unwrap_or_default();
+        assert!(text.contains("music"));
         assert!(text.contains("single.mp3"));
         assert!(text.contains("bonus.flac"));
 
@@ -470,6 +476,64 @@ mod tests {
         assert!(text.contains("asphericKingCrab"));
         assert!(text.contains("music"));
         assert!(text.contains("Downloaded"));
+
+        drop(handle);
+        host.remove();
+    }
+
+    #[wasm_bindgen_test]
+    fn shows_view_button_for_completed_top_level_file_request() {
+        let host = mount_host();
+        let request = UiDownloadRequest {
+            path: "movie.mp4".to_string(),
+            progress: 1024,
+            total_size: 1024,
+            request_id: 2005,
+            timestamp: Duration::from_secs(1_710_000_005),
+            peer_name: "asphericKingCrab".to_string(),
+        };
+        let request_file = File {
+            name: request.path.clone(),
+            peer_name: request.peer_name.clone(),
+            size: Some(request.total_size),
+            is_dir: Some(false),
+            is_expanded: RwSignal::new(true),
+            is_visible: RwSignal::new(true),
+            download_status: RwSignal::new(DownloadStatus::Downloaded(request.request_id)),
+            request: RwSignal::new(Some(request.clone())),
+        };
+        let mut files = BTreeMap::new();
+        files.insert(
+            PeerPath {
+                peer_name: request.peer_name.clone(),
+                path: request.path.clone(),
+            },
+            request_file,
+        );
+
+        let app_context = AppContext::for_tests();
+        app_context.set_files.set(files.clone());
+
+        let mut requests = Requests::new();
+        requests.insert(&request);
+        let (requests, _set_requests) = signal(requests);
+        let (files, _set_files) = signal(files);
+        let (uploads, _set_uploads) = signal(Uploads::new());
+        let app_context_for_mount = app_context.clone();
+
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context_for_mount.clone());
+            view! {
+                <ConfigProvider>
+                    <Transfers requests files uploads />
+                </ConfigProvider>
+            }
+        });
+
+        let text = host.text_content().unwrap_or_default();
+        assert!(text.contains("movie.mp4"));
+        assert!(text.contains("Downloaded"));
+        assert!(text.contains("View"));
 
         drop(handle);
         host.remove();

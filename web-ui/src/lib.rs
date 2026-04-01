@@ -526,7 +526,11 @@ impl AppContext {
                 Ok(mut stream) => {
                     while let Some(Ok(requested_files)) = stream.next().await {
                         set_files.update(|files| {
-                            let is_dir_request = requested_files.len() > 0;
+                            let request_path = request.path.clone();
+                            let is_dir_request = requested_files.iter().any(|requested_file| {
+                                requested_file.path != request_path
+                                    && requested_file.path.starts_with(&format!("{}/", request_path))
+                            }) || (requested_files.len() > 1);
                             for requested_file in requested_files {
                                 let download_status = if requested_file.downloaded {
                                     DownloadStatus::Downloaded(request.request_id)

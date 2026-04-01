@@ -198,9 +198,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let file_name_and_indentation = move || {
         let full_path = file_name.get();
         let uploader_label = match context {
-            FileDisplayContext::Transfer if file.request.get().is_some() => {
-                Some(peer_name_for_uploader.clone())
-            }
             FileDisplayContext::Transfer => match file.download_status.get() {
                 DownloadStatus::Uploading { .. } => Some(peer_name_for_uploader.clone()),
                 _ => None,
