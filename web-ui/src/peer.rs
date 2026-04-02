@@ -27,13 +27,15 @@ fn is_visible_in_peer_tree(files: &std::collections::BTreeMap<PeerPath, File>, p
             break;
         }
 
-        if let Some(ancestor) = files.get(&PeerPath {
+        let Some(ancestor) = files.get(&PeerPath {
             peer_name: peer_path.peer_name.clone(),
             path: current.clone(),
-        }) {
-            if !ancestor.is_expanded.get() {
-                return false;
-            }
+        }) else {
+            return false;
+        };
+
+        if !ancestor.is_expanded.get() {
+            return false;
         }
     }
 
@@ -502,6 +504,100 @@ mod tests {
         assert!(expanded_parent_text.contains("albums"));
         assert!(expanded_parent_text.contains("live"));
         assert!(!expanded_parent_text.contains("song.mp3"));
+
+        drop(handle);
+        host.remove();
+    }
+
+    #[wasm_bindgen_test]
+    async fn missing_intermediate_directory_keeps_downloaded_file_hidden_until_loaded() {
+        let host = mount_host();
+        let app_context = AppContext::for_tests();
+        let peer_name = "asphericKingCrab".to_string();
+
+        app_context.set_files.update(|files| {
+            files.insert(
+                PeerPath {
+                    peer_name: peer_name.clone(),
+                    path: "albums".to_string(),
+                },
+                File {
+                    name: "albums".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(1024),
+                    is_dir: Some(true),
+                    is_expanded: RwSignal::new(true),
+                    download_status: RwSignal::new(DownloadStatus::Nothing),
+                    request: RwSignal::new(None),
+                },
+            );
+            files.insert(
+                PeerPath {
+                    peer_name: peer_name.clone(),
+                    path: "albums/live/song.mp3".to_string(),
+                },
+                File {
+                    name: "albums/live/song.mp3".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(256),
+                    is_dir: Some(false),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Downloaded(2002)),
+                    request: RwSignal::new(None),
+                },
+            );
+        });
+
+        let app_context_for_mount = app_context.clone();
+        let peer_name_for_mount = peer_name.clone();
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context_for_mount.clone());
+            view! {
+                <ConfigProvider>
+                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                </ConfigProvider>
+            }
+        });
+
+        let text_before_intermediate = host.text_content().unwrap_or_default();
+        assert!(text_before_intermediate.contains("albums"));
+        assert!(!text_before_intermediate.contains("song.mp3"));
+
+        app_context.set_files.update(|files| {
+            files.insert(
+                PeerPath {
+                    peer_name: peer_name.clone(),
+                    path: "albums/live".to_string(),
+                },
+                File {
+                    name: "albums/live".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(512),
+                    is_dir: Some(true),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Nothing),
+                    request: RwSignal::new(None),
+                },
+            );
+        });
+
+        sleep(Duration::from_millis(0)).await;
+
+        let text_with_collapsed_intermediate = host.text_content().unwrap_or_default();
+        assert!(text_with_collapsed_intermediate.contains("live"));
+        assert!(!text_with_collapsed_intermediate.contains("song.mp3"));
+
+        host.query_selector("tr:nth-of-type(2)")
+            .expect("query should succeed")
+            .expect("intermediate row should exist")
+            .dyn_into::<web_sys::HtmlElement>()
+            .expect("row should be an HtmlElement")
+            .click();
+
+        sleep(Duration::from_millis(0)).await;
+
+        let text_after_intermediate_expand = host.text_content().unwrap_or_default();
+        assert!(text_after_intermediate_expand.contains("song.mp3"));
 
         drop(handle);
         host.remove();
