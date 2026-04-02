@@ -28,7 +28,7 @@ test-web-ui:
     - tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin
     - chmod +x /usr/local/bin/geckodriver
     - rustup target add wasm32-unknown-unknown
-    - cargo install --force wasm-bindgen-cli --version 0.2.114
+    - cargo install --force wasm-bindgen-cli --version 0.2.117
     - cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
 
 # - cargo install cargo-audit
