@@ -350,8 +350,7 @@ impl AppContext {
                                 download_status: RwSignal::new(DownloadStatus::Requested(id)),
                                 request: RwSignal::new(Some(request.clone())),
                                 is_dir: None,
-                                is_expanded: RwSignal::new(true),
-                                is_visible: RwSignal::new(true),
+                                is_expanded: RwSignal::new(false),
                             });
                         // Mark all files below this one in the dir heirarchy as
                         // requested
@@ -422,10 +421,7 @@ impl AppContext {
                                                     file.size = Some(entry.size);
                                                     file.is_dir = Some(entry.is_dir);
                                                 })
-                                                .or_insert(File::from_entry(
-                                                    entry,
-                                                    peer_name.clone(),
-                                                ));
+                                                .or_insert_with(|| File::from_entry(entry, peer_name.clone()));
                                         }
                                     });
                                 }
@@ -485,8 +481,7 @@ impl AppContext {
                                         download_status: RwSignal::new(download_status.clone()),
                                         request: RwSignal::new(Some(request.clone())),
                                         is_dir: None, // We don't know whether it is a dir or a file
-                                        is_expanded: RwSignal::new(true),
-                                        is_visible: RwSignal::new(true),
+                                        is_expanded: RwSignal::new(false),
                                     });
 
                                 // Now set all child files to the same download status
@@ -537,11 +532,12 @@ impl AppContext {
                                 } else {
                                     DownloadStatus::Requested(request.request_id)
                                 };
+                                let peer_path = PeerPath {
+                                    peer_name: request.peer_name.clone(),
+                                    path: requested_file.path.clone(),
+                                };
                                 files
-                                    .entry(PeerPath {
-                                        peer_name: request.peer_name.clone(),
-                                        path: requested_file.path.clone(),
-                                    })
+                                    .entry(peer_path)
                                     .and_modify(|file| {
                                         // TODO this should not clobber if file is in
                                         // downloading state
@@ -555,8 +551,7 @@ impl AppContext {
                                         download_status: RwSignal::new(download_status),
                                         request: RwSignal::new(None),
                                         is_dir: Some(false),
-                                        is_expanded: RwSignal::new(true),
-                                        is_visible: RwSignal::new(true),
+                                        is_expanded: RwSignal::new(false),
                                     });
                             }
                             // TODO here we should set the state of the parent request

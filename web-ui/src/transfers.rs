@@ -108,7 +108,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: request.progress,
                 request_id: request.request_id,
@@ -178,7 +177,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: request.progress,
                 request_id: request.request_id,
@@ -237,7 +235,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: request.progress,
                 request_id: request.request_id,
@@ -250,7 +247,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: request.progress,
                 request_id: request.request_id,
@@ -319,7 +315,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: request.progress,
                 request_id: request.request_id,
@@ -332,7 +327,6 @@ mod tests {
             size: Some(1024),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloading {
                 bytes_read: 512,
                 request_id: request.request_id,
@@ -389,7 +383,6 @@ mod tests {
                     size: Some(1024),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
-                    is_visible: RwSignal::new(true),
                     download_status: RwSignal::new(DownloadStatus::Requested(request.request_id)),
                     request: RwSignal::new(Some(request.clone())),
                 },
@@ -423,7 +416,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloaded(request.request_id)),
             request: RwSignal::new(Some(request.clone())),
         };
@@ -433,7 +425,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloaded(request.request_id)),
             request: RwSignal::new(Some(request.clone())),
         };
@@ -498,7 +489,6 @@ mod tests {
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Downloaded(request.request_id)),
             request: RwSignal::new(Some(request.clone())),
         };

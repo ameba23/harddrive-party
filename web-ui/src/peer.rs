@@ -11,6 +11,35 @@ use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
 
+fn is_visible_in_peer_tree(files: &std::collections::BTreeMap<PeerPath, File>, peer_path: &PeerPath) -> bool {
+    if peer_path.path.is_empty() {
+        return true;
+    }
+
+    let mut current = String::new();
+    for component in peer_path.path.split('/').take_while(|component| !component.is_empty()) {
+        if !current.is_empty() {
+            current.push('/');
+        }
+        current.push_str(component);
+
+        if current == peer_path.path {
+            break;
+        }
+
+        if let Some(ancestor) = files.get(&PeerPath {
+            peer_name: peer_path.peer_name.clone(),
+            path: current.clone(),
+        }) {
+            if !ancestor.is_expanded.get() {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
 #[component]
 pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
@@ -46,7 +75,7 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                     path: "".to_string(), // TODO
                 }),
             ))
-            .filter(|(_, file)| file.is_visible.get())
+            .filter(|(peer_path, _)| is_visible_in_peer_tree(&files, peer_path))
             .map(|(_, file)| file.clone()) // TODO ideally dont clone
             .collect::<Vec<File>>()
     };
@@ -248,9 +277,11 @@ pub fn Peers(
 #[cfg(all(test, target_arch = "wasm32"))]
 mod tests {
     use super::*;
-    use crate::AppContext;
+    use crate::{file::{DownloadStatus, File}, AppContext};
+    use gloo_timers::future::sleep;
     use leptos::mount::mount_to;
     use leptos::wasm_bindgen::JsCast;
+    use std::time::Duration;
     use thaw::ConfigProvider;
     use web_sys::HtmlElement;
     use wasm_bindgen_test::wasm_bindgen_test;
@@ -308,6 +339,169 @@ mod tests {
         assert!(known_text.contains("bobby"));
         assert!(!known_text.contains("asphericKingCrab"));
         assert!(all_text.contains("asphericKingCrab"));
+
+        drop(handle);
+        host.remove();
+    }
+
+    #[wasm_bindgen_test]
+    async fn hides_downloaded_children_until_parent_directory_is_expanded() {
+        let host = mount_host();
+        let app_context = AppContext::for_tests();
+        let peer_name = "asphericKingCrab".to_string();
+        let parent_path = PeerPath {
+            peer_name: peer_name.clone(),
+            path: "albums".to_string(),
+        };
+        let child_path = PeerPath {
+            peer_name: peer_name.clone(),
+            path: "albums/song.mp3".to_string(),
+        };
+
+        app_context.set_files.update(|files| {
+            files.insert(
+                parent_path.clone(),
+                File {
+                    name: parent_path.path.clone(),
+                    peer_name: peer_name.clone(),
+                    size: Some(1024),
+                    is_dir: Some(true),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Nothing),
+                    request: RwSignal::new(None),
+                },
+            );
+        });
+
+        let app_context_for_mount = app_context.clone();
+        let peer_name_for_mount = peer_name.clone();
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context_for_mount.clone());
+            view! {
+                <ConfigProvider>
+                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                </ConfigProvider>
+            }
+        });
+
+        let initial_text = host.text_content().unwrap_or_default();
+        assert!(initial_text.contains("albums"));
+        assert!(!initial_text.contains("song.mp3"));
+
+        app_context.set_files.update(|files| {
+            files.insert(
+                child_path.clone(),
+                File {
+                    name: child_path.path.clone(),
+                    peer_name: child_path.peer_name.clone(),
+                    size: Some(512),
+                    is_dir: Some(false),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Downloaded(2000)),
+                    request: RwSignal::new(None),
+                },
+            );
+        });
+
+        sleep(Duration::from_millis(0)).await;
+
+        let collapsed_text = host.text_content().unwrap_or_default();
+        assert!(collapsed_text.contains("albums"));
+        assert!(!collapsed_text.contains("song.mp3"));
+
+        let parent_row = host
+            .query_selector("tr")
+            .expect("query should succeed")
+            .expect("parent row should exist");
+        parent_row
+            .dyn_into::<web_sys::HtmlElement>()
+            .expect("row should be an HtmlElement")
+            .click();
+
+        sleep(Duration::from_millis(0)).await;
+
+        let expanded_text = host.text_content().unwrap_or_default();
+        assert!(expanded_text.contains("song.mp3"));
+
+        drop(handle);
+        host.remove();
+    }
+
+    #[wasm_bindgen_test]
+    async fn nested_subdirectories_stay_collapsed_when_parent_expands() {
+        let host = mount_host();
+        let app_context = AppContext::for_tests();
+        let peer_name = "asphericKingCrab".to_string();
+
+        app_context.set_files.update(|files| {
+            for file in [
+                File {
+                    name: "albums".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(1024),
+                    is_dir: Some(true),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Nothing),
+                    request: RwSignal::new(None),
+                },
+                File {
+                    name: "albums/live".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(512),
+                    is_dir: Some(true),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Nothing),
+                    request: RwSignal::new(None),
+                },
+                File {
+                    name: "albums/live/song.mp3".to_string(),
+                    peer_name: peer_name.clone(),
+                    size: Some(256),
+                    is_dir: Some(false),
+                    is_expanded: RwSignal::new(false),
+                    download_status: RwSignal::new(DownloadStatus::Downloaded(2001)),
+                    request: RwSignal::new(None),
+                },
+            ] {
+                files.insert(
+                    PeerPath {
+                        peer_name: file.peer_name.clone(),
+                        path: file.name.clone(),
+                    },
+                    file,
+                );
+            }
+        });
+
+        let app_context_for_mount = app_context.clone();
+        let peer_name_for_mount = peer_name.clone();
+        let handle = mount_to(host.clone(), move || {
+            provide_context(app_context_for_mount.clone());
+            view! {
+                <ConfigProvider>
+                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                </ConfigProvider>
+            }
+        });
+
+        let initial_text = host.text_content().unwrap_or_default();
+        assert!(initial_text.contains("albums"));
+        assert!(!initial_text.contains("live"));
+        assert!(!initial_text.contains("song.mp3"));
+
+        host.query_selector("tr")
+            .expect("query should succeed")
+            .expect("top-level row should exist")
+            .dyn_into::<web_sys::HtmlElement>()
+            .expect("row should be an HtmlElement")
+            .click();
+
+        sleep(Duration::from_millis(0)).await;
+
+        let expanded_parent_text = host.text_content().unwrap_or_default();
+        assert!(expanded_parent_text.contains("albums"));
+        assert!(expanded_parent_text.contains("live"));
+        assert!(!expanded_parent_text.contains("song.mp3"));
 
         drop(handle);
         host.remove();

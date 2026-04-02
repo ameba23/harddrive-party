@@ -10,7 +10,6 @@ use leptos::{
     prelude::*,
 };
 use log::debug;
-use std::ops::Bound::Excluded;
 use thaw::*;
 
 /// Ui representation of a file
@@ -24,8 +23,6 @@ pub struct File {
     pub size: Option<u64>,
     pub is_dir: Option<bool>,
     pub is_expanded: RwSignal<bool>,
-    /// Is this item in an expanded directory - only relevant to peers context
-    pub is_visible: RwSignal<bool>,
     pub download_status: RwSignal<DownloadStatus>,
     pub request: RwSignal<Option<UiDownloadRequest>>,
 }
@@ -38,7 +35,6 @@ impl File {
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Nothing),
             request: RwSignal::new(None),
         }
@@ -55,7 +51,6 @@ impl File {
             size: None,
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(download_status),
             request: RwSignal::new(None),
         }
@@ -70,7 +65,6 @@ impl From<UploadInfo> for File {
             size: Some(upload.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
-            is_visible: RwSignal::new(true),
             download_status: RwSignal::new(DownloadStatus::Uploading {
                 bytes_read: upload.bytes_read,
                 total_size: upload.total_size,
@@ -95,7 +89,6 @@ pub enum FileDisplayContext {
 #[component]
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
-    let set_files = app_context.set_files;
     let (file_name, _set_file_name) = signal(file.name);
     let peer_name = file.peer_name.clone();
     let peer_name_for_uploader = file.peer_name.clone();
@@ -133,26 +126,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let expand_dir = move |_| {
         if file.is_dir.unwrap_or_default() {
             if file.is_expanded.get() {
-                // Collapse dir by either setting all children to insible
-                log::info!("Collapse dir");
-                let peer_name = file.peer_name.clone();
-                set_files.update(|files| {
-                    let mut upper_bound = file_name.get();
-                    upper_bound.push_str("~");
-                    for (_, file) in files.range_mut((
-                        Excluded(PeerPath {
-                            peer_name: peer_name.clone(),
-                            path: file_name.get(),
-                        }),
-                        Excluded(PeerPath {
-                            peer_name: file.peer_name.clone(),
-                            path: upper_bound,
-                        }),
-                    )) {
-                        log::info!("{}", file.name);
-                        file.is_visible.set(false);
-                    }
-                });
                 file.is_expanded.set(false);
             } else {
                 let query = IndexQuery {
@@ -172,25 +145,6 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
                 // state
                 file.is_expanded.set(true);
-
-                let peer_name = file.peer_name.clone();
-                set_files.update(|files| {
-                    let mut upper_bound = file_name.get();
-                    upper_bound.push_str("~");
-                    for (_, file) in files.range_mut((
-                        Excluded(PeerPath {
-                            peer_name: peer_name.clone(),
-                            path: file_name.get(),
-                        }),
-                        Excluded(PeerPath {
-                            peer_name: file.peer_name.clone(),
-                            path: upper_bound,
-                        }),
-                    )) {
-                        log::info!("{}", file.name);
-                        file.is_visible.set(true);
-                    }
-                })
             }
         }
     };

@@ -153,7 +153,6 @@ mod tests {
                     size: Some(1024),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
-                    is_visible: RwSignal::new(true),
                     download_status: RwSignal::new(DownloadStatus::Nothing),
                     request: RwSignal::new(None),
                 },
