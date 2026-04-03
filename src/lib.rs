@@ -29,7 +29,7 @@ use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -81,6 +81,8 @@ pub struct SharedState {
     pub os_home_dir: Option<String>,
     /// Whether graceful shutdown has started
     pub shutting_down: Arc<AtomicBool>,
+    /// Peers intentionally disconnected until an explicit future connect call.
+    pub manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
@@ -123,6 +125,7 @@ impl SharedState {
             announce_address,
             os_home_dir,
             shutting_down: Arc::new(AtomicBool::new(false)),
+            manually_disconnected_peers: Default::default(),
             graceful_shutdown_tx,
         })
     }
@@ -177,6 +180,10 @@ impl SharedState {
             )
             .into());
         }
+        self.manually_disconnected_peers
+            .lock()
+            .await
+            .remove(&announce_address.name);
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -195,6 +202,25 @@ impl SharedState {
         // TODO this could take a very long time as the other peer may not show up
         // add a timeout here
         response_rx.await?
+    }
+
+    /// Intentionally disconnect from a connected peer and suppress automatic reconnects until an
+    /// explicit future connect call.
+    pub async fn disconnect_peer(&self, peer_name: &str) -> Result<(), UiServerErrorWrapper> {
+        let connection = {
+            let mut peers = self.peers.lock().await;
+            let peer = peers
+                .remove(peer_name)
+                .ok_or_else(|| UiServerError::ConnectionError("Peer not connected".to_string()))?;
+            peer.connection
+        };
+
+        self.manually_disconnected_peers
+            .lock()
+            .await
+            .insert(peer_name.to_string());
+        connection.close(0u32.into(), b"disconnect");
+        Ok(())
     }
 
     pub async fn download(&self, peer_path: PeerPath) -> Result<u32, UiServerErrorWrapper> {
@@ -392,6 +418,24 @@ mod tests {
         (alice, bob, alice_client, bob_client)
     }
 
+    async fn wait_for_peer_presence(shared_state: &SharedState, peer_name: &str, present: bool) {
+        let peer_name = peer_name.to_string();
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if shared_state.peers.lock().await.contains_key(&peer_name) == present {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for peer {peer_name} presence to become {present}"
+        );
+    }
+
     #[tokio::test]
     async fn basic() {
         init_logger();
@@ -567,6 +611,41 @@ mod tests {
         .unwrap_or(false);
 
         assert!(connected, "Alice did not connect to Carol via gossip");
+    }
+
+    #[tokio::test]
+    async fn disconnect_peer_suppresses_reconnect_until_explicit_connect() {
+        init_logger();
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        wait_for_peer_presence(&bob, &alice.name, true).await;
+
+        bob.disconnect_peer(&alice.name).await.unwrap();
+
+        wait_for_peer_presence(&bob, &alice.name, false).await;
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            !bob.peers.lock().await.contains_key(&alice.name),
+            "Peer reconnected after intentional disconnect"
+        );
+
+        let request_err = bob
+            .request(
+                Request::Ls(IndexQuery {
+                    recursive: false,
+                    ..Default::default()
+                }),
+                &alice.name,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(request_err, RequestError::PeerNotFound));
+
+        bob.connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap();
+        wait_for_peer_presence(&bob, &alice.name, true).await;
     }
 
     #[tokio::test]
