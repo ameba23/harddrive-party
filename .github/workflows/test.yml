@@ -1,0 +1,57 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+          web-ui/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Run cargo clippy
+      run: cargo clippy --workspace -- -D warnings
+
+    - name: Run cargo test
+      run: cargo test --workspace
+
+    - name: Add wasm target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Set up Firefox
+      uses: browser-actions/setup-firefox@latest
+
+    - name: Install geckodriver
+      run: |
+        curl -L -o /tmp/geckodriver.tar.gz https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux64.tar.gz
+        tar -xzf /tmp/geckodriver.tar.gz -C /tmp
+        sudo mv /tmp/geckodriver /usr/local/bin/geckodriver
+        sudo chmod +x /usr/local/bin/geckodriver
+
+    - name: Install wasm-bindgen-cli
+      run: cargo install --force wasm-bindgen-cli --version 0.2.117
+
+    - name: Run web-ui wasm tests
+      run: cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib

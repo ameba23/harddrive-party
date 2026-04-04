@@ -1,6 +1,7 @@
 pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
 use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 
 use crate::{
     components::header::HdpHeader,
@@ -10,11 +11,11 @@ use crate::{
     search::Search,
     shares::Shares,
     transfers::Transfers,
-    uploads::Uploads,
     ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
+    uploads::Uploads,
     wire_messages::IndexQuery,
     ws::WebsocketService,
-    AppContext,
+    AppContext, UiClient,
 };
 use futures::StreamExt;
 use leptos::prelude::*;
@@ -44,8 +45,30 @@ pub fn HdpUi() -> impl IntoView {
 
     let (error_message, set_error_message) = signal(HashSet::<AppError>::new());
 
-    let (_ws_service, mut ws_rx) =
-        WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+    #[cfg(feature = "mock-ui")]
+    let mock_scenario = crate::mock::scenario_from_location();
+
+    let (client, mut ws_rx) = {
+        #[cfg(feature = "mock-ui")]
+        {
+            if let Some(scenario) = mock_scenario {
+                (
+                    UiClient::Mock(crate::mock::MockClient::new(scenario.clone())),
+                    crate::mock::start_mock_events(scenario),
+                )
+            } else {
+                let (_ws_service, ws_rx) =
+                    WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+                (UiClient::real(ui_url.clone()), ws_rx)
+            }
+        }
+        #[cfg(not(feature = "mock-ui"))]
+        {
+            let (_ws_service, ws_rx) =
+                WebsocketService::new(ui_url.clone(), set_error_message).unwrap();
+            (UiClient::real(ui_url.clone()), ws_rx)
+        }
+    };
 
     // Setup signals
     let (peers, set_peers) = signal(HashSet::<String>::new());
@@ -59,13 +82,13 @@ pub fn HdpUi() -> impl IntoView {
     let (files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
 
     let (search_results, set_search_results) = signal(Vec::<PeerPath>::new());
-    let (known_peers, set_known_peers) = signal(Vec::<String>::new());
+    let (known_peers, set_known_peers) = signal(Vec::<AnnounceAddress>::new());
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
     let (own_name, set_own_name) = signal(Option::<String>::None);
     let app_context = AppContext::new(
-        ui_url,
+        client,
         own_name,
         peers.clone(),
         set_peers.clone(),
@@ -84,14 +107,21 @@ pub fn HdpUi() -> impl IntoView {
 
     // Get initial info
     let client = app_context.client.get_untracked();
+    let set_error_message_for_info = set_error_message.clone();
     spawn_local(async move {
         let set_announce_address = set_announce_address.clone();
         let set_home_dir = set_home_dir.clone();
         let set_own_name = set_own_name.clone();
-        let info = client.info().await.unwrap();
-        set_announce_address.update(|address| *address = Some(info.announce_address));
-        set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
-        set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+        match client.info().await {
+            Ok(info) => {
+                set_announce_address.update(|address| *address = Some(info.announce_address));
+                set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
+                set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+            }
+            Err(err) => set_error_message_for_info.update(|errors| {
+                errors.insert(err);
+            }),
+        };
     });
     {
         let set_known_peers = set_known_peers.clone();
@@ -104,7 +134,7 @@ pub fn HdpUi() -> impl IntoView {
                 }
                 Err(err) => {
                     set_error_message.update(|error_messages| {
-                        error_messages.insert(err.into());
+                        error_messages.insert(err);
                     });
                 }
             }
@@ -188,7 +218,7 @@ pub fn HdpUi() -> impl IntoView {
                         DownloadInfo::Downloading {
                             path,
                             bytes_read,
-                            total_bytes_read: _,
+                            total_bytes_read,
                             speed: _,
                         } => {
                             set_files.update(|files| {
@@ -218,6 +248,28 @@ pub fn HdpUi() -> impl IntoView {
                                             request_id: download_event.request_id,
                                         },
                                     ));
+
+                                if let Some((_peer_path, request_root)) = files.iter_mut().find(
+                                    |(_peer_path, file)| {
+                                        file.request
+                                            .get_untracked()
+                                            .is_some_and(|request| {
+                                                request.request_id == download_event.request_id
+                                            })
+                                    },
+                                ) {
+                                    let request_status = if total_bytes_read
+                                        >= request_root.size.unwrap_or_default()
+                                    {
+                                        DownloadStatus::Downloaded(download_event.request_id)
+                                    } else {
+                                        DownloadStatus::Downloading {
+                                            bytes_read: total_bytes_read,
+                                            request_id: download_event.request_id,
+                                        }
+                                    };
+                                    request_root.download_status.set(request_status);
+                                }
                             });
 
                             set_requests.update(|_requests| {
@@ -294,21 +346,15 @@ pub fn HdpUi() -> impl IntoView {
             <div id="root" class="main">
                 <nav>
                     <HdpHeader peers own_name />
-                    {error_message_display}
                 </nav>
                 <main>
+                    <div class="error-stack">{error_message_display}</div>
                     <Layout>
                         <Routes fallback=|| "Not found">
                             <Route
                                 path=path!("")
                                 view=move || {
-                                    view! {
-                                        <Peers
-                                            announce_address
-                                            pending_peers
-                                            known_peers
-                                        />
-                                    }
+                                    view! { <Peers announce_address pending_peers known_peers /> }
                                 }
                             />
                             <Route
@@ -321,13 +367,7 @@ pub fn HdpUi() -> impl IntoView {
                             <Route
                                 path=path!("peers")
                                 view=move || {
-                                    view! {
-                                        <Peers
-                                            announce_address
-                                            pending_peers
-                                            known_peers
-                                        />
-                                    }
+                                    view! { <Peers announce_address pending_peers known_peers /> }
                                 }
                             />
                             <Route
@@ -380,7 +420,7 @@ pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
         <div role="alert">
             <div>
-                <span class="font-medium">" ✅ " {message}</span>
+                <span class="font-medium status-ok">" ✅ " {message}</span>
             </div>
         </div>
     }
