@@ -126,6 +126,11 @@ pre {
 	margin-bottom: 10px;
 }
 
+.peer-card__header {
+	gap: 12px;
+	margin-bottom: 8px;
+}
+
 .file-table,
 .search-table,
 .transfer-table {

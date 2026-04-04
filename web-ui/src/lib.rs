@@ -145,6 +145,14 @@ impl UiClient {
         }
     }
 
+    pub async fn disconnect(&self, peer_name: String) -> Result<(), AppError> {
+        match self {
+            UiClient::Real(client) => client.disconnect(peer_name).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.disconnect(peer_name).await.map_err(AppError::from),
+        }
+    }
+
     pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, AppError> {
         match self {
             UiClient::Real(client) => client.known_peers().await.map_err(AppError::from),
@@ -389,6 +397,34 @@ impl AppContext {
                     });
                 }),
             };
+        });
+    }
+
+    pub fn disconnect(&self, peer_name: String) {
+        let client = self.client.get_untracked();
+        let set_error_message = self.set_error_message.clone();
+        let set_peers = self.set_peers.clone();
+        let set_files = self.set_files.clone();
+        let set_search_results = self.set_search_results.clone();
+        spawn_local(async move {
+            match client.disconnect(peer_name.clone()).await {
+                Ok(()) => {
+                    set_peers.update(|peers| {
+                        peers.remove(&peer_name);
+                    });
+                    set_files.update(|files| {
+                        files.retain(|peer_path, _| peer_path.peer_name != peer_name);
+                    });
+                    set_search_results.update(|results| {
+                        results.retain(|peer_path| peer_path.peer_name != peer_name);
+                    });
+                }
+                Err(err) => {
+                    set_error_message.update(|error_messages| {
+                        error_messages.insert(err);
+                    });
+                }
+            }
         });
     }
 
