@@ -101,6 +101,7 @@ mod tests {
             request_id: 2000,
             timestamp: Duration::from_secs(1_710_000_000),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
@@ -170,6 +171,7 @@ mod tests {
             request_id: 2001,
             timestamp: Duration::from_secs(1_710_000_001),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
@@ -228,6 +230,7 @@ mod tests {
             request_id: 2002,
             timestamp: Duration::from_secs(1_710_000_002),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
@@ -308,6 +311,7 @@ mod tests {
             request_id: 2003,
             timestamp: Duration::from_secs(1_710_000_003),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
@@ -409,6 +413,7 @@ mod tests {
             request_id: 2004,
             timestamp: Duration::from_secs(1_710_000_004),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
@@ -482,6 +487,7 @@ mod tests {
             request_id: 2005,
             timestamp: Duration::from_secs(1_710_000_005),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
