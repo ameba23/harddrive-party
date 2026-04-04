@@ -49,6 +49,8 @@ pub struct UiDownloadRequest {
     pub timestamp: Duration,
     /// Name of peer who holds file
     pub peer_name: String,
+    /// Whether the requested path is a directory.
+    pub is_dir: bool,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
