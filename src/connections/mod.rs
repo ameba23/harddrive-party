@@ -317,6 +317,17 @@ impl Hdp {
 
         tokio::spawn(async move {
             let (peer_connection, other_connections, other_announces) = {
+                if shared_state
+                    .manually_disconnected_peers
+                    .lock()
+                    .await
+                    .contains(&peer_name)
+                {
+                    debug!("Rejecting connection from {peer_name} because it is manually disconnected");
+                    conn.close(0u32.into(), b"manually disconnected");
+                    return;
+                }
+
                 let mut peers = shared_state.peers.lock().await;
                 if let Some(existing_peer) = peers.get(&peer_name) {
                     if existing_peer.connection.close_reason().is_none() {

@@ -616,11 +616,11 @@ mod tests {
     #[tokio::test]
     async fn disconnect_peer_suppresses_reconnect_until_explicit_connect() {
         init_logger();
-        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+        let (alice, bob, _alice_client, bob_client) = setup_connected_peers(vec![]).await;
 
         wait_for_peer_presence(&bob, &alice.name, true).await;
 
-        bob.disconnect_peer(&alice.name).await.unwrap();
+        bob_client.disconnect(alice.name.clone()).await.unwrap();
 
         wait_for_peer_presence(&bob, &alice.name, false).await;
 
