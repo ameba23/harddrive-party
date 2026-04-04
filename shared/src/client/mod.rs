@@ -5,6 +5,7 @@ mod events;
 pub use events::EventStream;
 
 use crate::{
+    announce_address::{AnnounceAddress, AnnounceAddressDecodeError},
     ui_messages::{FilesQuery, Info, PeerPath, UiDownloadRequest, UiRequestedFile, UiServerError},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
 };
@@ -165,8 +166,8 @@ impl Client {
     }
 
     /// GET `/known-peers`
-    /// Returns the list of known peer announce addresses as strings.
-    pub async fn known_peers(&self) -> Result<Vec<String>, ClientError> {
+    /// Returns the list of known peer announce addresses.
+    pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, ClientError> {
         let res = self
             .http_client
             .get(
@@ -181,7 +182,12 @@ impl Client {
             return Err(ClientError::from_response(res).await);
         }
 
-        Ok(bincode::deserialize(&res.bytes().await?)?)
+        let encoded: Vec<String> = bincode::deserialize(&res.bytes().await?)?;
+        encoded
+            .into_iter()
+            .map(AnnounceAddress::from_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ClientError::from)
     }
 
     pub async fn requested_files(
@@ -376,6 +382,8 @@ pub enum ClientError {
     HttpRequest(String),
     #[error("Cannot parse integer: {0}")]
     ParseInt(#[from] ParseIntError),
+    #[error("Cannot decode announce address: {0}")]
+    AnnounceAddressDecode(#[from] AnnounceAddressDecodeError),
     #[error("Server: {0}")]
     ServerError(#[from] UiServerError),
 }

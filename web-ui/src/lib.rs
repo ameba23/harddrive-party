@@ -1,6 +1,8 @@
 pub mod components;
 pub mod file;
 pub mod hdp;
+#[cfg(feature = "mock-ui")]
+pub mod mock;
 pub mod peer;
 mod requests;
 pub mod search;
@@ -11,8 +13,12 @@ pub mod ws;
 
 use crate::{file::File, peer::Peer, ui_messages::FilesQuery};
 use file::DownloadStatus;
-use futures::StreamExt;
-use harddrive_party_shared::{client::Client, ui_messages::PeerPath, wire_messages::IndexQuery};
+use futures::{stream::LocalBoxStream, StreamExt};
+use harddrive_party_shared::{
+    client::Client,
+    ui_messages::{PeerPath, UiRequestedFile, UiServerError},
+    wire_messages::{AnnounceAddress, IndexQuery},
+};
 pub use hdp::*;
 use leptos::{prelude::*, task::spawn_local};
 use leptos_router::components::Router;
@@ -34,9 +40,139 @@ pub fn App() -> impl IntoView {
     }
 }
 
+type SharesStream = LocalBoxStream<'static, Result<LsResponse, UiServerError>>;
+type FilesStream = LocalBoxStream<'static, Result<(LsResponse, String), UiServerError>>;
+type RequestsStream = LocalBoxStream<'static, Result<Vec<UiDownloadRequest>, UiServerError>>;
+type RequestedFilesStream = LocalBoxStream<'static, Result<Vec<UiRequestedFile>, UiServerError>>;
+
+#[derive(Clone)]
+pub enum UiClient {
+    Real(Client),
+    #[cfg(feature = "mock-ui")]
+    Mock(crate::mock::MockClient),
+}
+
+impl UiClient {
+    pub fn real(ui_url: url::Url) -> Self {
+        Self::Real(Client::new(ui_url))
+    }
+
+    pub async fn info(&self) -> Result<ui_messages::Info, AppError> {
+        match self {
+            UiClient::Real(client) => client.info().await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.info().await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn shares(&self, query: IndexQuery) -> Result<SharesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .shares(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .shares(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn files(&self, query: FilesQuery) -> Result<FilesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .files(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .files(query)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn requests(&self) -> Result<RequestsStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .requests()
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .requests()
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn requested_files(&self, id: u32) -> Result<RequestedFilesStream, AppError> {
+        match self {
+            UiClient::Real(client) => Ok(client
+                .requested_files(id)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => Ok(client
+                .requested_files(id)
+                .await
+                .map_err(AppError::from)?
+                .boxed_local()),
+        }
+    }
+
+    pub async fn download(&self, peer_path: &PeerPath) -> Result<u32, AppError> {
+        match self {
+            UiClient::Real(client) => client.download(peer_path).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.download(peer_path).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn connect(&self, announce_address: String) -> Result<(), AppError> {
+        match self {
+            UiClient::Real(client) => client.connect(announce_address).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.connect(announce_address).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, AppError> {
+        match self {
+            UiClient::Real(client) => client.known_peers().await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.known_peers().await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn add_share(&self, share_dir: String) -> Result<u32, AppError> {
+        match self {
+            UiClient::Real(client) => client.add_share(share_dir).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.add_share(share_dir).await.map_err(AppError::from),
+        }
+    }
+
+    pub async fn remove_share(&self, share_dir: String) -> Result<(), AppError> {
+        match self {
+            UiClient::Real(client) => client.remove_share(share_dir).await.map_err(AppError::from),
+            #[cfg(feature = "mock-ui")]
+            UiClient::Mock(client) => client.remove_share(share_dir).await.map_err(AppError::from),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppContext {
-    pub client: ReadSignal<Client>,
+    pub client: ReadSignal<UiClient>,
     pub own_name: ReadSignal<Option<String>>,
     pub get_peers: ReadSignal<HashSet<String>>,
     pub set_peers: WriteSignal<HashSet<String>>,
@@ -49,13 +185,13 @@ pub struct AppContext {
     pub set_error_message: WriteSignal<HashSet<AppError>>,
     pub set_search_results: WriteSignal<Vec<PeerPath>>,
     pub set_pending_peers: WriteSignal<HashSet<String>>,
-    pub get_known_peers: ReadSignal<Vec<String>>,
-    pub set_known_peers: WriteSignal<Vec<String>>,
+    pub get_known_peers: ReadSignal<Vec<AnnounceAddress>>,
+    pub set_known_peers: WriteSignal<Vec<AnnounceAddress>>,
 }
 
 impl AppContext {
     pub fn new(
-        ui_url: url::Url,
+        client: UiClient,
         own_name: ReadSignal<Option<String>>,
         get_peers: ReadSignal<HashSet<String>>,
         set_peers: WriteSignal<HashSet<String>>,
@@ -68,10 +204,10 @@ impl AppContext {
         set_error_message: WriteSignal<HashSet<AppError>>,
         set_search_results: WriteSignal<Vec<PeerPath>>,
         set_pending_peers: WriteSignal<HashSet<String>>,
-        get_known_peers: ReadSignal<Vec<String>>,
-        set_known_peers: WriteSignal<Vec<String>>,
+        get_known_peers: ReadSignal<Vec<AnnounceAddress>>,
+        set_known_peers: WriteSignal<Vec<AnnounceAddress>>,
     ) -> Self {
-        let (client, _set_client) = signal(Client::new(ui_url));
+        let (client, _set_client) = signal(client);
         Self {
             client,
             own_name,
@@ -89,6 +225,38 @@ impl AppContext {
             get_known_peers,
             set_known_peers,
         }
+    }
+
+    #[cfg(test)]
+    pub fn for_tests() -> Self {
+        let (own_name, _) = signal(Some("mock-ui".to_string()));
+        let (get_peers, set_peers) = signal(HashSet::<String>::new());
+        let (get_files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
+        let (_requests, set_requests) = signal(Requests::new());
+        let (uploads, set_uploads) = signal(Uploads::new());
+        let (_share_message, set_share_message) = signal(None::<Result<String, String>>);
+        let (_errors, set_errors) = signal(HashSet::new());
+        let (_search_results, set_search_results) = signal(Vec::<PeerPath>::new());
+        let (_pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
+        let (known_peers, set_known_peers) = signal(Vec::<AnnounceAddress>::new());
+
+        Self::new(
+            UiClient::real("http://127.0.0.1:3030".parse().expect("url should parse")),
+            own_name,
+            get_peers,
+            set_peers,
+            get_files,
+            set_files,
+            set_requests,
+            uploads,
+            set_uploads,
+            set_share_message,
+            set_errors,
+            set_search_results,
+            set_pending_peers,
+            known_peers,
+            set_known_peers,
+        )
     }
 
     pub fn shares_query(&self, query: IndexQuery) {
@@ -135,7 +303,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -151,7 +319,7 @@ impl AppContext {
             match client.download(&peer_path).await {
                 Ok(id) => {
                     debug!("Download requested with id: {}", id);
-                    let cached_file = files.get().get(&peer_path).cloned();
+                    let cached_file = files.with_untracked(|files| files.get(&peer_path).cloned());
                     let total_size =
                         cached_file.as_ref().map_or(0, |file| file.size.unwrap_or_default());
                     let request = UiDownloadRequest {
@@ -161,7 +329,9 @@ impl AppContext {
                         total_size,
                         request_id: id,
                         timestamp: std::time::Duration::from_secs(0), // TODO
-                        is_dir: cached_file.is_some_and(|file| file.is_dir.unwrap_or(false)),
+                        is_dir: cached_file
+                            .as_ref()
+                            .is_some_and(|file| file.is_dir.unwrap_or(false)),
                     };
                     set_requests.update(|requests| {
                         if requests.get_by_id(id).is_none() {
@@ -180,9 +350,8 @@ impl AppContext {
                                 size: None,
                                 download_status: RwSignal::new(DownloadStatus::Requested(id)),
                                 request: RwSignal::new(Some(request.clone())),
-                                is_dir: Some(request.is_dir),
-                                is_expanded: RwSignal::new(true),
-                                is_visible: RwSignal::new(true),
+                                is_dir: cached_file.as_ref().and_then(|file| file.is_dir),
+                                is_expanded: RwSignal::new(false),
                             });
                         // Mark all files below this one in the dir heirarchy as
                         // requested
@@ -199,7 +368,7 @@ impl AppContext {
                     })
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             };
         });
@@ -215,7 +384,7 @@ impl AppContext {
                     debug!("Connecting to peer...");
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                     set_pending_peers.update(|pending_peers| {
                         pending_peers.remove(&announce_address);
                     });
@@ -253,10 +422,7 @@ impl AppContext {
                                                     file.size = Some(entry.size);
                                                     file.is_dir = Some(entry.is_dir);
                                                 })
-                                                .or_insert(File::from_entry(
-                                                    entry,
-                                                    peer_name.clone(),
-                                                ));
+                                                .or_insert_with(|| File::from_entry(entry, peer_name.clone()));
                                         }
                                     });
                                 }
@@ -271,7 +437,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -317,8 +483,7 @@ impl AppContext {
                                         download_status: RwSignal::new(download_status.clone()),
                                         request: RwSignal::new(Some(request.clone())),
                                         is_dir: Some(request.is_dir),
-                                        is_expanded: RwSignal::new(true),
-                                        is_visible: RwSignal::new(true),
+                                        is_expanded: RwSignal::new(false),
                                     });
 
                                 // Now set all child files to the same download status
@@ -343,7 +508,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -358,17 +523,23 @@ impl AppContext {
                 Ok(mut stream) => {
                     while let Some(Ok(requested_files)) = stream.next().await {
                         set_files.update(|files| {
+                            let request_path = request.path.clone();
+                            let is_dir_request = requested_files.iter().any(|requested_file| {
+                                requested_file.path != request_path
+                                    && requested_file.path.starts_with(&format!("{}/", request_path))
+                            }) || (requested_files.len() > 1);
                             for requested_file in requested_files {
                                 let download_status = if requested_file.downloaded {
                                     DownloadStatus::Downloaded(request.request_id)
                                 } else {
                                     DownloadStatus::Requested(request.request_id)
                                 };
+                                let peer_path = PeerPath {
+                                    peer_name: request.peer_name.clone(),
+                                    path: requested_file.path.clone(),
+                                };
                                 files
-                                    .entry(PeerPath {
-                                        peer_name: request.peer_name.clone(),
-                                        path: requested_file.path.clone(),
-                                    })
+                                    .entry(peer_path)
                                     .and_modify(|file| {
                                         // TODO this should not clobber if file is in
                                         // downloading state
@@ -382,8 +553,7 @@ impl AppContext {
                                         download_status: RwSignal::new(download_status),
                                         request: RwSignal::new(None),
                                         is_dir: Some(false),
-                                        is_expanded: RwSignal::new(true),
-                                        is_visible: RwSignal::new(true),
+                                        is_expanded: RwSignal::new(false),
                                     });
                             }
                             files
@@ -391,12 +561,16 @@ impl AppContext {
                                     peer_name: request.peer_name.clone(),
                                     path: request.path.clone(),
                                 })
-                                .and_modify(|file| file.is_dir = Some(request.is_dir));
+                                .and_modify(|file| {
+                                    if file.is_dir.is_none() {
+                                        file.is_dir = Some(is_dir_request);
+                                    }
+                                });
                         });
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -423,7 +597,7 @@ impl AppContext {
                     });
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
@@ -517,7 +691,7 @@ impl AppContext {
                     }
                 }
                 Err(err) => set_error_message.update(|error_messages| {
-                    error_messages.insert(err.into());
+                    error_messages.insert(err);
                 }),
             }
         });
