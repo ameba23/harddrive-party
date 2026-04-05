@@ -52,7 +52,6 @@ const RECONNECT_MAX_ATTEMPTS: usize = 20;
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 /// Maximum backoff delay
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
-
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 
 /// A harddrive-party instance
@@ -313,10 +312,47 @@ impl Hdp {
 
         let rpc = self.rpc.clone();
         let shared_state = self.shared_state.clone();
+        let conn_stable_id = conn.stable_id();
 
         tokio::spawn(async move {
-            {
-                // Add peer to our hashmap
+            let (peer_connection, other_connections, other_announces) = {
+                if shared_state
+                    .manually_disconnected_peers
+                    .lock()
+                    .await
+                    .contains(&peer_name)
+                {
+                    debug!("Rejecting connection from {peer_name} because it is manually disconnected");
+                    conn.close(0u32.into(), b"manually disconnected");
+                    return;
+                }
+
+                let mut peers = shared_state.peers.lock().await;
+                if let Some(existing_peer) = peers.get(&peer_name) {
+                    if existing_peer.connection.close_reason().is_none() {
+                        warn!("Duplicate connection for {peer_name}; keeping existing connection");
+                        conn.close(0u32.into(), b"duplicate connection");
+                        return;
+                    }
+
+                    let replaced_peer = peers
+                        .remove(&peer_name)
+                        .expect("peer should exist after get");
+                    debug!("Replacing existing connection for {peer_name}");
+                    replaced_peer
+                        .connection
+                        .close(0u32.into(), b"replaced connection");
+                }
+
+                let other_connections = peers
+                    .values()
+                    .map(|other_peer| other_peer.connection.clone())
+                    .collect::<Vec<_>>();
+                let other_announces = peers
+                    .values()
+                    .filter_map(|other_peer| other_peer.announce_address.clone())
+                    .collect::<Vec<_>>();
+
                 let peer = Peer::new(
                     conn.clone(),
                     shared_state.event_broadcaster.clone(),
@@ -325,33 +361,25 @@ impl Hdp {
                     shared_state.wishlist.clone(),
                     announce_address.clone(),
                 );
+                let peer_connection = peer.connection.clone();
+                peers.insert(peer_name.clone(), peer);
+                let direction = if incoming { "incoming" } else { "outgoing" };
+                info!("[{}] connected to {} peers", direction, peers.len());
+                (peer_connection, other_connections, other_announces)
+            };
 
+            {
                 // Announce ourselves to peers we connect to directly.
                 if !incoming {
                     let self_announce = Request::AnnouncePeer(AnnouncePeer {
                         announce_address: shared_state.announce_address.clone(),
                     });
                     if let Err(err) =
-                        SharedState::request_connection(self_announce, &peer.connection).await
+                        SharedState::request_connection(self_announce, &peer_connection).await
                     {
                         warn!("Could not self-announce to {peer_name}: {err}");
                     }
                 }
-
-                // Snapshot connected peers so we don't hold locks while awaiting network sends
-                let (other_connections, other_announces) = {
-                    let peers = shared_state.peers.lock().await;
-                    (
-                        peers
-                            .values()
-                            .map(|other_peer| other_peer.connection.clone())
-                            .collect::<Vec<_>>(),
-                        peers
-                            .values()
-                            .filter_map(|other_peer| other_peer.announce_address.clone())
-                            .collect::<Vec<_>>(),
-                    )
-                };
 
                 // If we have the remote peer's announce address, gossip it
                 if let Some(ref announce_address) = announce_address {
@@ -377,18 +405,11 @@ impl Hdp {
                         announce_address: announce_address_other,
                     });
                     if let Err(err) =
-                        SharedState::request_connection(request, &peer.connection).await
+                        SharedState::request_connection(request, &peer_connection).await
                     {
                         error!("Failed to send announce message to new peer: {err:?}");
                     }
                 }
-
-                let mut peers = shared_state.peers.lock().await;
-                if let Some(_existing_peer) = peers.insert(peer_name.clone(), peer) {
-                    warn!("Adding connection for already connected peer!");
-                };
-                let direction = if incoming { "incoming" } else { "outgoing" };
-                info!("[{}] connected to {} peers", direction, peers.len());
             }
             // Inform the UI that a new peer has connected
             shared_state
@@ -411,21 +432,32 @@ impl Hdp {
             };
 
             // Remove the peer from our peers map
-            {
+            let was_connected = {
                 let mut peers = shared_state.peers.lock().await;
-                if peers.remove(&peer_name).is_none() {
-                    warn!("Connection closed but peer not present in map");
+                let should_remove = peers
+                    .get(&peer_name)
+                    .is_some_and(|peer| peer.connection.stable_id() == conn_stable_id);
+                if should_remove {
+                    peers.remove(&peer_name);
                 }
-            }
+                should_remove
+            };
 
-            // Inform the UI the the peer has disconnected
-            info!("Peer disconnected: {} ({})", peer_name, err);
-            shared_state
-                .send_event(UiEvent::PeerDisconnected {
-                    name: peer_name.clone(),
-                    error: err.to_string(),
-                })
-                .await;
+            if was_connected {
+                // Only the authoritative connection should emit a disconnect event.
+                info!("Peer disconnected: {} ({})", peer_name, err);
+                shared_state
+                    .send_event(UiEvent::PeerDisconnected {
+                        name: peer_name.clone(),
+                        error: err.to_string(),
+                    })
+                    .await;
+            } else {
+                debug!(
+                    "Suppressing disconnect event for {} because a replacement connection is active",
+                    peer_name
+                );
+            }
 
             // Now try to reconnect
             // TODO consider waiting a moment for network interface to come up if following sleep
@@ -438,10 +470,27 @@ impl Hdp {
                     "Skipping reconnect to {} because shutdown is in progress",
                     peer_name
                 );
-            } else if let Some(announce_address) = announce_address {
-                if let Err(err) = shared_state.connect_to_peer(announce_address).await {
-                    warn!("Could not reconnect to peer following disconnect: {err}");
+            } else if shared_state
+                .manually_disconnected_peers
+                .lock()
+                .await
+                .contains(&peer_name)
+            {
+                debug!(
+                    "Skipping reconnect to {} because it was intentionally disconnected",
+                    peer_name
+                );
+            } else if was_connected {
+                if let Some(announce_address) = announce_address {
+                    if let Err(err) = shared_state.connect_to_peer(announce_address).await {
+                        warn!("Could not reconnect to peer following disconnect: {err}");
+                    }
                 }
+            } else {
+                debug!(
+                    "Skipping reconnect to {} because a replacement connection is already active",
+                    peer_name
+                );
             }
         });
         Ok(())

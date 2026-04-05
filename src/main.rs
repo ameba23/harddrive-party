@@ -95,6 +95,10 @@ enum CliCommand {
     Connect {
         announce_address: String,
     },
+    /// Disconnect from a peer
+    Disconnect {
+        peer_name: String,
+    },
     Stop,
 }
 
@@ -351,6 +355,18 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     _ => {}
+                }
+            }
+        }
+        CliCommand::Disconnect { peer_name } => {
+            let client = Client::new(cli.ui_address.parse()?);
+            let mut event_stream = client.event_stream().await?;
+            client.disconnect(peer_name.clone()).await?;
+            while let Some(event) = event_stream.next().await {
+                if let UiEvent::PeerDisconnected { name, .. } = event? {
+                    if name == peer_name {
+                        break;
+                    }
                 }
             }
         }

@@ -61,6 +61,9 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
             },
         )
     };
+    let disconnect_peer = move |_| {
+        app_context.disconnect(peer_signal.get_untracked().0);
+    };
 
     let files_iter = move || {
         // Calling .get() clones - we should ideally use .with(|files| files.range...)
@@ -85,13 +88,22 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     view! {
         <div class="peer-card">
             <Flex vertical=true>
-                <div>
-                    <Icon icon=icondata::AiUserOutlined />
-                    {move || peer_signal.get().0}
-                    " "
-                    {root_size}
-                    " shared"
-                </div>
+                <Flex class="peer-card__header" justify=FlexJustify::SpaceBetween align=FlexAlign::Center>
+                    <div>
+                        <Icon icon=icondata::AiUserOutlined />
+                        {move || peer_signal.get().0}
+                        " "
+                        {root_size}
+                        " shared"
+                    </div>
+                    {(!is_self).then(|| {
+                        view! {
+                            <Button size=ButtonSize::Small on:click=disconnect_peer>
+                                "Disconnect"
+                            </Button>
+                        }
+                    })}
+                </Flex>
                 <div class="table-scroll">
                     <Table class="file-table">
                         <TableBody>
