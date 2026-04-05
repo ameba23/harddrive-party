@@ -37,10 +37,18 @@ pub struct DownloadRequest {
     pub timestamp: Duration,
     /// Public key of peer holding file
     pub peer_public_key: [u8; 32],
+    /// Whether the requested path is a directory.
+    pub is_dir: bool,
 }
 
 impl DownloadRequest {
-    pub fn new(path: String, total_size: u64, request_id: u32, peer_public_key: [u8; 32]) -> Self {
+    pub fn new(
+        path: String,
+        total_size: u64,
+        request_id: u32,
+        peer_public_key: [u8; 32],
+        is_dir: bool,
+    ) -> Self {
         let system_time = SystemTime::now();
         // Ignore nanoseconds
         let timestamp_secs = system_time
@@ -56,20 +64,21 @@ impl DownloadRequest {
             request_id,
             timestamp,
             peer_public_key,
+            is_dir,
         }
     }
 
     /// Given a serialized db entry, make a DownloadRequest
-    /// key: `<request_id>` value: `<timestamp><total_size><peer_public_key><requested_path>`
+    /// key: `<request_id>` value: `<timestamp><total_size><peer_public_key><is_dir><requested_path>`
     pub fn from_db_key_value(key: Vec<u8>, value: Vec<u8>) -> Result<Self, DbError> {
         if key.len() != 4 {
             return Err(DbError::BadLength(
                 "Unexpected key length (should be 4 bytes)".to_string(),
             ));
         }
-        if value.len() < 8 + 8 + 32 {
+        if value.len() < 8 + 8 + 32 + 1 {
             return Err(DbError::BadLength(
-                "Unexpected value length (should be at least 48 bytes)".to_string(),
+                "Unexpected value length (should be at least 49 bytes)".to_string(),
             ));
         }
         let request_id_buf: [u8; 4] = key[0..4].try_into()?;
@@ -84,7 +93,9 @@ impl DownloadRequest {
 
         let peer_public_key: [u8; 32] = value[16..48].try_into()?;
 
-        let path = std::str::from_utf8(&value[48..])?.to_string();
+        let is_dir = value[48] == 1;
+
+        let path = std::str::from_utf8(&value[49..])?.to_string();
 
         Ok(Self {
             path,
@@ -92,12 +103,13 @@ impl DownloadRequest {
             request_id,
             timestamp,
             peer_public_key,
+            is_dir,
         })
     }
 
     /// Convert to a db entry for both 'by request_id' and 'by timestamp'
     ///
-    /// key: `<request_id>` value: `<timestamp><total_size><peer_public_key><requested_path>`
+    /// key: `<request_id>` value: `<timestamp><total_size><peer_public_key><is_dir><requested_path>`
     /// key: <timestamp> value: `<request_id>`
     fn to_db_key_value(&self) -> (KeyValue, KeyValue) {
         let path_buf = self.path.as_bytes();
@@ -107,11 +119,13 @@ impl DownloadRequest {
 
         let request_id_buf = self.request_id.to_be_bytes();
         let total_size_buf = self.total_size.to_be_bytes();
+        let is_dir_buf = [u8::from(self.is_dir)];
 
-        let mut value1 = Vec::with_capacity(8 + 8 + 32 + path_buf.len());
+        let mut value1 = Vec::with_capacity(8 + 8 + 32 + 1 + path_buf.len());
         value1.append(&mut timestamp_secs_buf.to_vec());
         value1.append(&mut total_size_buf.to_vec());
         value1.append(&mut self.peer_public_key.clone().to_vec());
+        value1.append(&mut is_dir_buf.to_vec());
         value1.append(&mut path_buf.to_vec());
         let kv1 = (request_id_buf.to_vec(), value1);
 
@@ -157,6 +171,7 @@ impl DownloadRequest {
             request_id,
             timestamp,
             peer_public_key,
+            is_dir: false,
         })
     }
 
@@ -168,6 +183,7 @@ impl DownloadRequest {
             timestamp: self.timestamp,
             peer_name: key_to_name(&self.peer_public_key),
             progress,
+            is_dir: self.is_dir,
         }
     }
 }
@@ -560,6 +576,7 @@ mod tests {
             501546,
             5144,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
+            false,
         );
         let ((key, value), (_key2, _value2)) = dl_req.to_db_key_value();
         let decoded_request = DownloadRequest::from_db_key_value(key, value).unwrap();
@@ -595,6 +612,7 @@ mod tests {
             501546,
             request_id,
             *b"23lkjfsdfljkfsdlskdjsfdklfsddjsd",
+            false,
         );
 
         wishlist.add_request(&dl_req).unwrap();
@@ -608,6 +626,7 @@ mod tests {
             requests.next()
         );
         assert_eq!(None, requests.next());
+        assert!(!wishlist.get_request(request_id).unwrap().is_dir);
 
         let mut requested_files = wishlist.requested_files(request_id).unwrap();
 
@@ -638,6 +657,7 @@ mod tests {
             1024,
             request_id,
             peer_public_key,
+            false,
         );
         let requested_file = RequestedFile {
             path: "music/single.mp3".to_string(),

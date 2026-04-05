@@ -125,7 +125,6 @@ impl MockClient {
     pub async fn disconnect(&self, _peer_name: String) -> Result<(), ClientError> {
         Ok(())
     }
-
     pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, ClientError> {
         Ok(vec![
             AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string())?,

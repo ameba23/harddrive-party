@@ -61,7 +61,6 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
             },
         )
     };
-
     let disconnect_peer = move |_| {
         app_context.disconnect(peer_signal.get_untracked().0);
     };

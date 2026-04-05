@@ -70,13 +70,7 @@ fn RequestFilesTable(peer_path: PeerPath) -> impl IntoView {
                     each=move || request_files(&get_files.get(), &peer_path)
                     key=|file| format!("{}{:?}", file.name, file.size)
                     children=move |file: File| {
-                        view! {
-                            <File
-                                file
-                                is_shared=false
-                                context=FileDisplayContext::Transfer
-                            />
-                        }
+                        view! { <File file is_shared=false context=FileDisplayContext::Transfer /> }
                     }
                 />
             </TableBody>
