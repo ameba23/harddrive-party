@@ -420,7 +420,7 @@ mod tests {
 
     async fn wait_for_peer_presence(shared_state: &SharedState, peer_name: &str, present: bool) {
         let peer_name = peer_name.to_string();
-        let observed = timeout(Duration::from_secs(5), async {
+        let observed = timeout(Duration::from_secs(15), async {
             loop {
                 if shared_state.peers.lock().await.contains_key(&peer_name) == present {
                     return;

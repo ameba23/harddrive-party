@@ -444,14 +444,21 @@ impl Hdp {
                 should_remove
             };
 
-            // Inform the UI the the peer has disconnected
-            info!("Peer disconnected: {} ({})", peer_name, err);
-            shared_state
-                .send_event(UiEvent::PeerDisconnected {
-                    name: peer_name.clone(),
-                    error: err.to_string(),
-                })
-                .await;
+            if was_connected {
+                // Only the authoritative connection should emit a disconnect event.
+                info!("Peer disconnected: {} ({})", peer_name, err);
+                shared_state
+                    .send_event(UiEvent::PeerDisconnected {
+                        name: peer_name.clone(),
+                        error: err.to_string(),
+                    })
+                    .await;
+            } else {
+                debug!(
+                    "Suppressing disconnect event for {} because a replacement connection is active",
+                    peer_name
+                );
+            }
 
             // Now try to reconnect
             // TODO consider waiting a moment for network interface to come up if following sleep
