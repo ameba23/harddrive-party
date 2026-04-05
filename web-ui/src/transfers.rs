@@ -65,14 +65,14 @@ mod tests {
         uploads::Uploads,
         AppContext,
     };
-    use harddrive_party_shared::ui_messages::UploadInfo;
     use gloo_timers::future::sleep;
+    use harddrive_party_shared::ui_messages::UploadInfo;
     use leptos::mount::mount_to;
     use leptos::wasm_bindgen::JsCast;
     use std::time::Duration;
     use thaw::ConfigProvider;
-    use web_sys::HtmlElement;
     use wasm_bindgen_test::wasm_bindgen_test;
+    use web_sys::HtmlElement;
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 

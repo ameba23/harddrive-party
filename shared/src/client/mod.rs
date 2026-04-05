@@ -122,6 +122,24 @@ impl Client {
         Ok(())
     }
 
+    pub async fn disconnect(&self, peer_name: String) -> Result<(), ClientError> {
+        let res = self
+            .http_client
+            .delete(
+                self.ui_url
+                    .join("api/connect")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .body(peer_name)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            return Err(ClientError::from_response(res).await);
+        }
+        Ok(())
+    }
+
     pub async fn read(
         &self,
         peer_name: String,

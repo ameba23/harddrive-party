@@ -192,6 +192,12 @@ pub fn HdpUi() -> impl IntoView {
                     set_peers.update(|peers| {
                         peers.remove(&name);
                     });
+                    set_files.update(|files| {
+                        files.retain(|peer_path, _| peer_path.peer_name != name);
+                    });
+                    set_search_results.update(|results| {
+                        results.retain(|peer_path| peer_path.peer_name != name);
+                    });
                 }
                 UiEvent::Uploaded(upload_info) => {
                     debug!("Uploading {:?}", upload_info);
