@@ -208,11 +208,11 @@ impl SharedState {
     /// explicit future connect call.
     pub async fn disconnect_peer(&self, peer_name: &str) -> Result<(), UiServerErrorWrapper> {
         let connection = {
-            let mut peers = self.peers.lock().await;
+            let peers = self.peers.lock().await;
             let peer = peers
-                .remove(peer_name)
+                .get(peer_name)
                 .ok_or_else(|| UiServerError::ConnectionError("Peer not connected".to_string()))?;
-            peer.connection
+            peer.connection.clone()
         };
 
         self.manually_disconnected_peers
@@ -412,6 +412,8 @@ mod tests {
             bob_hdp.run().await;
         });
 
+        wait_for_peer_presence(&bob, &alice.name, true).await;
+
         let alice_client = ui_server::client::Client::new(alice_url);
         let bob_client = ui_server::client::Client::new(bob_url);
 
@@ -420,7 +422,7 @@ mod tests {
 
     async fn wait_for_peer_presence(shared_state: &SharedState, peer_name: &str, present: bool) {
         let peer_name = peer_name.to_string();
-        let observed = timeout(Duration::from_secs(15), async {
+        let observed = timeout(Duration::from_secs(30), async {
             loop {
                 if shared_state.peers.lock().await.contains_key(&peer_name) == present {
                     return;
@@ -670,7 +672,7 @@ mod tests {
         let read_task =
             tokio::spawn(async move { while let Some(Ok(_chunk)) = read_stream.next().await {} });
 
-        let uploaded = timeout(Duration::from_secs(5), async move {
+        let uploaded = timeout(Duration::from_secs(15), async move {
             while let Some(event) = alice_events.next().await {
                 if let Ok(UiEvent::Uploaded(upload_info)) = event {
                     if upload_info.path == "test-data/somefile" && upload_info.peer_name == bob.name

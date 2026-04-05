@@ -52,7 +52,6 @@ const RECONNECT_MAX_ATTEMPTS: usize = 20;
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 /// Maximum backoff delay
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
-
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 
 /// A harddrive-party instance
