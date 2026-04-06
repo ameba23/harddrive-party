@@ -6,8 +6,9 @@ pub use harddrive_party_shared::client;
 use crate::{
     ui_server::{
         api::{
-            delete_connect, delete_shares, get_info, get_known_peers, get_request, get_requests, post_close,
-            post_connect, post_download, post_files, post_read, post_shares, put_shares,
+            delete_connect, delete_shares, get_info, get_known_peers, get_request, get_requests,
+            post_close, post_connect, post_download, post_files, post_read, post_shares,
+            put_shares,
         },
         ws::handle_socket,
     },

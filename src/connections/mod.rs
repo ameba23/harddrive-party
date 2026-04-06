@@ -322,7 +322,9 @@ impl Hdp {
                     .await
                     .contains(&peer_name)
                 {
-                    debug!("Rejecting connection from {peer_name} because it is manually disconnected");
+                    debug!(
+                        "Rejecting connection from {peer_name} because it is manually disconnected"
+                    );
                     conn.close(0u32.into(), b"manually disconnected");
                     return;
                 }
