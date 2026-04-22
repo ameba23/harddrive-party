@@ -29,7 +29,7 @@ use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -82,9 +82,15 @@ pub struct SharedState {
     /// Whether graceful shutdown has started
     pub shutting_down: Arc<AtomicBool>,
     /// Peers intentionally disconnected until an explicit future connect call.
-    pub manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
+    pub(crate) manually_disconnected_peers: Arc<Mutex<HashMap<String, ManualPeerConnectionState>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ManualPeerConnectionState {
+    SuppressReconnect,
+    ExplicitReconnectPending,
 }
 
 impl SharedState {
@@ -180,10 +186,10 @@ impl SharedState {
             )
             .into());
         }
-        self.manually_disconnected_peers
-            .lock()
-            .await
-            .remove(&announce_address.name);
+        self.manually_disconnected_peers.lock().await.insert(
+            announce_address.name.clone(),
+            ManualPeerConnectionState::ExplicitReconnectPending,
+        );
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -215,10 +221,10 @@ impl SharedState {
             peer.connection.clone()
         };
 
-        self.manually_disconnected_peers
-            .lock()
-            .await
-            .insert(peer_name.to_string());
+        self.manually_disconnected_peers.lock().await.insert(
+            peer_name.to_string(),
+            ManualPeerConnectionState::SuppressReconnect,
+        );
         connection.close(0u32.into(), b"disconnect");
         Ok(())
     }
@@ -355,7 +361,7 @@ mod tests {
     use crate::wire_messages::{Entry, ReadQuery};
     use futures::StreamExt;
     use harddrive_party_shared::client::ClientError;
-    use std::collections::HashSet;
+    use std::{collections::HashSet, net::UdpSocket as StdUdpSocket};
     use tempfile::TempDir;
     use tokio::fs;
     use tokio::time::{timeout, Duration};
@@ -649,6 +655,53 @@ mod tests {
             .await
             .unwrap();
         wait_for_peer_presence(&bob, &alice.name, true).await;
+    }
+
+    #[tokio::test]
+    async fn incoming_connections_are_processed_while_outbound_connect_retries() {
+        init_logger();
+
+        let (mut alice_hdp, _alice_url) = setup_peer(vec![]).await;
+        let alice = alice_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let unreachable_addr = StdUdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let unreachable_peer = AnnounceAddress {
+            name: "retryingPeer".to_string(),
+            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+        };
+
+        alice.connect_to_peer(unreachable_peer).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let (mut bob_hdp, _bob_url) = setup_peer(vec![]).await;
+        let bob = bob_hdp.shared_state.clone();
+        bob.connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            bob_hdp.run().await;
+        });
+
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if alice.peers.lock().await.contains_key(&bob.name) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for inbound connection while another outbound connect was retrying"
+        );
     }
 
     #[tokio::test]
