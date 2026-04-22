@@ -29,7 +29,7 @@ use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -82,15 +82,9 @@ pub struct SharedState {
     /// Whether graceful shutdown has started
     pub shutting_down: Arc<AtomicBool>,
     /// Peers intentionally disconnected until an explicit future connect call.
-    pub(crate) manually_disconnected_peers: Arc<Mutex<HashMap<String, ManualPeerConnectionState>>>,
+    pub(crate) manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ManualPeerConnectionState {
-    SuppressReconnect,
-    ExplicitReconnectPending,
 }
 
 impl SharedState {
@@ -186,10 +180,7 @@ impl SharedState {
             )
             .into());
         }
-        self.manually_disconnected_peers.lock().await.insert(
-            announce_address.name.clone(),
-            ManualPeerConnectionState::ExplicitReconnectPending,
-        );
+        let peer_name = announce_address.name.clone();
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -207,7 +198,9 @@ impl SharedState {
 
         // TODO this could take a very long time as the other peer may not show up
         // add a timeout here
-        response_rx.await?
+        response_rx.await??;
+        self.manually_disconnected_peers.lock().await.remove(&peer_name);
+        Ok(())
     }
 
     /// Intentionally disconnect from a connected peer and suppress automatic reconnects until an
@@ -221,10 +214,10 @@ impl SharedState {
             peer.connection.clone()
         };
 
-        self.manually_disconnected_peers.lock().await.insert(
-            peer_name.to_string(),
-            ManualPeerConnectionState::SuppressReconnect,
-        );
+        self.manually_disconnected_peers
+            .lock()
+            .await
+            .insert(peer_name.to_string());
         connection.close(0u32.into(), b"disconnect");
         Ok(())
     }
@@ -701,6 +694,76 @@ mod tests {
         assert!(
             observed.is_ok(),
             "Timed out waiting for inbound connection while another outbound connect was retrying"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_explicit_connect_does_not_set_manual_reconnect_state() {
+        init_logger();
+
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        let err = bob
+            .connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Already connected to this peer"),
+            "unexpected error: {err}"
+        );
+
+        let manually_disconnected = bob
+            .manually_disconnected_peers
+            .lock()
+            .await
+            .contains(&alice.name);
+        assert!(
+            !manually_disconnected,
+            "failed explicit connect should not leave manual reconnect state behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_explicit_connect_does_not_block_future_auto_reconnect() {
+        init_logger();
+
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        let err = bob
+            .connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Already connected to this peer"),
+            "unexpected error: {err}"
+        );
+
+        let connection = {
+            let peers = bob.peers.lock().await;
+            peers.get(&alice.name).unwrap().connection.clone()
+        };
+        let original_stable_id = connection.stable_id();
+        connection.close(0u32.into(), b"test disconnect");
+
+        let peer_name = alice.name.clone();
+        let reconnected = timeout(Duration::from_secs(30), async {
+            loop {
+                let reconnected = {
+                    let peers = bob.peers.lock().await;
+                    peers.get(&peer_name)
+                        .is_some_and(|peer| peer.connection.stable_id() != original_stable_id)
+                };
+                if reconnected {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            reconnected.is_ok(),
+            "Timed out waiting for auto reconnect to replace the closed connection"
         );
     }
 

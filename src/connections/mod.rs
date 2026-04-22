@@ -19,7 +19,7 @@ use crate::{
     subtree_names::{CONFIG, KNOWN_PEERS},
     ui_messages::{UiEvent, UiServerError},
     wire_messages::{AnnouncePeer, Request},
-    ManualPeerConnectionState, SharedState,
+    SharedState,
 };
 use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
@@ -335,13 +335,12 @@ async fn handle_connection(
 
     tokio::spawn(async move {
         let (peer_connection, other_connections, other_announces) = {
-            let manual_state = shared_state
+            let manually_disconnected = shared_state
                 .manually_disconnected_peers
                 .lock()
                 .await
-                .get(&peer_name)
-                .copied();
-            if manual_state == Some(ManualPeerConnectionState::SuppressReconnect) {
+                .contains(&peer_name);
+            if manually_disconnected {
                 debug!("Rejecting connection from {peer_name} because it is manually disconnected");
                 conn.close(0u32.into(), b"manually disconnected");
                 return;
@@ -490,7 +489,7 @@ async fn handle_connection(
             .manually_disconnected_peers
             .lock()
             .await
-            .contains_key(&peer_name)
+            .contains(&peer_name)
         {
             debug!(
                 "Skipping reconnect to {} because it was intentionally disconnected",
@@ -548,7 +547,7 @@ async fn handle_incoming_connection(
     Ok(())
 }
 
-/// Initiate a Quic connection to a remote peer.
+/// Initiate a Quic connection to a remote peer
 async fn connect_to_peer(
     server_connection: ServerConnection,
     shared_state: SharedState,
@@ -583,6 +582,7 @@ async fn connect_to_peer(
     let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
         UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
     })?;
+
     handle_connection(
         shared_state,
         rpc,
@@ -592,6 +592,7 @@ async fn connect_to_peer(
         remote_cert,
     )
     .await?;
+
     Ok(())
 }
 

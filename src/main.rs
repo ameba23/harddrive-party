@@ -344,15 +344,13 @@ async fn main() -> anyhow::Result<()> {
             let mut event_stream = client.event_stream().await?;
             while let Some(event) = event_stream.next().await {
                 match event? {
-                    UiEvent::PeerConnected { name } => {
-                        if announce_address_parsed.name == name {
-                            break;
-                        }
+                    UiEvent::PeerConnected { name } if announce_address_parsed.name == name => {
+                        break;
                     }
-                    UiEvent::PeerConnectionFailed { name, error } => {
-                        if announce_address_parsed.name == name {
-                            return Err(anyhow!("{error}"));
-                        }
+                    UiEvent::PeerConnectionFailed { name, error }
+                        if announce_address_parsed.name == name =>
+                    {
+                        return Err(anyhow!("{error}"));
                     }
                     _ => {}
                 }
