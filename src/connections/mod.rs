@@ -329,12 +329,21 @@ fn spawn_outbound_connect(
 
 /// Reserve an outbound connect slot unless the peer is already connected or pending.
 async fn begin_outbound_connect(shared_state: &SharedState, peer_name: &str) -> bool {
-    let mut pending = shared_state.pending_outbound_connections.lock().await;
-    if pending.contains(peer_name) {
+    if shared_state
+        .pending_outbound_connections
+        .lock()
+        .await
+        .contains(peer_name)
+    {
         return false;
     }
 
     if shared_state.peers.lock().await.contains_key(peer_name) {
+        return false;
+    }
+
+    let mut pending = shared_state.pending_outbound_connections.lock().await;
+    if pending.contains(peer_name) {
         return false;
     }
 
