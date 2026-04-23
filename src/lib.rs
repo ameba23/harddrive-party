@@ -83,6 +83,8 @@ pub struct SharedState {
     pub shutting_down: Arc<AtomicBool>,
     /// Peers intentionally disconnected until an explicit future connect call.
     pub(crate) manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
+    /// Peers with an outbound connect task currently in progress.
+    pub(crate) pending_outbound_connections: Arc<Mutex<HashSet<String>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
@@ -126,6 +128,7 @@ impl SharedState {
             os_home_dir,
             shutting_down: Arc::new(AtomicBool::new(false)),
             manually_disconnected_peers: Default::default(),
+            pending_outbound_connections: Default::default(),
             graceful_shutdown_tx,
         })
     }
@@ -199,7 +202,10 @@ impl SharedState {
         // TODO this could take a very long time as the other peer may not show up
         // add a timeout here
         response_rx.await??;
-        self.manually_disconnected_peers.lock().await.remove(&peer_name);
+        self.manually_disconnected_peers
+            .lock()
+            .await
+            .remove(&peer_name);
         Ok(())
     }
 
@@ -435,6 +441,34 @@ mod tests {
         assert!(
             observed.is_ok(),
             "Timed out waiting for peer {peer_name} presence to become {present}"
+        );
+    }
+
+    async fn wait_for_pending_outbound_presence(
+        shared_state: &SharedState,
+        peer_name: &str,
+        present: bool,
+    ) {
+        let peer_name = peer_name.to_string();
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if shared_state
+                    .pending_outbound_connections
+                    .lock()
+                    .await
+                    .contains(&peer_name)
+                    == present
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for pending outbound presence for {peer_name} to become {present}"
         );
     }
 
@@ -698,6 +732,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_outbound_connect_announcements_are_deduplicated_while_retrying() {
+        init_logger();
+
+        let (mut alice_hdp, _alice_url) = setup_peer(vec![]).await;
+        let alice = alice_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let unreachable_addr = StdUdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let unreachable_peer = AnnounceAddress {
+            name: "retryingPeer".to_string(),
+            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+        };
+
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        wait_for_pending_outbound_presence(&alice, &unreachable_peer.name, true).await;
+
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let pending = alice.pending_outbound_connections.lock().await;
+        assert_eq!(
+            pending.len(),
+            1,
+            "expected only one pending outbound connect task after duplicate announcements"
+        );
+        assert!(
+            pending.contains(&unreachable_peer.name),
+            "expected duplicate announcements to keep exactly one pending outbound connect"
+        );
+    }
+
+    #[tokio::test]
     async fn failed_explicit_connect_does_not_set_manual_reconnect_state() {
         init_logger();
 
@@ -750,7 +831,8 @@ mod tests {
             loop {
                 let reconnected = {
                     let peers = bob.peers.lock().await;
-                    peers.get(&peer_name)
+                    peers
+                        .get(&peer_name)
                         .is_some_and(|peer| peer.connection.stable_id() != original_stable_id)
                 };
                 if reconnected {

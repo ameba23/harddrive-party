@@ -301,10 +301,21 @@ fn spawn_outbound_connect(
     rpc: Rpc,
     peer: DiscoveredPeer,
 ) {
+    let name = peer.announce_address.name.clone();
     tokio::spawn(async move {
-        let name = peer.announce_address.name.clone();
-        if let Err(err) = connect_to_peer(server_connection, shared_state.clone(), rpc, peer).await
-        {
+        if !begin_outbound_connect(&shared_state, &name).await {
+            debug!("Skipping outbound connect to {name}; already connected or pending");
+            return;
+        }
+
+        let result = connect_to_peer(server_connection, shared_state.clone(), rpc, peer).await;
+        shared_state
+            .pending_outbound_connections
+            .lock()
+            .await
+            .remove(&name);
+
+        if let Err(err) = result {
             error!("Cannot connect to peer {name}: {err:?}");
             shared_state
                 .send_event(UiEvent::PeerConnectionFailed {
@@ -314,6 +325,21 @@ fn spawn_outbound_connect(
                 .await;
         }
     });
+}
+
+/// Reserve an outbound connect slot unless the peer is already connected or pending.
+async fn begin_outbound_connect(shared_state: &SharedState, peer_name: &str) -> bool {
+    let mut pending = shared_state.pending_outbound_connections.lock().await;
+    if pending.contains(peer_name) {
+        return false;
+    }
+
+    if shared_state.peers.lock().await.contains_key(peer_name) {
+        return false;
+    }
+
+    pending.insert(peer_name.to_string());
+    true
 }
 
 /// Handle a QUIC connection from/to another peer.
