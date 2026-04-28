@@ -23,7 +23,7 @@ Available scenarios:
 
 ## Frontend tests
 
-- Enter the `web-ui` dev shell so Firefox and `geckodriver` are available: `nix-shell`
+- Enter the project dev shell so Firefox and `geckodriver` are available: `nix develop`
 - Run the wasm browser tests: `cargo test --target wasm32-unknown-unknown --lib`
 
 These tests use `wasm-bindgen-test` and run headless in Firefox via the Cargo runner configured in the repo.

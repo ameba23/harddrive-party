@@ -21,6 +21,12 @@ Allows two or more peers to share files. Peers can choose directories to share, 
 
 `cargo install --locked harddrive-party`
 
+Or install from a flake:
+
+```sh
+nix profile install gitlab:pegpeg/harddrive-party#harddrive-party
+```
+
 ## Usage
 
 `harddrive-party start --share-dir ~/my-dir-to-share`
