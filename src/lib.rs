@@ -82,7 +82,9 @@ pub struct SharedState {
     /// Whether graceful shutdown has started
     pub shutting_down: Arc<AtomicBool>,
     /// Peers intentionally disconnected until an explicit future connect call.
-    pub manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
+    pub(crate) manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
+    /// Peers with an outbound connect task currently in progress.
+    pub(crate) pending_outbound_connections: Arc<Mutex<HashSet<String>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
@@ -126,6 +128,7 @@ impl SharedState {
             os_home_dir,
             shutting_down: Arc::new(AtomicBool::new(false)),
             manually_disconnected_peers: Default::default(),
+            pending_outbound_connections: Default::default(),
             graceful_shutdown_tx,
         })
     }
@@ -180,10 +183,7 @@ impl SharedState {
             )
             .into());
         }
-        self.manually_disconnected_peers
-            .lock()
-            .await
-            .remove(&announce_address.name);
+        let peer_name = announce_address.name.clone();
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -201,7 +201,12 @@ impl SharedState {
 
         // TODO this could take a very long time as the other peer may not show up
         // add a timeout here
-        response_rx.await?
+        response_rx.await??;
+        self.manually_disconnected_peers
+            .lock()
+            .await
+            .remove(&peer_name);
+        Ok(())
     }
 
     /// Intentionally disconnect from a connected peer and suppress automatic reconnects until an
@@ -355,7 +360,7 @@ mod tests {
     use crate::wire_messages::{Entry, ReadQuery};
     use futures::StreamExt;
     use harddrive_party_shared::client::ClientError;
-    use std::collections::HashSet;
+    use std::{collections::HashSet, net::UdpSocket as StdUdpSocket};
     use tempfile::TempDir;
     use tokio::fs;
     use tokio::time::{timeout, Duration};
@@ -436,6 +441,34 @@ mod tests {
         assert!(
             observed.is_ok(),
             "Timed out waiting for peer {peer_name} presence to become {present}"
+        );
+    }
+
+    async fn wait_for_pending_outbound_presence(
+        shared_state: &SharedState,
+        peer_name: &str,
+        present: bool,
+    ) {
+        let peer_name = peer_name.to_string();
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if shared_state
+                    .pending_outbound_connections
+                    .lock()
+                    .await
+                    .contains(&peer_name)
+                    == present
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for pending outbound presence for {peer_name} to become {present}"
         );
     }
 
@@ -649,6 +682,171 @@ mod tests {
             .await
             .unwrap();
         wait_for_peer_presence(&bob, &alice.name, true).await;
+    }
+
+    #[tokio::test]
+    async fn incoming_connections_are_processed_while_outbound_connect_retries() {
+        init_logger();
+
+        let (mut alice_hdp, _alice_url) = setup_peer(vec![]).await;
+        let alice = alice_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let unreachable_addr = StdUdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let unreachable_peer = AnnounceAddress {
+            name: "retryingPeer".to_string(),
+            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+        };
+
+        alice.connect_to_peer(unreachable_peer).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let (mut bob_hdp, _bob_url) = setup_peer(vec![]).await;
+        let bob = bob_hdp.shared_state.clone();
+        bob.connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            bob_hdp.run().await;
+        });
+
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if alice.peers.lock().await.contains_key(&bob.name) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for inbound connection while another outbound connect was retrying"
+        );
+    }
+
+    #[tokio::test]
+    async fn duplicate_outbound_connect_announcements_are_deduplicated_while_retrying() {
+        init_logger();
+
+        let (mut alice_hdp, _alice_url) = setup_peer(vec![]).await;
+        let alice = alice_hdp.shared_state.clone();
+        tokio::spawn(async move {
+            alice_hdp.run().await;
+        });
+
+        let unreachable_addr = StdUdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let unreachable_peer = AnnounceAddress {
+            name: "retryingPeer".to_string(),
+            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+        };
+
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        wait_for_pending_outbound_presence(&alice, &unreachable_peer.name, true).await;
+
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        alice
+            .connect_to_peer(unreachable_peer.clone())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let pending = alice.pending_outbound_connections.lock().await;
+        assert_eq!(
+            pending.len(),
+            1,
+            "expected only one pending outbound connect task after duplicate announcements"
+        );
+        assert!(
+            pending.contains(&unreachable_peer.name),
+            "expected duplicate announcements to keep exactly one pending outbound connect"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_explicit_connect_does_not_set_manual_reconnect_state() {
+        init_logger();
+
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        let err = bob
+            .connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Already connected to this peer"),
+            "unexpected error: {err}"
+        );
+
+        let manually_disconnected = bob
+            .manually_disconnected_peers
+            .lock()
+            .await
+            .contains(&alice.name);
+        assert!(
+            !manually_disconnected,
+            "failed explicit connect should not leave manual reconnect state behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_explicit_connect_does_not_block_future_auto_reconnect() {
+        init_logger();
+
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        let err = bob
+            .connect_to_peer(alice.announce_address.clone())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Already connected to this peer"),
+            "unexpected error: {err}"
+        );
+
+        let connection = {
+            let peers = bob.peers.lock().await;
+            peers.get(&alice.name).unwrap().connection.clone()
+        };
+        let original_stable_id = connection.stable_id();
+        connection.close(0u32.into(), b"test disconnect");
+
+        let peer_name = alice.name.clone();
+        let reconnected = timeout(Duration::from_secs(30), async {
+            loop {
+                let reconnected = {
+                    let peers = bob.peers.lock().await;
+                    peers
+                        .get(&peer_name)
+                        .is_some_and(|peer| peer.connection.stable_id() != original_stable_id)
+                };
+                if reconnected {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+
+        assert!(
+            reconnected.is_ok(),
+            "Timed out waiting for auto reconnect to replace the closed connection"
+        );
     }
 
     #[tokio::test]
