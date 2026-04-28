@@ -437,10 +437,9 @@ mod tests {
         let remote_addr = "127.0.0.1:2000".parse().unwrap();
         let remote = announce_address(remote_addr);
 
-        let (direct_peer, _) =
-            handle_peer(None, &local, remote.clone(), DiscoveryMethod::Direct)
-                .await
-                .unwrap();
+        let (direct_peer, _) = handle_peer(None, &local, remote.clone(), DiscoveryMethod::Direct)
+            .await
+            .unwrap();
         assert!(direct_peer.is_some());
 
         let (mdns_peer, _) = handle_peer(None, &local, remote, DiscoveryMethod::Mdns)
