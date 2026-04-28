@@ -1,8 +1,12 @@
 ## WIP
 
-- Start harddrive-party running at ws://127.0.0.1:4001
-- `trunk serve`
-- Open browser at localhost:8080
+- Start harddrive-party: `cargo run -- start --share-dir <PATH>`
+- Run the UI dev server: `trunk serve --features dev`
+- Open the browser at `http://localhost:8080`
+
+The `dev` feature makes the frontend talk to the harddrive-party UI server at `http://127.0.0.1:3030`. Without `dev`, the frontend uses the browser page origin, which is the mode used when the built assets are embedded and served by the main binary.
+
+To rebuild the embedded UI assets, run `./build-ui.sh` from the repository root.
 
 ## Mock UI mode
 
