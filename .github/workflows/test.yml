@@ -53,7 +53,7 @@ jobs:
     - name: Resolve wasm-bindgen version
       id: wasm_bindgen
       run: |
-        version=$(awk 'BEGIN { found = 0 } /^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
+        version=$(awk 'BEGIN { found = 0 } /^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' web-ui/Cargo.lock)
         echo "version=$version" >> "$GITHUB_OUTPUT"
 
     - name: Install wasm-bindgen-cli
