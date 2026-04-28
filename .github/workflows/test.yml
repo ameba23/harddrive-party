@@ -50,8 +50,14 @@ jobs:
         sudo mv /tmp/geckodriver /usr/local/bin/geckodriver
         sudo chmod +x /usr/local/bin/geckodriver
 
+    - name: Resolve wasm-bindgen version
+      id: wasm_bindgen
+      run: |
+        version=$(awk 'BEGIN { found = 0 } /^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+
     - name: Install wasm-bindgen-cli
-      run: cargo install --force wasm-bindgen-cli --version 0.2.117
+      run: cargo install --locked --force wasm-bindgen-cli --version "${{ steps.wasm_bindgen.outputs.version }}"
 
     - name: Run web-ui wasm tests
       run: cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
