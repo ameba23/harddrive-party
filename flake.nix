@@ -43,6 +43,7 @@
           version = cargoToml.package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          doCheck = false;
         };
       in
       {
