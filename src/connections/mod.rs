@@ -37,6 +37,7 @@ use tokio::{
     net::UdpSocket,
     select,
     sync::{mpsc, Mutex},
+    time::timeout,
 };
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -52,6 +53,8 @@ const RECONNECT_MAX_ATTEMPTS: usize = 20;
 const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 /// Maximum backoff delay
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
+/// How long to wait for the QUIC endpoint to drain during graceful shutdown.
+const SHUTDOWN_WAIT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 type PublicKey = [u8; PUBLIC_KEY_LENGTH];
 
 /// A harddrive-party instance
@@ -286,7 +289,14 @@ impl Hdp {
                     }
                     if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
                         endpoint.close(0u32.into(), b"shutdown");
-                        endpoint.wait_idle().await;
+                        if timeout(SHUTDOWN_WAIT_IDLE_TIMEOUT, endpoint.wait_idle())
+                            .await
+                            .is_err()
+                        {
+                            warn!(
+                                "Timed out waiting for QUIC endpoint to go idle during shutdown"
+                            );
+                        }
                     }
                     return;
                 }
