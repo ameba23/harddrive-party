@@ -46,32 +46,25 @@ impl Shares {
     }
 
     /// Index a given directory and return the number of entries added to the database
-    // TODO #16 handle share name collisions
     pub async fn scan(&mut self, root: &str) -> Result<u32, ScanDirError> {
         let mut added_entries = 0;
         let path = PathBuf::from(root);
         let path_clone = &path.clone();
 
-        // share_name is what we refer to the shared dir by
-        let path_clone_2 = path.clone();
-        let share_name = path_clone_2
-            .file_name()
-            .ok_or(ScanDirError::GetParentError)?
-            .to_str()
-            .ok_or(ScanDirError::OsStringError())?;
-
         let path_os_str = path.clone().into_os_string();
         let path_str = path_os_str.to_str().ok_or(ScanDirError::OsStringError())?;
-        self.share_names.insert(share_name, path_str)?;
+        let share_name = self.share_name_for_path(&path, path_str)?;
 
         // Remove existing entries before beginning
-        if let Err(err) = self.remove_share_dir(share_name) {
+        if let Err(err) = self.remove_share_dir(&share_name) {
             match err {
                 // Ignore the error if it didn't exist
                 ScanDirError::NoShare => {}
                 _ => return Err(err),
             }
         };
+
+        self.share_names.insert(share_name.as_bytes(), path_str)?;
 
         let mut entries = WalkDir::new(path);
         loop {
@@ -82,8 +75,7 @@ impl Shares {
                         // Remove the 'path' portion of the entry, and join it with share_name
                         let ep = entry.path();
                         let entry_path = ep.strip_prefix(path_clone)?;
-                        let sn = path_clone.file_name().ok_or(ScanDirError::GetParentError)?;
-                        let entry_path_with_share_name = Path::new(sn).join(entry_path);
+                        let entry_path_with_share_name = Path::new(&share_name).join(entry_path);
                         let filepath = entry_path_with_share_name
                             .to_str()
                             .ok_or(ScanDirError::OsStringError())?;
@@ -115,6 +107,56 @@ impl Shares {
             };
         }
         Ok(added_entries)
+    }
+
+    /// Return the stable root alias used to expose a shared directory in the index.
+    fn share_name_for_path(&self, path: &Path, path_str: &str) -> Result<String, ScanDirError> {
+        for entry in self.share_names.iter() {
+            let (existing_name, existing_path) = entry?;
+            if existing_path.as_ref() == path_str.as_bytes() {
+                return Ok(std::str::from_utf8(&existing_name)?.to_string());
+            }
+        }
+
+        let basename = path
+            .file_name()
+            .ok_or(ScanDirError::GetParentError)?
+            .to_str()
+            .ok_or(ScanDirError::OsStringError())?
+            .to_string();
+
+        if self.share_names.get(basename.as_bytes())?.is_none() {
+            return Ok(basename);
+        }
+
+        let components = path
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(component) => Some(
+                    component
+                        .to_str()
+                        .ok_or(ScanDirError::OsStringError())
+                        .map(|s| s.to_string()),
+                ),
+                _ => None,
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for suffix_len in 2..=components.len() {
+            let candidate = components[components.len() - suffix_len..].join(" - ");
+            if self.share_names.get(candidate.as_bytes())?.is_none() {
+                return Ok(candidate);
+            }
+        }
+
+        for i in 2.. {
+            let candidate = format!("{basename} - {i}");
+            if self.share_names.get(candidate.as_bytes())?.is_none() {
+                return Ok(candidate);
+            }
+        }
+
+        unreachable!()
     }
 
     /// ls or search query
@@ -218,13 +260,20 @@ impl Shares {
                 })?;
 
             for (entry, _) in self.dirs.scan_prefix(share_name).flatten() {
+                if !share_key_matches(&entry, share_name) {
+                    continue;
+                }
                 debug!("Deleting existing entry {entry:?}");
                 self.dirs.remove(entry)?;
             }
             for (entry, _) in self.files.scan_prefix(share_name).flatten() {
+                if !share_key_matches(&entry, share_name) {
+                    continue;
+                }
                 debug!("Deleting existing entry {entry:?}");
                 self.files.remove(entry)?;
             }
+            self.share_names.remove(share_name)?;
             Ok(())
         } else {
             Err(ScanDirError::NoShare)
@@ -241,6 +290,11 @@ impl Shares {
         let existing_ivec = self.dirs.get(dir_name).ok()??;
         Some(u64::from_le_bytes(existing_ivec.to_vec().try_into().ok()?))
     }
+}
+
+fn share_key_matches(entry: &[u8], share_name: &str) -> bool {
+    entry == share_name.as_bytes()
+        || entry.starts_with(format!("{share_name}{MAIN_SEPARATOR}").as_bytes())
 }
 
 /// Filter a key/value database entry based on query and if selected convert to a struct
@@ -338,6 +392,8 @@ pub enum ScanDirError {
     GetParentError,
     #[error("Got entry which does not appear to be a child of the given directory")]
     PrefixError(#[from] std::path::StripPrefixError),
+    #[error("Error parsing UTF8")]
+    Utf8Error(#[from] std::str::Utf8Error),
     #[error("Error converting database value to u64")]
     U64ConversionError,
     #[error("Share dir does not exist in DB")]
@@ -375,6 +431,7 @@ pub enum ResolvePathError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     fn create_test_entries() -> Vec<Entry> {
@@ -415,6 +472,18 @@ mod tests {
                 is_dir: false,
             },
         ]
+    }
+
+    fn collect_entries(shares: &Shares) -> Vec<Entry> {
+        let mut entries = Vec::new();
+        let responses = shares.query(None, None, true).unwrap();
+        for res in responses {
+            match res {
+                LsResponse::Success(chunk) => entries.extend(chunk),
+                LsResponse::Err(err) => panic!("Got error response {:?}", err),
+            }
+        }
+        entries
     }
 
     #[tokio::test]
@@ -493,5 +562,114 @@ mod tests {
         let mut responses = shares.query(None, None, true).unwrap();
 
         assert!(responses.next().is_none());
+    }
+
+    #[tokio::test]
+    async fn colliding_share_names_use_stable_unique_aliases() {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage.path().join("db")).expect("open");
+
+        let first = storage.path().join("first").join("Music");
+        let second = storage.path().join("second").join("Music");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("one.txt"), b"one").unwrap();
+        fs::write(second.join("two.txt"), b"two").unwrap();
+
+        let mut shares = Shares::new(db, Vec::new()).await.unwrap();
+        assert_eq!(shares.scan(first.to_str().unwrap()).await.unwrap(), 1);
+        assert_eq!(shares.scan(second.to_str().unwrap()).await.unwrap(), 1);
+
+        let entries = collect_entries(&shares);
+        assert!(entries.contains(&Entry {
+            name: "Music".to_string(),
+            size: 3,
+            is_dir: true,
+        }));
+        assert!(entries.contains(&Entry {
+            name: "second - Music".to_string(),
+            size: 3,
+            is_dir: true,
+        }));
+        assert!(entries.contains(&Entry {
+            name: "Music/one.txt".to_string(),
+            size: 3,
+            is_dir: false,
+        }));
+        assert!(entries.contains(&Entry {
+            name: "second - Music/two.txt".to_string(),
+            size: 3,
+            is_dir: false,
+        }));
+
+        let (resolved, size) = shares
+            .resolve_path("second - Music/two.txt".to_string())
+            .unwrap();
+        assert_eq!(resolved, second.join("two.txt"));
+        assert_eq!(size, 3);
+    }
+
+    #[tokio::test]
+    async fn rescanning_same_path_reuses_existing_alias() {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage.path().join("db")).expect("open");
+
+        let first = storage.path().join("first").join("Music");
+        let second = storage.path().join("second").join("Music");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("one.txt"), b"one").unwrap();
+        fs::write(second.join("two.txt"), b"two").unwrap();
+
+        let mut shares = Shares::new(db, Vec::new()).await.unwrap();
+        shares.scan(first.to_str().unwrap()).await.unwrap();
+        shares.scan(second.to_str().unwrap()).await.unwrap();
+        fs::write(second.join("three.txt"), b"three").unwrap();
+        shares.scan(second.to_str().unwrap()).await.unwrap();
+
+        let entries = collect_entries(&shares);
+        assert!(entries.contains(&Entry {
+            name: "second - Music/two.txt".to_string(),
+            size: 3,
+            is_dir: false,
+        }));
+        assert!(entries.contains(&Entry {
+            name: "second - Music/three.txt".to_string(),
+            size: 5,
+            is_dir: false,
+        }));
+        assert!(!entries.iter().any(|entry| entry.name == "Music - 2"));
+    }
+
+    #[tokio::test]
+    async fn removing_share_does_not_delete_share_with_same_prefix() {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage.path().join("db")).expect("open");
+
+        let foo = storage.path().join("foo");
+        let foobar = storage.path().join("foobar");
+        fs::create_dir_all(&foo).unwrap();
+        fs::create_dir_all(&foobar).unwrap();
+        fs::write(foo.join("one.txt"), b"one").unwrap();
+        fs::write(foobar.join("two.txt"), b"two").unwrap();
+
+        let mut shares = Shares::new(db, Vec::new()).await.unwrap();
+        shares.scan(foo.to_str().unwrap()).await.unwrap();
+        shares.scan(foobar.to_str().unwrap()).await.unwrap();
+        shares.remove_share_dir("foo").unwrap();
+
+        let entries = collect_entries(&shares);
+        assert!(!entries.iter().any(|entry| entry.name == "foo"));
+        assert!(!entries.iter().any(|entry| entry.name == "foo/one.txt"));
+        assert!(entries.contains(&Entry {
+            name: "foobar".to_string(),
+            size: 3,
+            is_dir: true,
+        }));
+        assert!(entries.contains(&Entry {
+            name: "foobar/two.txt".to_string(),
+            size: 3,
+            is_dir: false,
+        }));
     }
 }
