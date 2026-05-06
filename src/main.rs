@@ -191,10 +191,9 @@ async fn main() -> anyhow::Result<()> {
                         tokio::spawn(async move {
                             if signal::ctrl_c().await.is_ok() {
                                 eprintln!("Received Ctrl+C again, forcing exit.");
-                                force_exit_shared_state.shutting_down.store(
-                                    true,
-                                    std::sync::atomic::Ordering::SeqCst,
-                                );
+                                force_exit_shared_state
+                                    .shutting_down
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
                                 std::process::exit(130);
                             }
                         });
