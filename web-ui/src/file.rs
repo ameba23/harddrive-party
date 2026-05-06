@@ -284,13 +284,39 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
 pub enum DownloadStatus {
     Nothing,
     Requested(u32),
-    Downloading { bytes_read: u64, request_id: u32 },
+    Downloading {
+        bytes_read: u64,
+        request_id: u32,
+    },
     Uploading {
         bytes_read: u64,
         total_size: u64,
         speed: u64,
     },
     Downloaded(u32),
+}
+
+impl DownloadStatus {
+    pub fn merge_request_snapshot(&self, incoming: Self) -> Self {
+        match (self, &incoming) {
+            (
+                DownloadStatus::Downloading {
+                    request_id: current_id,
+                    ..
+                },
+                DownloadStatus::Requested(incoming_id),
+            ) if current_id == incoming_id => self.clone(),
+            (DownloadStatus::Downloaded(current_id), DownloadStatus::Requested(incoming_id))
+            | (
+                DownloadStatus::Downloaded(current_id),
+                DownloadStatus::Downloading {
+                    request_id: incoming_id,
+                    ..
+                },
+            ) if current_id == incoming_id => self.clone(),
+            _ => incoming,
+        }
+    }
 }
 
 /// Show progress when currently downloading
@@ -316,6 +342,63 @@ pub fn DownloadingFile(bytes_read: u64, size: Option<u64>) -> impl IntoView {
                 _ => format!("Downloading {}...", display_bytes(bytes_read)),
             }}
         </span>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DownloadStatus;
+
+    #[test]
+    fn request_snapshot_does_not_downgrade_active_download() {
+        let current = DownloadStatus::Downloading {
+            bytes_read: 1024,
+            request_id: 42,
+        };
+
+        assert_eq!(
+            current.merge_request_snapshot(DownloadStatus::Requested(42)),
+            current
+        );
+    }
+
+    #[test]
+    fn request_snapshot_can_complete_active_download() {
+        let current = DownloadStatus::Downloading {
+            bytes_read: 1024,
+            request_id: 42,
+        };
+
+        assert_eq!(
+            current.merge_request_snapshot(DownloadStatus::Downloaded(42)),
+            DownloadStatus::Downloaded(42)
+        );
+    }
+
+    #[test]
+    fn request_snapshot_for_new_request_can_replace_old_status() {
+        let current = DownloadStatus::Downloading {
+            bytes_read: 1024,
+            request_id: 42,
+        };
+
+        assert_eq!(
+            current.merge_request_snapshot(DownloadStatus::Requested(43)),
+            DownloadStatus::Requested(43)
+        );
+    }
+
+    #[test]
+    fn stale_progress_does_not_downgrade_completed_download() {
+        let current = DownloadStatus::Downloaded(42);
+
+        assert_eq!(
+            current.merge_request_snapshot(DownloadStatus::Downloading {
+                bytes_read: 1024,
+                request_id: 42,
+            }),
+            current
+        );
     }
 }
 

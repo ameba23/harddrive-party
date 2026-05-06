@@ -21,14 +21,13 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
 
     let files = app_context.get_files;
     let search_results_iter = move || {
-        // Calling .get() clones - we should ideally use .with()
-        let search_results = search_results.get();
-        search_results.into_iter().filter_map(move |peer_path| {
-            let files = files.get();
-            match files.get(&peer_path) {
-                Some(file) => Some(file.clone()),
-                None => None,
-            }
+        search_results.with(|search_results| {
+            files.with(|files| {
+                search_results
+                    .iter()
+                    .filter_map(|peer_path| files.get(peer_path).cloned())
+                    .collect::<Vec<File>>()
+            })
         })
     };
 

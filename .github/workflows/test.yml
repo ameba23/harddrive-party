@@ -40,6 +40,9 @@ jobs:
     - name: Add wasm target
       run: rustup target add wasm32-unknown-unknown
 
+    - name: Check web-ui mock mode
+      run: cargo check --locked --manifest-path web-ui/Cargo.toml --features mock-ui
+
     - name: Set up Firefox
       uses: browser-actions/setup-firefox@latest
 

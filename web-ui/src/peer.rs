@@ -222,15 +222,20 @@ pub fn Peers(
 
     let copy_to_clipboard = move |_| {
         wasm_bindgen_futures::spawn_local(async move {
-            let window = web_sys::window().unwrap();
+            let Some(window) = web_sys::window() else {
+                log::warn!("Cannot copy announce address: window is unavailable");
+                return;
+            };
             let clipboard = window.navigator().clipboard();
             let promise = clipboard.write_text(
                 &announce_address
                     .get_untracked()
                     .unwrap_or("Cannot get signal".to_string()),
             );
-            let _result = wasm_bindgen_futures::JsFuture::from(promise).await.unwrap();
-            log::info!("Copied to clipboard");
+            match wasm_bindgen_futures::JsFuture::from(promise).await {
+                Ok(_) => log::info!("Copied to clipboard"),
+                Err(err) => log::warn!("Cannot copy announce address: {:?}", err),
+            }
         });
     };
 
