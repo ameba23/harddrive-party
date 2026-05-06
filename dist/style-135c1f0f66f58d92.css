@@ -6,8 +6,6 @@
 	--text: #17202a;
 	--text-muted: #4f5b67;
 	--border: #dde3ea;
-	--file-meta-width: 190px;
-	--transfer-meta-width: 220px;
 	--shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
 	--radius: 14px;
 	--radius-sm: 10px;
@@ -67,6 +65,10 @@ body {
 .tab-list .thaw-flex {
 	flex-wrap: wrap;
 	row-gap: 6px;
+}
+
+.tab-list .thaw-flex {
+	flex-wrap: wrap;
 	gap: 8px;
 }
 
@@ -124,11 +126,6 @@ pre {
 	margin-bottom: 10px;
 }
 
-.peer-card__header {
-	gap: 12px;
-	margin-bottom: 8px;
-}
-
 .file-table,
 .search-table,
 .transfer-table {
@@ -169,8 +166,8 @@ pre {
 }
 
 .file-table .thaw-table-cell:last-child {
-	width: var(--file-meta-width);
-	min-width: var(--file-meta-width);
+	width: 190px;
+	min-width: 190px;
 	text-align: right;
 	padding-right: 10px;
 	vertical-align: top;
@@ -228,6 +225,12 @@ pre {
 	padding-bottom: 8px;
 }
 
+.transfer-request-status-detail {
+	margin-left: auto;
+	min-width: min(260px, 100%);
+	text-align: right;
+}
+
 .transfer-request-files {
 	margin-top: 10px;
 }
@@ -258,9 +261,13 @@ pre {
 }
 
 .transfer-table .thaw-table-cell:last-child {
-	width: var(--transfer-meta-width);
-	min-width: var(--transfer-meta-width);
+	width: 220px;
+	min-width: 220px;
 	vertical-align: top;
+}
+
+.upload-file-name {
+	margin: 0;
 }
 
 .transfer-table .thaw-progress-bar {
@@ -275,6 +282,14 @@ pre {
 
 .error-stack {
 	margin-bottom: 10px;
+}
+
+.hdp-header__menu-mobile {
+	display: none !important;
+}
+
+.hdp-header__right-btn .thaw-select {
+	width: 60px;
 }
 
 .known-peers-list {
@@ -338,9 +353,9 @@ pre {
 }
 
 @media screen and (max-width: 720px) {
-	:root {
-		--file-meta-width: 140px;
-		--transfer-meta-width: 160px;
+	.file-table .thaw-table-cell:last-child {
+		width: 140px;
+		min-width: 140px;
 	}
 
 	.main {
@@ -367,11 +382,15 @@ pre {
 	.tab-list {
 		overflow-x: auto;
 	}
+
+	.transfer-table .thaw-table-cell:last-child {
+		width: 160px;
+		min-width: 160px;
+	}
 }
 
 @media screen and (max-width: 600px) {
-	html,
-	body {
+	body, html {
 		padding: 0 4px;
 	}
 
@@ -428,5 +447,14 @@ pre {
 	.form-row > .thaw-button,
 	.form-row > button {
 		width: 100%;
+	}
+}
+
+@media screen and (max-width: 1200px) {
+	.hdp-header__right-btn {
+		display: none !important;
+	}
+	.hdp-header__menu-mobile {
+		display: inline-block !important;
 	}
 }

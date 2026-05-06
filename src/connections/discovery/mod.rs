@@ -426,8 +426,12 @@ pub async fn handle_peer(
             // They have no nat - should be able to connect to them normally
             match local {
                 PeerConnectionDetails::NoNat(our_socket_address) => {
-                    // Need to decide whether to connect
-                    Ok(if our_socket_address > &socket_address {
+                    // Manual/direct connects are one-sided, so the local peer must dial.
+                    // Automatic discovery can be observed by both peers, so it still uses a
+                    // deterministic tie-break to avoid duplicate connections.
+                    let should_connect = discovery_method == DiscoveryMethod::Direct
+                        || our_socket_address > &socket_address;
+                    Ok(if should_connect {
                         (
                             Some(DiscoveredPeer {
                                 discovery_method,
@@ -473,4 +477,33 @@ pub struct PeerConnect {
     pub discovery_method: DiscoveryMethod,
     pub announce_address: AnnounceAddress,
     pub response_tx: Option<oneshot::Sender<Result<(), UiServerErrorWrapper>>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn announce_address(addr: SocketAddr) -> AnnounceAddress {
+        AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat(addr),
+            name: "amberCloudYak".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_no_nat_connects_even_when_tie_break_would_wait() {
+        let local = PeerConnectionDetails::NoNat("127.0.0.1:1000".parse().unwrap());
+        let remote_addr = "127.0.0.1:2000".parse().unwrap();
+        let remote = announce_address(remote_addr);
+
+        let (direct_peer, _) = handle_peer(None, &local, remote.clone(), DiscoveryMethod::Direct)
+            .await
+            .unwrap();
+        assert!(direct_peer.is_some());
+
+        let (mdns_peer, _) = handle_peer(None, &local, remote, DiscoveryMethod::Mdns)
+            .await
+            .unwrap();
+        assert!(mdns_peer.is_none());
+    }
 }

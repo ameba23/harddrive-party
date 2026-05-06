@@ -95,6 +95,10 @@ enum CliCommand {
     Connect {
         announce_address: String,
     },
+    /// Disconnect from a peer
+    Disconnect {
+        peer_name: String,
+    },
     Stop,
 }
 
@@ -183,6 +187,16 @@ async fn main() -> anyhow::Result<()> {
                 match signal::ctrl_c().await {
                     Ok(()) => {
                         println!("Received Ctrl+C, shutting down...");
+                        let force_exit_shared_state = shared_state.clone();
+                        tokio::spawn(async move {
+                            if signal::ctrl_c().await.is_ok() {
+                                eprintln!("Received Ctrl+C again, forcing exit.");
+                                force_exit_shared_state
+                                    .shutting_down
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                                std::process::exit(130);
+                            }
+                        });
                         shared_state.shut_down().await;
                     }
                     Err(err) => {
@@ -340,17 +354,27 @@ async fn main() -> anyhow::Result<()> {
             let mut event_stream = client.event_stream().await?;
             while let Some(event) = event_stream.next().await {
                 match event? {
-                    UiEvent::PeerConnected { name } => {
-                        if announce_address_parsed.name == name {
-                            break;
-                        }
+                    UiEvent::PeerConnected { name } if announce_address_parsed.name == name => {
+                        break;
                     }
-                    UiEvent::PeerConnectionFailed { name, error } => {
-                        if announce_address_parsed.name == name {
-                            return Err(anyhow!("{error}"));
-                        }
+                    UiEvent::PeerConnectionFailed { name, error }
+                        if announce_address_parsed.name == name =>
+                    {
+                        return Err(anyhow!("{error}"));
                     }
                     _ => {}
+                }
+            }
+        }
+        CliCommand::Disconnect { peer_name } => {
+            let client = Client::new(cli.ui_address.parse()?);
+            let mut event_stream = client.event_stream().await?;
+            client.disconnect(peer_name.clone()).await?;
+            while let Some(event) = event_stream.next().await {
+                if let UiEvent::PeerDisconnected { name, .. } = event? {
+                    if name == peer_name {
+                        break;
+                    }
                 }
             }
         }

@@ -41,6 +41,15 @@ pub async fn post_connect(
     Ok(StatusCode::OK)
 }
 
+/// DELETE `/connect`
+pub async fn delete_connect(
+    State(shared_state): State<SharedState>,
+    peer_name: String,
+) -> Result<StatusCode, UiServerErrorWrapper> {
+    shared_state.disconnect_peer(&peer_name).await?;
+    Ok(StatusCode::OK)
+}
+
 /// POST `/files`
 pub async fn post_files(
     State(shared_state): State<SharedState>,
