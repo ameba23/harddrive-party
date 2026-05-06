@@ -294,7 +294,7 @@ impl SharedState {
         self.shares.flush().await;
         self.wishlist.flush().await;
         // This sends a signal to shutdown the Quic endpoint
-        if self.graceful_shutdown_tx.send(()).await.is_err() {
+        if self.graceful_shutdown_tx.try_send(()).is_err() {
             std::process::exit(0);
         };
     }
