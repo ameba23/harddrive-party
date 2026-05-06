@@ -167,6 +167,7 @@ impl MockClient {
             request_id: 2000,
             timestamp: Duration::from_secs(1_710_000_000),
             peer_name: "asphericKingCrab".to_string(),
+            is_dir: false,
         }])])
         .boxed_local())
     }

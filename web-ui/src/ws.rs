@@ -21,7 +21,8 @@ impl WebsocketService {
         set_error_message: WriteSignal<HashSet<AppError>>,
     ) -> anyhow::Result<(Self, Receiver<UiEvent>)> {
         let mut url = url.join("ws")?;
-        url.set_scheme("ws")
+        let ws_scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+        url.set_scheme(ws_scheme)
             .map_err(|_| anyhow!("Cannot set url scheme"))?;
 
         let (out_tx, out_rx) = channel::<UiEvent>(1024);

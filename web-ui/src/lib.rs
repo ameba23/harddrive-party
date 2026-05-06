@@ -24,10 +24,10 @@ use leptos::{prelude::*, task::spawn_local};
 use leptos_router::components::Router;
 use log::{debug, warn};
 use requests::Requests;
-use uploads::Uploads;
 use std::collections::{BTreeMap, HashSet};
 use thaw::*;
 use ui_messages::UiDownloadRequest;
+use uploads::Uploads;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -139,9 +139,15 @@ impl UiClient {
 
     pub async fn connect(&self, announce_address: String) -> Result<(), AppError> {
         match self {
-            UiClient::Real(client) => client.connect(announce_address).await.map_err(AppError::from),
+            UiClient::Real(client) => client
+                .connect(announce_address)
+                .await
+                .map_err(AppError::from),
             #[cfg(feature = "mock-ui")]
-            UiClient::Mock(client) => client.connect(announce_address).await.map_err(AppError::from),
+            UiClient::Mock(client) => client
+                .connect(announce_address)
+                .await
+                .map_err(AppError::from),
         }
     }
 
@@ -327,8 +333,9 @@ impl AppContext {
                 Ok(id) => {
                     debug!("Download requested with id: {}", id);
                     let cached_file = files.with_untracked(|files| files.get(&peer_path).cloned());
-                    let total_size =
-                        cached_file.as_ref().map_or(0, |file| file.size.unwrap_or_default());
+                    let total_size = cached_file
+                        .as_ref()
+                        .map_or(0, |file| file.size.unwrap_or_default());
                     let request = UiDownloadRequest {
                         path: peer_path.path.clone(),
                         peer_name: peer_path.peer_name.clone(),
@@ -457,7 +464,9 @@ impl AppContext {
                                                     file.size = Some(entry.size);
                                                     file.is_dir = Some(entry.is_dir);
                                                 })
-                                                .or_insert_with(|| File::from_entry(entry, peer_name.clone()));
+                                                .or_insert_with(|| {
+                                                    File::from_entry(entry, peer_name.clone())
+                                                });
                                         }
                                     });
                                 }
@@ -530,8 +539,11 @@ impl AppContext {
                                         path: upper_bound,
                                     },
                                 ) {
-                                    // TODO only set this to requested if...
-                                    file.download_status.set(download_status.clone());
+                                    let merged = file
+                                        .download_status
+                                        .get_untracked()
+                                        .merge_request_snapshot(download_status.clone());
+                                    file.download_status.set(merged);
                                 }
                             }
                         });
@@ -561,7 +573,9 @@ impl AppContext {
                             let request_path = request.path.clone();
                             let is_dir_request = requested_files.iter().any(|requested_file| {
                                 requested_file.path != request_path
-                                    && requested_file.path.starts_with(&format!("{}/", request_path))
+                                    && requested_file
+                                        .path
+                                        .starts_with(&format!("{}/", request_path))
                             }) || (requested_files.len() > 1);
                             for requested_file in requested_files {
                                 let download_status = if requested_file.downloaded {
@@ -576,9 +590,11 @@ impl AppContext {
                                 files
                                     .entry(peer_path)
                                     .and_modify(|file| {
-                                        // TODO this should not clobber if file is in
-                                        // downloading state
-                                        file.download_status.set(download_status.clone());
+                                        let merged = file
+                                            .download_status
+                                            .get_untracked()
+                                            .merge_request_snapshot(download_status.clone());
+                                        file.download_status.set(merged);
                                         file.size = Some(requested_file.size);
                                     })
                                     .or_insert(File {

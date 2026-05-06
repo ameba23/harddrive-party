@@ -15,19 +15,16 @@ pub fn Transfers(
     uploads: ReadSignal<Uploads>,
 ) -> impl IntoView {
     let wishlist = move || {
-        requests
-            .get()
-            .iter()
-            .filter_map(|((_timestamp, _id), peer_path)| {
-                let files = files.get();
-                match files.get(peer_path) {
-                    Some(file) => Some(file.clone()),
-                    None => None,
-                }
+        requests.with(|requests| {
+            files.with(|files| {
+                requests
+                    .iter()
+                    .filter_map(|((_timestamp, _id), peer_path)| files.get(peer_path).cloned())
+                    .collect::<Vec<File>>()
             })
-            .collect::<Vec<File>>()
+        })
     };
-    let uploads_list = move || uploads.get().iter().cloned().collect::<Vec<_>>();
+    let uploads_list = move || uploads.with(|uploads| uploads.iter().cloned().collect::<Vec<_>>());
 
     view! {
         <h2 class="text-xl">"Transfers"</h2>
