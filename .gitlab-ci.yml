@@ -28,17 +28,7 @@ test-web-ui:
     - tar -xzf /tmp/geckodriver.tar.gz -C /usr/local/bin
     - chmod +x /usr/local/bin/geckodriver
     - rustup target add wasm32-unknown-unknown
-    - cargo install --force wasm-bindgen-cli --version 0.2.117
-    - cargo check --manifest-path web-ui/Cargo.toml --features mock-ui
-    - cargo test --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
-
-# - cargo install cargo-audit
-# - cargo audit
-# - cargo install cargo-tarpaulin
-# - cargo tarpaulin --ignore-tests
-#
-# audit-code:
-#   stage: test
-#   script:
-#     - cargo install cargo-audit
-#     - cargo audit
+    - version=$(awk 'BEGIN { found = 0 } /^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' web-ui/Cargo.lock)
+    - cargo install --locked --force wasm-bindgen-cli --version "$version"
+    - cargo check --locked --manifest-path web-ui/Cargo.toml --features mock-ui
+    - cargo test --locked --manifest-path web-ui/Cargo.toml --target wasm32-unknown-unknown --lib
