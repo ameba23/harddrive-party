@@ -124,7 +124,10 @@ impl Rpc {
                                 .await;
                         } else {
                             info!(
-                                "Discovered peer through existing peer connection {announce_peer:?}"
+                                "Received gossiped peer announcement from {} about {} ({:?})",
+                                peer_name,
+                                announce_peer.announce_address.name,
+                                announce_peer.announce_address.connection_details
                             );
                             if self
                                 .peer_announce_tx
@@ -175,6 +178,10 @@ impl Rpc {
 
         // Tell all existing peers about this sender
         for other_connection in other_connections {
+            info!(
+                "Relaying self-announcement for {} to an existing peer connection",
+                sender
+            );
             let request = Request::AnnouncePeer(announce_peer.clone());
             if let Err(err) = SharedState::request_connection(request, &other_connection).await {
                 error!("Failed to relay announce message to peer connection: {err:?}");
