@@ -171,9 +171,7 @@ impl PeerDiscovery {
                 let peer_name = peer_connect.announce_address.name.clone();
                 info!(
                     "Handling {:?} peer announcement for {} ({:?})",
-                    discovery_method,
-                    peer_name,
-                    peer_connect.announce_address.connection_details
+                    discovery_method, peer_name, peer_connect.announce_address.connection_details
                 );
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
