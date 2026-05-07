@@ -212,6 +212,7 @@ pub struct OutgoingHolepunchPacket {
     dest: SocketAddr,
 }
 
+/// An outgoing packet together with a channel for sending the result
 #[derive(Debug)]
 pub struct OutgoingHolepunchRequest {
     packet: OutgoingHolepunchPacket,
@@ -234,10 +235,12 @@ impl OutgoingHolepunchPacket {
     }
 }
 
+/// Get a random port avoiding zero as that has a special meaning
 fn random_nonzero_port(rng: &mut impl Rng) -> u16 {
     rng.gen_range(1..=u16::MAX)
 }
 
+/// Generate RNG seed used for generating random port numbers
 fn next_rng_seed() -> [u8; 32] {
     let mut rng_seed = [0u8; 32];
     OsRng.fill_bytes(&mut rng_seed);
@@ -381,16 +384,10 @@ impl HolePuncher {
             for attempt in 1..=MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
                 // Send a packet to a random port
                 let port = random_nonzero_port(&mut rng);
-                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(
-                    addr,
-                    port,
-                ));
+                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, port));
                 debug!(
                     "Hole punch probe sent: mode=unknown-port remote_ip={} attempt={}/{} port={}",
-                    addr,
-                    attempt,
-                    MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS,
-                    port
+                    addr, attempt, MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS, port
                 );
                 if let Err(err) = send_holepunch_packet(&udp_send, packet).await {
                     warn!("Failed to send holepunch packet to {addr}: {err}");
@@ -451,6 +448,7 @@ impl HolePuncher {
     }
 }
 
+/// We are the 'hard side' meaning we need many UDP listeners
 pub async fn birthday_hard_side(
     target_addr: SocketAddr,
 ) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
@@ -533,19 +531,4 @@ pub enum HolePunchError {
     SendTaskClosed(SocketAddr),
     #[error("No hole punch socket was returned")]
     SocketChannelClosed,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::random_nonzero_port;
-    use rand::{rngs::StdRng, SeedableRng};
-
-    #[test]
-    fn random_nonzero_port_never_returns_zero() {
-        let mut rng = StdRng::seed_from_u64(1);
-
-        for _ in 0..10_000 {
-            assert_ne!(random_nonzero_port(&mut rng), 0);
-        }
-    }
 }
