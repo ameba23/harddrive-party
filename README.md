@@ -106,7 +106,7 @@ Peers connect to each other using [QUIC](https://en.wikipedia.org/wiki/QUIC), wi
 - `Read` - for downloading a file, or portion of a file. 
 - `AnnouncePeer` - for passing on connection details of another peer.
 
-These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode](https://docs.rs/bincode).
+These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode-next](https://docs.rs/bincode-next) using the bincode 1-compatible legacy configuration.
 
 ### Shared files
 
@@ -129,7 +129,7 @@ The UI server exposes:
   - `POST /api/close`
 - Static access to downloaded files under `/downloads/*`
 
-Most `/api/*` payloads are bincode-encoded rather than JSON (see [`shared/src/client/mod.rs`](./shared/src/client/mod.rs)).
+Most `/api/*` payloads use the bincode wire format rather than JSON (see [`shared/src/client/mod.rs`](./shared/src/client/mod.rs)).
 
 ### Peer names
 

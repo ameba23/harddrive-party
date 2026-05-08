@@ -1,5 +1,4 @@
-use crate::{client::ClientError, ui_messages::UiEvent};
-use bincode::deserialize;
+use crate::{client::ClientError, codec::deserialize, ui_messages::UiEvent};
 use futures::{stream::SplitStream, Stream, StreamExt};
 use reqwest::Url;
 use std::pin::Pin;

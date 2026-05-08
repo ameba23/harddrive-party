@@ -1,5 +1,5 @@
 //! Tracks known peers for certificate checking and reconnecting
-use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::{codec, wire_messages::AnnounceAddress};
 
 use crate::errors::UiServerErrorWrapper;
 
@@ -16,7 +16,7 @@ impl KnownPeers {
 
     /// Add a peer who we know of through one of the discovery methods
     pub fn add_peer(&self, announce_address: &AnnounceAddress) -> Result<(), UiServerErrorWrapper> {
-        let connection_details = bincode::serialize(&announce_address.connection_details)?;
+        let connection_details = codec::serialize(&announce_address.connection_details)?;
         self.db
             .insert(announce_address.name.as_bytes(), connection_details)?;
         Ok(())
@@ -34,7 +34,7 @@ impl KnownPeers {
 
             Some(AnnounceAddress {
                 name: String::from_utf8(k.to_vec()).ok()?,
-                connection_details: bincode::deserialize(&v).ok()?,
+                connection_details: codec::deserialize(&v).ok()?,
             })
         }))
     }

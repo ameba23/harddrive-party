@@ -1,11 +1,10 @@
 use crate::AppError;
 use anyhow::anyhow;
-use bincode::deserialize;
 use futures::{
     channel::mpsc::{channel, Receiver},
     SinkExt, StreamExt,
 };
-use harddrive_party_shared::ui_messages::UiEvent;
+use harddrive_party_shared::{codec::deserialize, ui_messages::UiEvent};
 use leptos::prelude::*;
 use log::{debug, error, warn};
 use reqwasm::websocket::{futures::WebSocket, Message};

@@ -22,9 +22,11 @@ use crate::{
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use async_stream::try_stream;
-use bincode::serialize;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::wire_messages::{IndexQuery, LsResponse};
+use harddrive_party_shared::{
+    codec::{deserialize, serialize},
+    wire_messages::{IndexQuery, LsResponse},
+};
 use log::{debug, error, warn};
 use quinn::RecvStream;
 use rand::{rngs::OsRng, Rng};
@@ -339,7 +341,7 @@ pub async fn process_length_prefix(
             let mut msg_buf = vec![Default::default(); length_usize];
             match recv.read_exact(&mut msg_buf).await {
                 Ok(()) => {
-                    let ls_response: LsResponse = bincode::deserialize(&msg_buf)?;
+                    let ls_response: LsResponse = deserialize(&msg_buf)?;
                     yield ls_response;
                 }
                 Err(_) => {

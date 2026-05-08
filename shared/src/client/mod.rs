@@ -6,10 +6,10 @@ pub use events::EventStream;
 
 use crate::{
     announce_address::{AnnounceAddress, AnnounceAddressDecodeError},
+    codec::{deserialize, serialize},
     ui_messages::{FilesQuery, Info, PeerPath, UiDownloadRequest, UiRequestedFile, UiServerError},
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
 };
-use bincode::{deserialize, serialize};
 use bytes::{Buf, Bytes, BytesMut};
 use futures::Stream;
 use reqwest::{Response, Url};
@@ -180,7 +180,7 @@ impl Client {
             return Err(ClientError::from_response(res).await);
         }
 
-        Ok(bincode::deserialize(&res.bytes().await?)?)
+        Ok(deserialize(res.bytes().await?)?)
     }
 
     /// GET `/known-peers`
@@ -200,7 +200,7 @@ impl Client {
             return Err(ClientError::from_response(res).await);
         }
 
-        let encoded: Vec<String> = bincode::deserialize(&res.bytes().await?)?;
+        let encoded: Vec<String> = deserialize(res.bytes().await?)?;
         encoded
             .into_iter()
             .map(AnnounceAddress::from_string)
@@ -406,8 +406,14 @@ pub enum ClientError {
     ServerError(#[from] UiServerError),
 }
 
-impl From<bincode::Error> for ClientError {
-    fn from(value: bincode::Error) -> Self {
+impl From<crate::codec::EncodeError> for ClientError {
+    fn from(value: crate::codec::EncodeError) -> Self {
+        ClientError::Serialization(value.to_string())
+    }
+}
+
+impl From<crate::codec::DecodeError> for ClientError {
+    fn from(value: crate::codec::DecodeError) -> Self {
         ClientError::Serialization(value.to_string())
     }
 }

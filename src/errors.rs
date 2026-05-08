@@ -83,8 +83,14 @@ impl From<sled::Error> for UiServerErrorWrapper {
     }
 }
 
-impl From<Box<bincode::ErrorKind>> for UiServerErrorWrapper {
-    fn from(error: Box<bincode::ErrorKind>) -> UiServerErrorWrapper {
+impl From<harddrive_party_shared::codec::EncodeError> for UiServerErrorWrapper {
+    fn from(error: harddrive_party_shared::codec::EncodeError) -> UiServerErrorWrapper {
+        UiServerErrorWrapper(UiServerError::Db(error.to_string()))
+    }
+}
+
+impl From<harddrive_party_shared::codec::DecodeError> for UiServerErrorWrapper {
+    fn from(error: harddrive_party_shared::codec::DecodeError) -> UiServerErrorWrapper {
         UiServerErrorWrapper(UiServerError::Db(error.to_string()))
     }
 }
