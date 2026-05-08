@@ -22,6 +22,7 @@ use axum::{
     routing::{any, delete, get, post, put},
     Router,
 };
+use harddrive_party_shared::codec;
 use log::error;
 use mime_guess::from_path;
 use rust_embed::RustEmbed;
@@ -130,7 +131,7 @@ where
                 )
             })?;
 
-        let obj = bincode::deserialize::<T>(&bytes).map_err(|_| {
+        let obj = codec::deserialize::<T>(&bytes).map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
                 "Failed to decode bincode body".into(),
@@ -146,7 +147,7 @@ where
     T: Serialize,
 {
     fn into_response(self) -> Response<Body> {
-        match bincode::serialize(&self.0) {
+        match codec::serialize(&self.0) {
             Ok(bytes) => (
                 [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
                 bytes,

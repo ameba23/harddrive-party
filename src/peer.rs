@@ -13,9 +13,11 @@ use crate::{
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::anyhow;
-use bincode::serialize;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::wire_messages::{AnnounceAddress, Entry};
+use harddrive_party_shared::{
+    codec::serialize,
+    wire_messages::{AnnounceAddress, Entry},
+};
 use key_to_animal::key_to_name;
 use log::{debug, error, warn};
 use lru::LruCache;

@@ -10,9 +10,9 @@ use crate::{
     ui_messages::{UiEvent, UploadInfo},
     SharedState,
 };
-use bincode::{deserialize, serialize};
-use harddrive_party_shared::wire_messages::{
-    AnnouncePeer, IndexQuery, LsResponse, LsResponseError, ReadQuery, Request,
+use harddrive_party_shared::{
+    codec::{deserialize, serialize, DecodeError},
+    wire_messages::{AnnouncePeer, IndexQuery, LsResponse, LsResponseError, ReadQuery, Request},
 };
 use log::{debug, error, info, warn};
 use quinn::WriteError;
@@ -94,7 +94,7 @@ impl Rpc {
 
     /// Handle a request
     pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream, peer_name: String) {
-        let request: Result<Request, Box<bincode::ErrorKind>> = deserialize(&buf);
+        let request: Result<Request, DecodeError> = deserialize(&buf);
         match request {
             Ok(req) => {
                 debug!("Got request from peer {req:?}");

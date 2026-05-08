@@ -1,7 +1,7 @@
 //! Websocket server for sending events to UI
 use crate::SharedState;
 use axum::extract::ws::{Message, WebSocket};
-use bincode::serialize;
+use harddrive_party_shared::codec::serialize;
 use log::{error, warn};
 
 pub async fn handle_socket(shared_state: SharedState, mut socket: WebSocket) {

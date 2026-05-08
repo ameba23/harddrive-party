@@ -17,6 +17,7 @@ use axum::{
 use bytes::{BufMut, BytesMut};
 use futures::{channel::mpsc, pin_mut, SinkExt, StreamExt};
 use harddrive_party_shared::{
+    codec::serialize,
     ui_messages::{Info, PeerPath, UiDownloadRequest, UiRequestedFile},
     wire_messages::ReadQuery,
 };
@@ -95,7 +96,7 @@ pub async fn post_files(
                 for entries in responses {
                     let ls_response = LsResponse::Success(entries);
                     if let Ok(serialized_res) =
-                        bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
+                        serialize(&Ok::<(LsResponse, String), UiServerError>((
                             ls_response,
                             peer_name.to_string(),
                         )))
@@ -137,12 +138,10 @@ pub async fn post_files(
                         cached_entries.push(entries.clone());
                     }
                 }
-                if let Ok(serialized_res) =
-                    bincode::serialize(&Ok::<(LsResponse, String), UiServerError>((
-                        ls_response,
-                        peer_name_clone.to_string(),
-                    )))
-                {
+                if let Ok(serialized_res) = serialize(&Ok::<(LsResponse, String), UiServerError>((
+                    ls_response,
+                    peer_name_clone.to_string(),
+                ))) {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
                     if response_tx.send(serialized_res).await.is_err() {
                         warn!("Response channel closed");
@@ -331,7 +330,7 @@ where
     let (mut response_tx, response_rx) = mpsc::channel(256);
     tokio::spawn(async move {
         for res in input_iterator {
-            match bincode::serialize(&Ok::<T, UiServerError>(res)) {
+            match serialize(&Ok::<T, UiServerError>(res)) {
                 Ok(serialized_res) => {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
                     if response_tx.send(serialized_res).await.is_err() {
