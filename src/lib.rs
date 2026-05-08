@@ -15,7 +15,7 @@ use crate::{
         known_peers::KnownPeers,
     },
     errors::UiServerErrorWrapper,
-    peer::Peer,
+    peer::{remote_path_is_within_request, safe_remote_relative_path, Peer},
     shares::Shares,
     ui_messages::{PeerPath, UiEvent, UiServerError},
     wire_messages::{AnnounceAddress, Request},
@@ -229,6 +229,10 @@ impl SharedState {
     }
 
     pub async fn download(&self, peer_path: PeerPath) -> Result<u32, UiServerErrorWrapper> {
+        let requested_path = safe_remote_relative_path(&peer_path.path).map_err(|err| {
+            UiServerError::RequestError(format!("Invalid download path requested: {err}"))
+        })?;
+
         // Get details of the file / dir
         let ls_request = Request::Ls(IndexQuery {
             path: Some(peer_path.path.clone()),
@@ -258,6 +262,25 @@ impl SharedState {
         while let Some(Ok(ls_response)) = ls_response_stream.next().await {
             if let LsResponse::Success(entries) = ls_response {
                 for entry in entries.iter() {
+                    let entry_path = match safe_remote_relative_path(&entry.name) {
+                        Ok(path) => path,
+                        Err(err) => {
+                            warn!(
+                                "Ignoring unsafe download entry from peer {}: {err}",
+                                peer_path.peer_name
+                            );
+                            continue;
+                        }
+                    };
+
+                    if !remote_path_is_within_request(&requested_path, &entry_path) {
+                        warn!(
+                            "Ignoring download entry outside requested path from peer {}: {}",
+                            peer_path.peer_name, entry.name
+                        );
+                        continue;
+                    }
+
                     if entry.name == peer_path.path {
                         if let Err(err) = self.wishlist.add_request(&DownloadRequest::new(
                             entry.name.clone(),
