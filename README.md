@@ -42,6 +42,7 @@ Open `http://127.0.0.1:3030` in your browser.
     - `--storage <PATH>` (defaults to `$XDG_DATA_HOME/harddrive-party` or `~/.local/share/harddrive-party`)
     - `--download-dir <PATH>` (defaults to `~/Downloads`)
     - `--no-mdns` (disable local-network discovery)
+    - `--local-address <IP:PORT>` (local QUIC socket address to bind for peer connections; defaults to the local IP and previously used port, or an OS-assigned port if none is stored)
     - `--stun-server <HOST:PORT>` (repeatable, overrides the built-in STUN server list)
 - `connect <announce-address>`
   - Ask the running process to connect to a peer.
