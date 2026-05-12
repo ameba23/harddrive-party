@@ -78,6 +78,7 @@ impl Hdp {
     /// - Initial directories to share, if any
     /// - The path to store downloaded files
     /// - Whether to use mDNS to discover peers on the local network
+    /// - Optional local address for QUIC peer connections
     /// - Optional custom STUN servers
     pub async fn new(
         storage: impl AsRef<Path>,
@@ -120,12 +121,17 @@ impl Hdp {
         // Read the port from storage
         // We attempt to use the same port as last time if possible, so that if the process is
         // stopped and restarted, peers can reconnect without needing to exchange details again
-        let last_used_port = config_db
-            .get(b"port")
-            .ok()
-            .flatten()
-            .and_then(|bytes| bytes.to_vec().try_into().ok())
-            .map(u16::from_be_bytes);
+        let last_used_port = local_addr
+            .is_none()
+            .then(|| {
+                config_db
+                    .get(b"port")
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| bytes.to_vec().try_into().ok())
+                    .map(u16::from_be_bytes)
+            })
+            .flatten();
 
         let known_peers_db = db.open_tree(KNOWN_PEERS)?;
 

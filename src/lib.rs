@@ -420,6 +420,26 @@ mod tests {
         (hdp, url)
     }
 
+    #[tokio::test]
+    async fn local_address_requires_configured_address() {
+        let storage = TempDir::new().unwrap();
+        let downloads = storage.path().to_path_buf();
+        let held_socket = StdUdpSocket::bind("127.0.0.1:0").unwrap();
+        let held_addr = held_socket.local_addr().unwrap();
+
+        let result = Hdp::new(storage, vec![], downloads, false, Some(held_addr), None).await;
+        let err = match result {
+            Ok(_) => panic!("expected configured QUIC address bind to fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("failed to bind configured QUIC UDP address"),
+            "unexpected error: {err}"
+        );
+    }
+
     async fn setup_connected_peers(
         share_dirs: Vec<String>,
     ) -> (

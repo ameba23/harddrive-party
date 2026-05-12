@@ -8,7 +8,7 @@ use harddrive_party::{
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, ReadQuery},
     Hdp,
 };
-use std::{env, path::PathBuf};
+use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::fs::create_dir_all;
 use tokio::signal;
 
@@ -52,6 +52,10 @@ enum CliCommand {
         /// Custom STUN server to use for discovery (may be given multiple times)
         #[arg(long, value_name = "HOST:PORT")]
         stun_server: Vec<String>,
+        /// Local socket address to listen on for QUIC peer connections.
+        /// Defaults to the local IP and previously used port, or an OS-assigned port if none is stored.
+        #[arg(long, value_name = "IP:PORT")]
+        local_address: Option<SocketAddr>,
     },
     /// Download a file or dir
     Download {
@@ -121,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
             download_dir,
             no_mdns,
             stun_server,
+            local_address,
         } => {
             let storage = match storage {
                 Some(storage) => PathBuf::from(storage),
@@ -142,8 +147,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
             create_dir_all(&download_dir).await?;
-
-            let local_address = None;
 
             let mut hdp = Hdp::new(
                 storage,

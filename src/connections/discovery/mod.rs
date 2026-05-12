@@ -79,6 +79,7 @@ impl PeerDiscovery {
         // Channel for announcing peers to be handled
         let (peer_announce_tx, mut peer_announce_rx) = channel(1024);
 
+        let configured_local_addr = local_addr.is_some();
         let mut local_addr = if let Some(local_addr) = local_addr {
             local_addr
         } else {
@@ -93,11 +94,17 @@ impl PeerDiscovery {
         }
 
         // If we get an error with a given port try again with the port set to 0
-        let raw_socket = if let Ok(socket) = UdpSocket::bind(local_addr).await {
-            socket
-        } else {
-            warn!("Failed to bind to {local_addr} - trying another port");
-            UdpSocket::bind(SocketAddr::new(local_addr.ip(), 0)).await?
+        let raw_socket = match UdpSocket::bind(local_addr).await {
+            Ok(socket) => socket,
+            Err(err) if configured_local_addr => {
+                return Err(anyhow::anyhow!(
+                    "failed to bind configured QUIC UDP address {local_addr}: {err}"
+                ));
+            }
+            Err(_) => {
+                warn!("Failed to bind to {local_addr} - trying another port");
+                UdpSocket::bind(SocketAddr::new(local_addr.ip(), 0)).await?
+            }
         };
 
         // Get our public address and NAT type from a STUN server.
