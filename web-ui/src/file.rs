@@ -94,12 +94,15 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
     let peer_name_for_uploader = file.peer_name.clone();
 
     let app_context_1 = app_context.clone();
-    let download_request = move |_| {
+    let download_request = move |event: leptos::ev::MouseEvent| {
+        event.stop_propagation();
         app_context_1.download(PeerPath {
             path: file_name.get().to_string(),
             peer_name: peer_name.clone(),
         });
     };
+
+    let is_dir = file.is_dir == Some(true);
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button = move || {
@@ -194,20 +197,19 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     }
                     None => view! { <span></span> }.into_any(),
                 }} {indentation} {icon} " "
-                <span class="text-sm font-medium" title=display_name.clone()>
+                <span class:text-sm=true class:font-medium=is_dir title=display_name.clone()>
                     {display_name.clone()}
                 </span>
             </pre>
         }
     };
 
-    let is_dir = file.is_dir == Some(true);
-
     view! {
         <TableRow
             class:file-row--downloaded=move || {
                 !is_dir && matches!(file.download_status.get(), DownloadStatus::Downloaded(_))
             }
+            class:file-row--directory=move || is_dir
             on:click=expand_dir
         >
             <TableCell>{file_name_and_indentation}</TableCell>
@@ -227,24 +229,28 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             DownloadStatus::Nothing => EitherOf6::A(view! { <span></span> }),
                             DownloadStatus::Downloaded(_) => {
                                 if is_dir {
-                                    EitherOf6::B(view! { <span>"Downloaded"</span> })
+                                    EitherOf6::B(
+                                        view! { <span class="status-pill status-pill--complete">"Downloaded"</span> },
+                                    )
                                 } else {
                                     let file_path = file_name.get();
                                     EitherOf6::C(
                                         view! {
-                                            "Downloaded"
+                                            <span class="status-pill status-pill--complete">"Downloaded"</span>
                                             <Preview file_path=&file_path shared=is_shared />
                                         },
                                     )
                                 }
                             }
                             DownloadStatus::Requested(_) => {
-                                EitherOf6::D(view! { <span>"Requested"</span> })
+                                EitherOf6::D(
+                                    view! { <span class="status-pill status-pill--pending">"Requested"</span> },
+                                )
                             }
                             DownloadStatus::Downloading { bytes_read, .. } => {
                                 EitherOf6::E(
                                     view! {
-                                        <span>
+                                        <span class="transfer-state">
                                             <DownloadingFile bytes_read size=file.size />
                                         </span>
                                     },
@@ -253,7 +259,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             DownloadStatus::Uploading { bytes_read, total_size, speed } => {
                                 EitherOf6::F(
                                     view! {
-                                        <span>
+                                        <span class="transfer-state">
                                             <UploadingFile bytes_read total_size speed />
                                         </span>
                                     },
@@ -439,6 +445,8 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
                     <a
                         href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
                         target="_blank"
+                        rel="noopener noreferrer"
+                        on:click=move |event| event.stop_propagation()
                     >
                         <Button size=ButtonSize::Small>"View"</Button>
                     </a>

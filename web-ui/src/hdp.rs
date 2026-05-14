@@ -1,7 +1,7 @@
 pub use harddrive_party_shared::ui_messages;
 pub use harddrive_party_shared::wire_messages;
-use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
 use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::{client::ClientError, ui_messages::PeerPath};
 
 use crate::{
     components::header::HdpHeader,
@@ -255,15 +255,13 @@ pub fn HdpUi() -> impl IntoView {
                                         },
                                     ));
 
-                                if let Some((_peer_path, request_root)) = files.iter_mut().find(
-                                    |(_peer_path, file)| {
-                                        file.request
-                                            .get_untracked()
-                                            .is_some_and(|request| {
-                                                request.request_id == download_event.request_id
-                                            })
-                                    },
-                                ) {
+                                if let Some((_peer_path, request_root)) =
+                                    files.iter_mut().find(|(_peer_path, file)| {
+                                        file.request.get_untracked().is_some_and(|request| {
+                                            request.request_id == download_event.request_id
+                                        })
+                                    })
+                                {
                                     let request_status = if total_bytes_read
                                         >= request_root.size.unwrap_or_default()
                                     {

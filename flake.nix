@@ -58,7 +58,7 @@
             pkgs.firefox
             pkgs.geckodriver
             pkgs.trunk
-            pkgs.wasm-bindgen-cli
+            pkgs.wasm-bindgen-cli_0_2_118
           ];
         };
       }

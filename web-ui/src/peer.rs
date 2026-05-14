@@ -4,20 +4,27 @@ use crate::{
     file::{File, FileDisplayContext},
     AppContext, PeerPath,
 };
-use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use leptos::{either::Either, prelude::*};
 use qrcode::{render::svg, QrCode};
 use std::collections::HashSet;
 use std::ops::Bound::Included;
 use thaw::*;
 
-fn is_visible_in_peer_tree(files: &std::collections::BTreeMap<PeerPath, File>, peer_path: &PeerPath) -> bool {
+fn is_visible_in_peer_tree(
+    files: &std::collections::BTreeMap<PeerPath, File>,
+    peer_path: &PeerPath,
+) -> bool {
     if peer_path.path.is_empty() {
         return true;
     }
 
     let mut current = String::new();
-    for component in peer_path.path.split('/').take_while(|component| !component.is_empty()) {
+    for component in peer_path
+        .path
+        .split('/')
+        .take_while(|component| !component.is_empty())
+    {
         if !current.is_empty() {
             current.push('/');
         }
@@ -142,23 +149,22 @@ pub fn Peers(
                 return None;
             }
 
-            QrCode::new(announce_address)
-                .ok()
-                .map(|code| {
-                    code.render::<svg::Color<'_>>()
-                        .min_dimensions(50, 50)
-                        .dark_color(svg::Color("#111111"))
-                        .light_color(svg::Color("#ffffff"))
-                        .build()
-                })
+            QrCode::new(announce_address).ok().map(|code| {
+                code.render::<svg::Color<'_>>()
+                    .min_dimensions(50, 50)
+                    .dark_color(svg::Color("#111111"))
+                    .light_color(svg::Color("#ffffff"))
+                    .build()
+            })
         })
     };
 
     let show_peers = move || {
         if app_context.get_peers.get().is_empty() {
             Either::Left(view! {
-                <div>
-                    <p>"No peers connected"</p>
+                <div class="empty-state">
+                    <strong>"No peers connected"</strong>
+                    <p>"Paste an announce address above or connect to a known peer below."</p>
                 </div>
             })
         } else {
@@ -176,10 +182,14 @@ pub fn Peers(
 
     let known_peers_iter = move || {
         let connected = app_context.get_peers.get();
+        let pending = pending_peers.get();
         known_peers
             .get()
             .into_iter()
-            .filter(|announce_address| !connected.contains(&announce_address.name))
+            .filter(|announce_address| {
+                !connected.contains(&announce_address.name)
+                    && !pending.contains(&announce_address.to_string())
+            })
             .collect::<Vec<_>>()
     };
 
@@ -190,7 +200,7 @@ pub fn Peers(
                 key=|announce_address| announce_address.clone()
                 children=move |announce_address| {
                     view! {
-                        <Flex>
+                        <Flex class="pending-peer">
                             <Spinner label=announce_address size=SpinnerSize::Small />
                         </Flex>
                     }
@@ -201,17 +211,69 @@ pub fn Peers(
 
     let input_value = RwSignal::new(String::new());
 
-    let add_peer = move |_| {
+    let app_context_for_add_peer = app_context.clone();
+    let add_peer = move |e: leptos::ev::SubmitEvent| {
+        e.prevent_default();
         let announce_payload = input_value.get();
         let announce_payload = announce_payload.trim();
         if !announce_payload.is_empty() {
-            app_context.connect(announce_payload.to_string());
-            app_context.set_pending_peers.update(|pending_peers| {
-                pending_peers.insert(announce_payload.to_string());
-            });
+            app_context_for_add_peer.connect(announce_payload.to_string());
+            app_context_for_add_peer
+                .set_pending_peers
+                .update(|pending_peers| {
+                    pending_peers.insert(announce_payload.to_string());
+                });
         }
 
         input_value.set(String::new());
+    };
+
+    let show_known_peers = move || {
+        let known_peers = known_peers_iter();
+        if known_peers.is_empty() {
+            view! {
+                <div class="empty-state empty-state--quiet">
+                    <strong>"No known peers"</strong>
+                    <p>"Peers you have seen before will appear here for quick reconnects."</p>
+                </div>
+            }
+            .into_any()
+        } else {
+            let app_context = app_context.clone();
+            view! {
+                <ul class="known-peers-list">
+                    <For
+                        each=move || known_peers.clone()
+                        key=|announce_address: &AnnounceAddress| announce_address.to_string()
+                        children=move |announce_address| {
+                            let announce_payload = announce_address.to_string();
+                            let connect_payload = announce_payload.clone();
+                            let connect_label = known_peer_connect_label(&announce_address);
+                            let app_context = app_context.clone();
+                            view! {
+                                <li class="known-peer-item">
+                                    <AnnounceAddressView announce_address />
+                                    <Button
+                                        size=ButtonSize::Small
+                                        on:click=move |_| {
+                                            app_context.connect(connect_payload.clone());
+                                            app_context
+                                                .set_pending_peers
+                                                .update(|pending_peers| {
+                                                    pending_peers.insert(connect_payload.clone());
+                                            });
+                                        }
+                                    >
+                                        {connect_label}
+                                    </Button>
+                                </li>
+                            }
+                        }
+                    />
+                </ul>
+            }
+            .into_any()
+        }
     };
 
     let announce = move || {
@@ -265,45 +327,47 @@ pub fn Peers(
                 </div>
             </div>
         </div>
-        <Flex class="form-row form-row--peer-connect">
-            <Input value=input_value placeholder="Enter an announce address">
-                <InputPrefix slot>
-                    <Icon icon=icondata::AiUserOutlined />
-                </InputPrefix>
-            </Input>
-            <Button on:click=add_peer>Add peer</Button>
-        </Flex>
+        <form class="peer-connect-form" on:submit=add_peer>
+            <Flex class="form-row form-row--peer-connect">
+                <Input value=input_value placeholder="Paste an announce address">
+                    <InputPrefix slot>
+                        <Icon icon=icondata::AiUserOutlined />
+                    </InputPrefix>
+                </Input>
+                <Button button_type=ButtonType::Submit>"Add peer"</Button>
+            </Flex>
+        </form>
         {show_pending_peers}
         <h2 class="text-xl">"Connected peers"</h2>
         {show_peers}
         <h2 class="text-xl">"Known peers"</h2>
-        <ul class="known-peers-list">
-            <For
-                each=known_peers_iter
-                key=|announce_address: &AnnounceAddress| announce_address.to_string()
-                children=move |announce_address| {
-                    view! {
-                        <li>
-                            <AnnounceAddressView announce_address />
-                        </li>
-                    }
-                }
-            />
-        </ul>
+        {show_known_peers}
+    }
+}
+
+fn known_peer_connect_label(announce_address: &AnnounceAddress) -> &'static str {
+    match announce_address.connection_details {
+        PeerConnectionDetails::NoNat(_) => "Connect",
+        PeerConnectionDetails::Asymmetric(_) | PeerConnectionDetails::Symmetric(_) => {
+            "Attempt connect"
+        }
     }
 }
 
 #[cfg(all(test, target_arch = "wasm32"))]
 mod tests {
     use super::*;
-    use crate::{file::{DownloadStatus, File}, AppContext};
+    use crate::{
+        file::{DownloadStatus, File},
+        AppContext,
+    };
     use gloo_timers::future::sleep;
     use leptos::mount::mount_to;
     use leptos::wasm_bindgen::JsCast;
     use std::time::Duration;
     use thaw::ConfigProvider;
-    use web_sys::HtmlElement;
     use wasm_bindgen_test::wasm_bindgen_test;
+    use web_sys::HtmlElement;
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
@@ -361,6 +425,21 @@ mod tests {
 
         drop(handle);
         host.remove();
+    }
+
+    #[test]
+    fn labels_nat_peers_as_attempt_connect() {
+        let direct_peer = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            name: "DirectPeer".to_string(),
+        };
+        let nat_peer = AnnounceAddress {
+            connection_details: PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap()),
+            name: "NatPeer".to_string(),
+        };
+
+        assert_eq!(known_peer_connect_label(&direct_peer), "Connect");
+        assert_eq!(known_peer_connect_label(&nat_peer), "Attempt connect");
     }
 
     #[wasm_bindgen_test]
