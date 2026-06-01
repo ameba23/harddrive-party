@@ -90,32 +90,33 @@ pub enum FileDisplayContext {
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let (file_name, _set_file_name) = signal(file.name);
-    let peer_name = file.peer_name.clone();
     let peer_name_for_uploader = file.peer_name.clone();
 
     let app_context_1 = app_context.clone();
-    let download_request = move |event: leptos::ev::MouseEvent| {
-        event.stop_propagation();
-        app_context_1.download(PeerPath {
-            path: file_name.get().to_string(),
-            peer_name: peer_name.clone(),
-        });
-    };
+    let peer_name_for_download = file.peer_name.clone();
 
     let is_dir = file.is_dir == Some(true);
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button = move || {
-        if file.download_status.get_untracked() == DownloadStatus::Nothing
+        if file.download_status.get() == DownloadStatus::Nothing
             && !is_shared
-            && file.request.get_untracked() == None
+            && file.request.get() == None
             && context != FileDisplayContext::Transfer
         {
+            let app_ctx = app_context_1.clone();
+            let p_name = peer_name_for_download.clone();
             Either::Left(view! {
                 <span title="Download">
                     <Button
                         icon=icondata::FiDownload
-                        on:click=download_request
+                        on:click=move |event: leptos::ev::MouseEvent| {
+                            event.stop_propagation();
+                            app_ctx.download(PeerPath {
+                                path: file_name.get().to_string(),
+                                peer_name: p_name.clone(),
+                            });
+                        }
                         size=ButtonSize::Small
                     />
                 </span>
@@ -197,7 +198,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     }
                     None => view! { <span></span> }.into_any(),
                 }} {indentation} {icon} " "
-                <span class:text-sm=true class:font-medium=is_dir title=display_name.clone()>
+                <span class:font-medium=is_dir title=display_name.clone()>
                     {display_name.clone()}
                 </span>
             </pre>
@@ -221,7 +222,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             None => "-".to_string(),
                         }}
                     </span>
-                    {download_button()}
+                    {move || download_button()}
                 </div>
                 <div class="file-meta-status">
                     {move || {

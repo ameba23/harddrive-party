@@ -422,11 +422,11 @@ pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
 #[component]
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
-        <div role="alert">
-            <div>
-                <span class="font-medium status-ok">" ✅ " {message}</span>
-            </div>
-        </div>
+        <MessageBar intent=MessageBarIntent::Success>
+            <MessageBarBody>
+                {message}
+            </MessageBarBody>
+        </MessageBar>
     }
 }
 

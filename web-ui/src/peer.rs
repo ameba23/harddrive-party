@@ -105,9 +105,11 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                     </div>
                     {(!is_self).then(|| {
                         view! {
-                            <Button size=ButtonSize::Small on:click=disconnect_peer>
-                                "Disconnect"
-                            </Button>
+                            <div class="disconnect-wrap">
+                                <Button size=ButtonSize::Small on:click=disconnect_peer>
+                                    "Disconnect"
+                                </Button>
+                            </div>
                         }
                     })}
                 </Flex>
