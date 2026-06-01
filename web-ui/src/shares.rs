@@ -44,7 +44,9 @@ pub fn Shares(
         <h2 class="text-xl">"Shared files"</h2>
         <Flex vertical=true>
             <form class="share-form" on:submit=add_share>
-                <p class="section-intro">"Add a local directory and make it visible to connected peers."</p>
+                <p class="section-intro">
+                    "Add a local directory and make it visible to connected peers."
+                </p>
                 <Flex class="form-row">
                     <Input value=add_share_value placeholder="Directory path">
                         <InputPrefix slot>

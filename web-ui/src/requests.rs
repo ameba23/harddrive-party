@@ -94,7 +94,10 @@ pub fn Request(file: File) -> impl IntoView {
 
             view! {
                 <div class=move || {
-                    if matches!(file_for_group.download_status.get(), DownloadStatus::Downloaded(_)) {
+                    if matches!(
+                        file_for_group.download_status.get(),
+                        DownloadStatus::Downloaded(_)
+                    ) {
                         "transfer-request-group transfer-request-group--complete"
                     } else {
                         "transfer-request-group"
@@ -105,14 +108,20 @@ pub fn Request(file: File) -> impl IntoView {
                             {request_peer_name.clone()}
                         </span>
                         <span class=move || {
-                            if matches!(file_for_status.download_status.get(), DownloadStatus::Downloaded(_)) {
+                            if matches!(
+                                file_for_status.download_status.get(),
+                                DownloadStatus::Downloaded(_)
+                            ) {
                                 "status-pill status-pill--complete"
                             } else {
                                 "status-pill status-pill--active"
                             }
                         }>
                             {move || {
-                                if matches!(file.download_status.get(), DownloadStatus::Downloaded(_)) {
+                                if matches!(
+                                    file.download_status.get(),
+                                    DownloadStatus::Downloaded(_)
+                                ) {
                                     "Downloaded"
                                 } else {
                                     "Requested"

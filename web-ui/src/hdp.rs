@@ -423,9 +423,7 @@ pub fn ErrorMessage(message: String, children: Children) -> impl IntoView {
 pub fn SuccessMessage(message: String) -> impl IntoView {
     view! {
         <MessageBar intent=MessageBarIntent::Success>
-            <MessageBarBody>
-                {message}
-            </MessageBarBody>
+            <MessageBarBody>{message}</MessageBarBody>
         </MessageBar>
     }
 }

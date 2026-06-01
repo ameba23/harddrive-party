@@ -112,10 +112,11 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                         icon=icondata::FiDownload
                         on:click=move |event: leptos::ev::MouseEvent| {
                             event.stop_propagation();
-                            app_ctx.download(PeerPath {
-                                path: file_name.get().to_string(),
-                                peer_name: p_name.clone(),
-                            });
+                            app_ctx
+                                .download(PeerPath {
+                                    path: file_name.get().to_string(),
+                                    peer_name: p_name.clone(),
+                                });
                         }
                         size=ButtonSize::Small
                     />

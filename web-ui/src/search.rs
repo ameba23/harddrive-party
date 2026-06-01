@@ -76,7 +76,14 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
             view! {
                 <div class="empty-state">
                     <strong>"No matches"</strong>
-                    <p>{move || format!("No files matched \"{}\".", last_query.get().unwrap_or_default())}</p>
+                    <p>
+                        {move || {
+                            format!(
+                                "No files matched \"{}\".",
+                                last_query.get().unwrap_or_default(),
+                            )
+                        }}
+                    </p>
                 </div>
             }
             .into_any()

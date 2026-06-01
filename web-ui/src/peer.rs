@@ -95,7 +95,11 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
     view! {
         <div class="peer-card">
             <Flex vertical=true>
-                <Flex class="peer-card__header" justify=FlexJustify::SpaceBetween align=FlexAlign::Center>
+                <Flex
+                    class="peer-card__header"
+                    justify=FlexJustify::SpaceBetween
+                    align=FlexAlign::Center
+                >
                     <div>
                         <Icon icon=icondata::AiUserOutlined />
                         {move || peer_signal.get().0}
@@ -103,15 +107,16 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                         {root_size}
                         " shared"
                     </div>
-                    {(!is_self).then(|| {
-                        view! {
-                            <div class="disconnect-wrap">
-                                <Button size=ButtonSize::Small on:click=disconnect_peer>
-                                    "Disconnect"
-                                </Button>
-                            </div>
-                        }
-                    })}
+                    {(!is_self)
+                        .then(|| {
+                            view! {
+                                <div class="disconnect-wrap">
+                                    <Button size=ButtonSize::Small on:click=disconnect_peer>
+                                        "Disconnect"
+                                    </Button>
+                                </div>
+                            }
+                        })}
                 </Flex>
                 <div class="table-scroll">
                     <Table class="file-table">
@@ -263,7 +268,7 @@ pub fn Peers(
                                                 .set_pending_peers
                                                 .update(|pending_peers| {
                                                     pending_peers.insert(connect_payload.clone());
-                                            });
+                                                });
                                         }
                                     >
                                         {connect_label}
