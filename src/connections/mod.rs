@@ -635,8 +635,8 @@ async fn connect_to_peer(
         }
     };
 
-    let connection = connect_with_backoff(&endpoint, socket_address, &announce_address, "peer")
-        .await?;
+    let connection =
+        connect_with_backoff(&endpoint, socket_address, &announce_address, "peer").await?;
 
     let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
         UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
