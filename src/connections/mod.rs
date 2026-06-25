@@ -779,7 +779,7 @@ async fn connect_with_backoff(
                 // If this was the last attempt, return the error
                 if attempt >= RECONNECT_MAX_ATTEMPTS {
                     return Err(UiServerError::ConnectionError(format!(
-                        "After connecting (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
+                        "After connecting to {announce_address} (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
                     )));
                 }
 

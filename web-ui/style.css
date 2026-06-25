@@ -317,8 +317,7 @@ a {
 	color: var(--success);
 }
 
-.status-pill--pending,
-.status-pill--active {
+.status-pill--pending {
 	background: var(--warning-soft);
 	color: var(--warning);
 }

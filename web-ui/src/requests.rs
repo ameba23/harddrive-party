@@ -114,7 +114,7 @@ pub fn Request(file: File) -> impl IntoView {
                             ) {
                                 "status-pill status-pill--complete"
                             } else {
-                                "status-pill status-pill--active"
+                                "status-pill status-pill--pending"
                             }
                         }>
                             {move || {
