@@ -54,7 +54,7 @@ impl MdnsServer {
             while let Ok(event) = mdns_receiver.recv_async().await {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
-                        match parse_peer_info(&info) {
+                        match parse_peer_info(&info, &addr) {
                             Ok((their_addr, their_announce_address)) => {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
@@ -129,7 +129,10 @@ fn create_service_info(
 }
 
 /// Handle a discovered [ResolvedService] from a remote peer
-fn parse_peer_info(info: &ResolvedService) -> anyhow::Result<(SocketAddr, AnnounceAddress)> {
+fn parse_peer_info(
+    info: &ResolvedService,
+    our_addr: &SocketAddr,
+) -> anyhow::Result<(SocketAddr, AnnounceAddress)> {
     if info.ty_domain.as_str() != SERVICE_TYPE {
         anyhow::bail!("Peer does not have expected service type");
     }
@@ -142,12 +145,13 @@ fn parse_peer_info(info: &ResolvedService) -> anyhow::Result<(SocketAddr, Announ
 
     let their_port = info.get_port();
 
-    let addr = info
-        .get_addresses()
+    let addresses = info.get_addresses();
+    let chosen = addresses
         .iter()
-        .next()
-        .map(|ip| socket_addr_from_scoped_ip(ip, their_port))
+        .find(|ip| ip.is_ipv4() == our_addr.is_ipv4())
+        .or_else(|| addresses.iter().next())
         .ok_or_else(|| anyhow::anyhow!("Cannot get IP from discovered mDNS service info"))?;
+    let addr = socket_addr_from_scoped_ip(chosen, their_port);
     Ok((addr, announce_address))
 }
 
@@ -228,10 +232,33 @@ mod tests {
 
         let service_info = create_service_info("alice", &socket_address, announce.clone()).unwrap();
         let resolved_service = service_info.as_resolved_service();
-        let (discovered_addr, discovered_announce) = parse_peer_info(&resolved_service).unwrap();
+        let (discovered_addr, discovered_announce) =
+            parse_peer_info(&resolved_service, &socket_address).unwrap();
 
         assert_eq!(discovered_addr, socket_address);
         assert_eq!(discovered_announce, announce);
+    }
+
+    #[test]
+    fn prefers_address_matching_our_family() {
+        let their_v4: SocketAddr = "192.168.0.2:1234".parse().unwrap();
+        let their_v6: SocketAddr = "[fd00::2]:1234".parse().unwrap();
+        let announce = announce_address(their_v4, "BubblingBeaver");
+
+        let service_info = create_service_info("alice", &their_v4, announce.clone()).unwrap();
+        let mut resolved_service = service_info.as_resolved_service();
+        resolved_service.addresses = HashSet::from([
+            ScopedIp::from(their_v4.ip()),
+            ScopedIp::from(their_v6.ip()),
+        ]);
+
+        let our_v4: SocketAddr = "192.168.0.1:1234".parse().unwrap();
+        let (chosen, _) = parse_peer_info(&resolved_service, &our_v4).unwrap();
+        assert_eq!(chosen, their_v4);
+
+        let our_v6: SocketAddr = "[fd00::1]:1234".parse().unwrap();
+        let (chosen, _) = parse_peer_info(&resolved_service, &our_v6).unwrap();
+        assert_eq!(chosen, their_v6);
     }
 
     #[test]
@@ -259,7 +286,8 @@ mod tests {
         let mut resolved_service = service_info.as_resolved_service();
         resolved_service.addresses = HashSet::from([ScopedIp::from(&interface)]);
 
-        let (discovered_addr, discovered_announce) = parse_peer_info(&resolved_service).unwrap();
+        let (discovered_addr, discovered_announce) =
+            parse_peer_info(&resolved_service, &socket_address).unwrap();
 
         assert_eq!(discovered_addr.ip(), socket_address.ip());
         assert_eq!(discovered_addr.port(), socket_address.port());
