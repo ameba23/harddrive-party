@@ -2,14 +2,13 @@
 use crate::connections::known_peers::KnownPeers;
 
 use super::{DiscoveredPeer, DiscoveryMethod};
-use anyhow::anyhow;
 use harddrive_party_shared::wire_messages::AnnounceAddress;
 use log::{debug, error, warn};
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::{
     cmp::min,
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, SocketAddr, SocketAddrV6},
 };
 use tokio::sync::mpsc::Sender;
 
@@ -55,7 +54,7 @@ impl MdnsServer {
             while let Ok(event) = mdns_receiver.recv_async().await {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
-                        match parse_peer_info(info) {
+                        match parse_peer_info(&info) {
                             Ok((their_addr, their_announce_address)) => {
                                 if their_addr == addr {
                                     debug!("Found ourself on mdns");
@@ -110,7 +109,7 @@ fn create_service_info(
     annouce_address: AnnounceAddress,
 ) -> anyhow::Result<ServiceInfo> {
     // Create a service info.
-    let host_name = "localhost"; // TODO
+    let host_name = "localhost.local."; // TODO
     let mut properties = HashMap::new();
     // TODO here we could replace hex-encoded public key with announce address
     properties.insert(
@@ -118,54 +117,67 @@ fn create_service_info(
         annouce_address.to_string(),
     );
 
-    if let IpAddr::V4(ipv4_addr) = addr.ip() {
-        let service_info = ServiceInfo::new(
-            SERVICE_TYPE,
-            &id[0..min(16, id.len())],
-            host_name,
-            ipv4_addr,
-            addr.port(),
-            Some(properties),
-        )?;
-        Ok(service_info)
-    } else {
-        // TODO if we bump mdns-sd we can handle ipv6 addresses
-        Err(anyhow!("ipv6 address cannot be used for MDNS"))
-    }
+    let service_info = ServiceInfo::new(
+        SERVICE_TYPE,
+        &id[0..min(16, id.len())],
+        host_name,
+        addr.ip(),
+        addr.port(),
+        Some(properties),
+    )?;
+    Ok(service_info)
 }
 
-/// Handle a discovered [ServiceInfo] from a remote peer
-fn parse_peer_info(info: ServiceInfo) -> anyhow::Result<(SocketAddr, AnnounceAddress)> {
-    if info.get_type() != SERVICE_TYPE {
-        return Err(anyhow!("Peer does not have expected service type"));
+/// Handle a discovered [ResolvedService] from a remote peer
+fn parse_peer_info(info: &ResolvedService) -> anyhow::Result<(SocketAddr, AnnounceAddress)> {
+    if info.ty_domain.as_str() != SERVICE_TYPE {
+        anyhow::bail!("Peer does not have expected service type");
     }
 
-    let properties = info.get_properties();
-
-    let announce_address = properties
-        .get(ANNOUNCE_ADDRESS_PROPERTY_NAME)
-        .ok_or_else(|| anyhow!("Cannot get announce address property from mDNS service"))?;
+    let announce_address = info
+        .get_property_val_str(ANNOUNCE_ADDRESS_PROPERTY_NAME)
+        .ok_or_else(|| anyhow::anyhow!("Cannot get announce address property from mDNS service"))?;
 
     let announce_address = AnnounceAddress::from_string(announce_address.to_string())?;
 
-    let their_ip = info
+    let their_port = info.get_port();
+
+    let addr = info
         .get_addresses()
         .iter()
         .next()
-        .ok_or_else(|| anyhow!("Cannot get IP from discovered mDNS service info"))?;
-
-    let their_port = info.get_port();
-
-    let addr = SocketAddr::new(IpAddr::V4(*their_ip), their_port);
+        .map(|ip| socket_addr_from_scoped_ip(ip, their_port))
+        .ok_or_else(|| anyhow::anyhow!("Cannot get IP from discovered mDNS service info"))?;
     Ok((addr, announce_address))
+}
+
+fn socket_addr_from_scoped_ip(ip: &ScopedIp, port: u16) -> SocketAddr {
+    match ip {
+        ScopedIp::V4(ipv4_addr) => SocketAddr::new(IpAddr::V4(*ipv4_addr.addr()), port),
+        ScopedIp::V6(ipv6_addr) => SocketAddr::V6(SocketAddrV6::new(
+            *ipv6_addr.addr(),
+            port,
+            0,
+            ipv6_addr.scope_id().index,
+        )),
+        _ => SocketAddr::new(ip.to_ip_addr(), port),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use harddrive_party_shared::wire_messages::PeerConnectionDetails;
+    use std::collections::HashSet;
     use tempfile::TempDir;
     use tokio::sync::mpsc::{channel, Receiver};
+
+    fn announce_address(addr: SocketAddr, name: &str) -> AnnounceAddress {
+        AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat(addr),
+            name: name.to_string(),
+        }
+    }
 
     async fn create_test_server(
         name: &str,
@@ -196,14 +208,8 @@ mod tests {
         let local_ip = local_ip_address::local_ip().unwrap();
         let alice_socket_address = SocketAddr::new(local_ip, 1234);
         let bob_socket_address = SocketAddr::new(local_ip, 5678);
-        let alice_announce = AnnounceAddress {
-            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
-            name: "BubblingBeaver".to_string(),
-        };
-        let bob_announce = AnnounceAddress {
-            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
-            name: "AngryAadvark".to_string(),
-        };
+        let alice_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "BubblingBeaver");
+        let bob_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "AngryAadvark");
         let (_alice, _alice_peers_rx) =
             create_test_server("alice", alice_socket_address, alice_announce.clone()).await;
         let (_bob, mut bob_peers_rx) =
@@ -213,5 +219,54 @@ mod tests {
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
         assert_eq!(discovered_peer.discovery_method, DiscoveryMethod::Mdns);
         assert_eq!(discovered_peer.announce_address, alice_announce);
+    }
+
+    #[test]
+    fn parses_ipv6_service_info() {
+        let socket_address: SocketAddr = "[fd00::1]:1234".parse().unwrap();
+        let announce = announce_address(socket_address, "BubblingBeaver");
+
+        let service_info = create_service_info("alice", &socket_address, announce.clone()).unwrap();
+        let resolved_service = service_info.as_resolved_service();
+        let (discovered_addr, discovered_announce) = parse_peer_info(&resolved_service).unwrap();
+
+        assert_eq!(discovered_addr, socket_address);
+        assert_eq!(discovered_announce, announce);
+    }
+
+    #[test]
+    fn preserves_link_local_ipv6_scope_id() {
+        use if_addrs::{IfAddr, IfOperStatus, Ifv6Addr, Interface};
+
+        let socket_address: SocketAddr = "[fe80::1]:1234".parse().unwrap();
+        let announce = announce_address(socket_address, "BubblingBeaver");
+        let interface = Interface {
+            name: "eth0".to_string(),
+            addr: IfAddr::V6(Ifv6Addr {
+                ip: "fe80::1".parse().unwrap(),
+                netmask: "ffff:ffff:ffff:ffff::".parse().unwrap(),
+                prefixlen: 64,
+                broadcast: None,
+            }),
+            index: Some(7),
+            oper_status: IfOperStatus::Up,
+            is_p2p: false,
+            #[cfg(windows)]
+            adapter_name: "{00000000-0000-0000-0000-000000000000}".to_string(),
+        };
+
+        let service_info = create_service_info("alice", &socket_address, announce.clone()).unwrap();
+        let mut resolved_service = service_info.as_resolved_service();
+        resolved_service.addresses = HashSet::from([ScopedIp::from(&interface)]);
+
+        let (discovered_addr, discovered_announce) = parse_peer_info(&resolved_service).unwrap();
+
+        assert_eq!(discovered_addr.ip(), socket_address.ip());
+        assert_eq!(discovered_addr.port(), socket_address.port());
+        match discovered_addr {
+            SocketAddr::V6(addr) => assert_eq!(addr.scope_id(), 7),
+            SocketAddr::V4(_) => panic!("expected IPv6 address"),
+        }
+        assert_eq!(discovered_announce, announce);
     }
 }
