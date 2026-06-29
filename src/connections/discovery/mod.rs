@@ -238,7 +238,7 @@ fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip_v4_addr) => ip_v4_addr.is_private(),
         IpAddr::V6(ip_v6_addr) => {
-            ip_v6_addr.is_unique_local() || (ip_v6_addr.segments()[0] & 0xffc0) == 0xfe80
+            ip_v6_addr.is_unique_local() || ip_v6_addr.is_unicast_link_local()
         }
     }
 }
