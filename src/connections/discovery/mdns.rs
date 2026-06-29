@@ -247,10 +247,8 @@ mod tests {
 
         let service_info = create_service_info("alice", &their_v4, announce.clone()).unwrap();
         let mut resolved_service = service_info.as_resolved_service();
-        resolved_service.addresses = HashSet::from([
-            ScopedIp::from(their_v4.ip()),
-            ScopedIp::from(their_v6.ip()),
-        ]);
+        resolved_service.addresses =
+            HashSet::from([ScopedIp::from(their_v4.ip()), ScopedIp::from(their_v6.ip())]);
 
         let our_v4: SocketAddr = "192.168.0.1:1234".parse().unwrap();
         let (chosen, _) = parse_peer_info(&resolved_service, &our_v4).unwrap();
