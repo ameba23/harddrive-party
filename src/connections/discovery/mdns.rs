@@ -108,10 +108,13 @@ fn create_service_info(
     addr: &SocketAddr,
     annouce_address: AnnounceAddress,
 ) -> anyhow::Result<ServiceInfo> {
-    // Create a service info.
-    let host_name = "localhost.local."; // TODO
+    let instance_name = &id[0..min(16, id.len())];
+    // mdns-sd >=0.12 implements RFC 6762 §8 name probing: if two peers register
+    // the same hostname, one of them suppresses its address records and becomes
+    // undiscoverable. Derive a unique hostname from the instance name (hex of
+    // our public key) so each peer claims its own.
+    let host_name = format!("{instance_name}.local.");
     let mut properties = HashMap::new();
-    // TODO here we could replace hex-encoded public key with announce address
     properties.insert(
         ANNOUNCE_ADDRESS_PROPERTY_NAME.to_string(),
         annouce_address.to_string(),
@@ -119,8 +122,8 @@ fn create_service_info(
 
     let service_info = ServiceInfo::new(
         SERVICE_TYPE,
-        &id[0..min(16, id.len())],
-        host_name,
+        instance_name,
+        &host_name,
         addr.ip(),
         addr.port(),
         Some(properties),
@@ -187,10 +190,11 @@ mod tests {
         name: &str,
         socket_address: SocketAddr,
         annouce_address: AnnounceAddress,
-    ) -> (MdnsServer, Receiver<DiscoveredPeer>) {
+    ) -> (MdnsServer, Receiver<DiscoveredPeer>, KnownPeers) {
         let storage = TempDir::new().unwrap();
         let db = sled::open(storage).unwrap();
         let db = db.open_tree(b"k").unwrap();
+        let known_peers = KnownPeers::new(db);
 
         let (peers_tx, peers_rx) = channel(1024);
         let server = MdnsServer::new(
@@ -198,11 +202,11 @@ mod tests {
             socket_address,
             peers_tx,
             annouce_address,
-            KnownPeers::new(db),
+            known_peers.clone(),
         )
         .await
         .unwrap();
-        (server, peers_rx)
+        (server, peers_rx, known_peers)
     }
 
     #[tokio::test]
@@ -214,15 +218,38 @@ mod tests {
         let bob_socket_address = SocketAddr::new(local_ip, 5678);
         let alice_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "BubblingBeaver");
         let bob_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "AngryAadvark");
-        let (_alice, _alice_peers_rx) =
+        let (_alice, _alice_peers_rx, alice_known) =
             create_test_server("alice", alice_socket_address, alice_announce.clone()).await;
-        let (_bob, mut bob_peers_rx) =
-            create_test_server("bob", bob_socket_address, bob_announce).await;
+        let (_bob, mut bob_peers_rx, _bob_known) =
+            create_test_server("bob", bob_socket_address, bob_announce.clone()).await;
 
-        let discovered_peer = bob_peers_rx.recv().await.unwrap();
+        // The LAN may have other hdp peers advertising the same service type;
+        // loop until we see Alice specifically, ignoring strangers.
+        let discovered_peer = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let peer = bob_peers_rx.recv().await.unwrap();
+                if peer.announce_address == alice_announce {
+                    return peer;
+                }
+            }
+        })
+        .await
+        .expect("Bob did not discover Alice within timeout");
         assert_eq!(discovered_peer.socket_address, alice_socket_address);
         assert_eq!(discovered_peer.discovery_method, DiscoveryMethod::Mdns);
-        assert_eq!(discovered_peer.announce_address, alice_announce);
+
+        // Alice doesn't send to her channel due to the lex tie-break, but she
+        // must still add Bob to known_peers — otherwise her TLS verifier rejects
+        // Bob's incoming client cert with UnknownIssuer. A regression in this
+        // pathway (e.g. a hostname conflict suppressing one peer's records)
+        // would prevent Alice from ever seeing Bob.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !alice_known.has(&bob_announce.name) {
+            if tokio::time::Instant::now() >= deadline {
+                panic!("Alice did not learn of Bob via mDNS within timeout");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 
     #[test]
