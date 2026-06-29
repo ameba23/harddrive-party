@@ -235,11 +235,11 @@ impl PeerDiscovery {
 
 // Check if an IP appears to be private
 fn is_private(ip: IpAddr) -> bool {
-    if let IpAddr::V4(ip_v4_addr) = ip {
-        ip_v4_addr.is_private()
-    } else {
-        // In the case of ipv6 we cant be sure
-        false
+    match ip {
+        IpAddr::V4(ip_v4_addr) => ip_v4_addr.is_private(),
+        IpAddr::V6(ip_v6_addr) => {
+            ip_v6_addr.is_unique_local() || ip_v6_addr.is_unicast_link_local()
+        }
     }
 }
 
@@ -510,5 +510,12 @@ mod tests {
             .await
             .unwrap();
         assert!(mdns_peer.is_none());
+    }
+
+    #[test]
+    fn ipv6_local_addresses_are_private_for_mdns() {
+        assert!(is_private("fd00::1".parse().unwrap()));
+        assert!(is_private("fe80::1".parse().unwrap()));
+        assert!(!is_private("2001:4860:4860::8888".parse().unwrap()));
     }
 }
