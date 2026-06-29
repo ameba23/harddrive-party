@@ -109,10 +109,11 @@ fn create_service_info(
     annouce_address: AnnounceAddress,
 ) -> anyhow::Result<ServiceInfo> {
     let instance_name = &id[0..min(16, id.len())];
-    // mdns-sd >=0.12 implements RFC 6762 §8 name probing: if two peers register
-    // the same hostname, one of them suppresses its address records and becomes
-    // undiscoverable. Derive a unique hostname from the instance name (hex of
-    // our public key) so each peer claims its own.
+    // Both instance name and hostname are derived from the peer's public key,
+    // so collisions are not possible. Skipping the RFC 6762 §8 probe avoids the
+    // 750ms delay before our records hit the wire — without it, a peer that
+    // started first can initiate an inbound connection before our discovery
+    // loop has populated known_peers, causing a TLS UnknownIssuer rejection.
     let host_name = format!("{instance_name}.local.");
     let mut properties = HashMap::new();
     properties.insert(
@@ -120,7 +121,7 @@ fn create_service_info(
         annouce_address.to_string(),
     );
 
-    let service_info = ServiceInfo::new(
+    let mut service_info = ServiceInfo::new(
         SERVICE_TYPE,
         instance_name,
         &host_name,
@@ -128,6 +129,7 @@ fn create_service_info(
         addr.port(),
         Some(properties),
     )?;
+    service_info.set_requires_probe(false);
     Ok(service_info)
 }
 
