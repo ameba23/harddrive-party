@@ -743,10 +743,11 @@ mod tests {
             .unwrap()
             .local_addr()
             .unwrap();
-        let unreachable_peer = AnnounceAddress {
-            name: "retryingPeer".to_string(),
-            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
-        };
+        let unreachable_peer = AnnounceAddress::new(
+            "retryingPeer".to_string(),
+            wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+            None,
+        );
 
         alice.connect_to_peer(unreachable_peer).await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -790,10 +791,12 @@ mod tests {
             .unwrap()
             .local_addr()
             .unwrap();
-        let unreachable_peer = AnnounceAddress {
-            name: "retryingPeer".to_string(),
-            connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
-        };
+
+        let unreachable_peer = AnnounceAddress::new(
+            "retryingPeer".to_string(),
+            wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
+            None,
+        );
 
         alice
             .connect_to_peer(unreachable_peer.clone())

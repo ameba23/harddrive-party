@@ -181,13 +181,6 @@ mod tests {
     use tempfile::TempDir;
     use tokio::sync::mpsc::{channel, Receiver};
 
-    fn announce_address(addr: SocketAddr, name: &str) -> AnnounceAddress {
-        AnnounceAddress {
-            connection_details: PeerConnectionDetails::NoNat(addr),
-            name: name.to_string(),
-        }
-    }
-
     async fn create_test_server(
         name: &str,
         socket_address: SocketAddr,
@@ -218,8 +211,16 @@ mod tests {
         let local_ip = local_ip_address::local_ip().unwrap();
         let alice_socket_address = SocketAddr::new(local_ip, 1234);
         let bob_socket_address = SocketAddr::new(local_ip, 5678);
-        let alice_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "BubblingBeaver");
-        let bob_announce = announce_address("127.0.0.1:1234".parse().unwrap(), "AngryAadvark");
+        let alice_announce = AnnounceAddress::new(
+            "BubblingBeaver".to_string(),
+            PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            None,
+        );
+        let bob_announce = AnnounceAddress::new(
+            "AngryAadvark".to_string(),
+            PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            None,
+        );
         let (_alice, _alice_peers_rx, alice_known) =
             create_test_server("alice", alice_socket_address, alice_announce.clone()).await;
         let (_bob, mut bob_peers_rx, _bob_known) =
@@ -257,7 +258,11 @@ mod tests {
     #[test]
     fn parses_ipv6_service_info() {
         let socket_address: SocketAddr = "[fd00::1]:1234".parse().unwrap();
-        let announce = announce_address(socket_address, "BubblingBeaver");
+        let announce = AnnounceAddress::new(
+            "AngryAadvark".to_string(),
+            PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
+            Some(PeerConnectionDetails::NoNat(socket_address)),
+        );
 
         let service_info = create_service_info("alice", &socket_address, announce.clone()).unwrap();
         let resolved_service = service_info.as_resolved_service();
@@ -272,7 +277,11 @@ mod tests {
     fn prefers_address_matching_our_family() {
         let their_v4: SocketAddr = "192.168.0.2:1234".parse().unwrap();
         let their_v6: SocketAddr = "[fd00::2]:1234".parse().unwrap();
-        let announce = announce_address(their_v4, "BubblingBeaver");
+        let announce = AnnounceAddress::new(
+            "BubblingBeaver".to_string(),
+            PeerConnectionDetails::NoNat(their_v4),
+            None,
+        );
 
         let service_info = create_service_info("alice", &their_v4, announce.clone()).unwrap();
         let mut resolved_service = service_info.as_resolved_service();
@@ -291,9 +300,12 @@ mod tests {
     #[test]
     fn preserves_link_local_ipv6_scope_id() {
         use if_addrs::{IfAddr, IfOperStatus, Ifv6Addr, Interface};
-
         let socket_address: SocketAddr = "[fe80::1]:1234".parse().unwrap();
-        let announce = announce_address(socket_address, "BubblingBeaver");
+        let announce = AnnounceAddress::new(
+            "BubblingBeaver".to_string(),
+            PeerConnectionDetails::NoNat("192.168.0.1:3000".parse().unwrap()),
+            Some(PeerConnectionDetails::NoNat(socket_address)),
+        );
         let interface = Interface {
             name: "eth0".to_string(),
             addr: IfAddr::V6(Ifv6Addr {

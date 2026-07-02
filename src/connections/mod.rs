@@ -21,7 +21,7 @@ use crate::{
     wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
-use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
+use harddrive_party_shared::wire_messages::AnnounceAddress;
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rand::Rng;
@@ -65,6 +65,7 @@ pub struct Hdp {
     rpc: Rpc,
     /// The QUIC endpoint and TLS certificate
     pub server_connection: ServerConnection,
+    pub ipv6_endpoint: Option<Endpoint>,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
     /// Channel for graceful shutdown signal
@@ -136,7 +137,7 @@ impl Hdp {
         let known_peers_db = db.open_tree(KNOWN_PEERS)?;
 
         // Setup peer discovery
-        let (socket_option, peer_discovery) = PeerDiscovery::new(
+        let (socket_option, ipv6_socket_option, peer_discovery) = PeerDiscovery::new(
             use_mdns,
             pk_hash,
             peers.clone(),
@@ -176,8 +177,8 @@ impl Hdp {
                 ServerConnection::WithEndpoint(
                     make_server_endpoint(
                         socket,
-                        cert_der,
-                        priv_key_der,
+                        cert_der.clone(),
+                        priv_key_der.clone_key(),
                         shared_state.known_peers.clone(),
                         peer_discovery.use_client_verification(),
                     )
@@ -189,8 +190,22 @@ impl Hdp {
                 // socket that peers can connect to
                 // Give cert_der and priv_key_der which we use to create an endpoint on a different
                 // port for each connecting peer
-                ServerConnection::Symmetric(cert_der, priv_key_der)
+                ServerConnection::Symmetric(cert_der.clone(), priv_key_der.clone_key())
             }
+        };
+
+        let ipv6_endpoint = match ipv6_socket_option {
+            Some(socket) => Some(
+                make_server_endpoint(
+                    socket,
+                    cert_der,
+                    priv_key_der,
+                    shared_state.known_peers.clone(),
+                    true,
+                )
+                .await?,
+            ),
+            None => None,
         };
 
         Ok(Self {
@@ -205,6 +220,7 @@ impl Hdp {
             server_connection,
             peer_discovery,
             graceful_shutdown_rx,
+            ipv6_endpoint,
         })
     }
 
@@ -231,25 +247,25 @@ impl Hdp {
         }
 
         // Look at our known peers, and if there are any without NAT, connect to them
-        for announce_address in self.shared_state.known_peers.iter() {
-            if let PeerConnectionDetails::NoNat(socket_address) =
-                announce_address.connection_details
-            {
-                let peer = DiscoveredPeer {
-                    socket_address,
-                    socket_option: None,
-                    discovery_method: DiscoveryMethod::Direct,
-                    announce_address,
-                };
-                info!("Connecting to known peer... {}", peer.announce_address.name);
-                spawn_outbound_connect(
-                    self.server_connection.clone(),
-                    self.shared_state.clone(),
-                    self.rpc.clone(),
-                    peer,
-                );
-            }
-        }
+        // for announce_address in self.shared_state.known_peers.iter() {
+        //     if let PeerConnectionDetails::NoNat(socket_address) =
+        //         announce_address.connection_details
+        //     {
+        //         let peer = DiscoveredPeer {
+        //             socket_address,
+        //             socket_option: None,
+        //             discovery_method: DiscoveryMethod::Direct,
+        //             announce_address,
+        //         };
+        //         info!("Connecting to known peer... {}", peer.announce_address.name);
+        //         spawn_outbound_connect(
+        //             self.server_connection.clone(),
+        //             self.shared_state.clone(),
+        //             self.rpc.clone(),
+        //             peer,
+        //         );
+        //     }
+        // }
 
         loop {
             select! {

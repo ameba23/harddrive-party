@@ -16,7 +16,7 @@ impl KnownPeers {
 
     /// Add a peer who we know of through one of the discovery methods
     pub fn add_peer(&self, announce_address: &AnnounceAddress) -> Result<(), UiServerErrorWrapper> {
-        let connection_details = codec::serialize(&announce_address.connection_details)?;
+        let connection_details = codec::serialize(announce_address.connection_candidates())?;
         self.db
             .insert(announce_address.name.as_bytes(), connection_details)?;
         Ok(())
@@ -32,10 +32,10 @@ impl KnownPeers {
         Box::new(self.db.iter().filter_map(|kv_result| {
             let (k, v) = kv_result.ok()?;
 
-            Some(AnnounceAddress {
-                name: String::from_utf8(k.to_vec()).ok()?,
-                connection_details: codec::deserialize(&v).ok()?,
-            })
+            Some(AnnounceAddress::new_with_connection_candidates(
+                String::from_utf8(k.to_vec()).ok()?,
+                codec::deserialize(&v).ok()?,
+            ))
         }))
     }
 }

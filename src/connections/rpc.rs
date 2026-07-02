@@ -124,10 +124,8 @@ impl Rpc {
                                 .await;
                         } else {
                             info!(
-                                "Received gossiped peer announcement from {} about {} ({:?})",
-                                peer_name,
-                                announce_peer.announce_address.name,
-                                announce_peer.announce_address.connection_details
+                                "Received gossiped peer announcement from {} about {:?}",
+                                peer_name, announce_peer.announce_address,
                             );
                             if self
                                 .peer_announce_tx
