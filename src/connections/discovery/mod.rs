@@ -364,10 +364,10 @@ pub async fn handle_peer(
         }
     }
 
-    return Err(UiServerErrorWrapper(UiServerError::PeerDiscovery(
+    Err(UiServerErrorWrapper(UiServerError::PeerDiscovery(
         // TODO add us, them details
         "Cannot find a matching IP protocol".to_string(),
-    )));
+    )))
 }
 
 /// Handle a peer we have discovered - depending on NAT type
@@ -433,7 +433,7 @@ pub async fn handle_connection_candidate(
                             }
                             // Decide whether to connect or let them connect, by lexicographically
                             // comparing socket addresses
-                            Ok(if our_socket_address > &socket_address {
+                            Ok(if our_socket_address > socket_address {
                                 (
                                     Some(DiscoveredPeer {
                                         discovery_method,
@@ -488,7 +488,7 @@ pub async fn handle_connection_candidate(
                     // Automatic discovery can be observed by both peers, so it still uses a
                     // deterministic tie-break to avoid duplicate connections.
                     let should_connect = discovery_method == DiscoveryMethod::Direct
-                        || our_socket_address > &socket_address;
+                        || our_socket_address > socket_address;
                     Ok(if should_connect {
                         (
                             Some(DiscoveredPeer {

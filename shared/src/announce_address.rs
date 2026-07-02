@@ -60,11 +60,10 @@ impl AnnounceAddress {
 
     pub fn has_nat(&self) -> bool {
         // TODO improve this
-        if let Some(PeerConnectionDetails::NoNat(_)) = self.get_ipv4_candidate() {
-            true
-        } else {
-            false
-        }
+        matches!(
+            self.get_ipv4_candidate(),
+            Some(PeerConnectionDetails::NoNat(_))
+        )
     }
 }
 
