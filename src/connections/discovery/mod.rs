@@ -86,13 +86,13 @@ impl PeerDiscovery {
             SocketAddr::new(local_ip()?, 0)
         };
 
-        let ipv6_socket = match local_ipv6().ok() {
+        let (ipv6_socket, ipv6_hole_puncher) = match local_ipv6().ok() {
             Some(addr) => {
                 let socket = UdpSocket::bind(SocketAddr::new(addr, 0)).await?;
-                let (punching_socket, hole_puncher) = PunchingUdpSocket::bind(socket).await?;
-                Some(punching_socket)
+                let (socket, hole_puncher) = PunchingUdpSocket::bind(socket).await?;
+                (Some(socket), Some(hole_puncher))
             }
-            None => None,
+            None => (None, None),
         };
 
         // If port is unspecified, used the same port as last time
@@ -150,9 +150,6 @@ impl PeerDiscovery {
             Some(ref s) => Some(PeerConnectionDetails::NoNat(s.local_addr()?)),
             None => None,
         };
-        // if let Some(ref s) = ipv6_socket {
-        //     connection_candidates.push(PeerConnectionDetails::NoNat(s.local_addr()?));
-        // }
 
         let announce_address = AnnounceAddress::new(
             key_to_animal::key_to_name(&public_key),
@@ -200,6 +197,7 @@ impl PeerDiscovery {
 
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
+                    ipv6_hole_puncher.clone(),
                     own_announce_address.clone(),
                     peers_tx.clone(),
                     pending_peer_connections.clone(),
@@ -263,6 +261,7 @@ fn is_private(ip: IpAddr) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_peer_announcement(
     hole_puncher: Option<HolePuncher>,
+    ipv6_hole_puncher: Option<HolePuncher>,
     our_announce_address: AnnounceAddress,
     peers_tx: Sender<DiscoveredPeer>,
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, (DiscoveryMethod, AnnounceAddress)>>>,
@@ -296,6 +295,7 @@ pub async fn handle_peer_announcement(
     debug!("Remote peer {their_announce_address:?}");
     return match handle_peer(
         hole_puncher.clone(),
+        ipv6_hole_puncher,
         &our_announce_address,
         their_announce_address.clone(),
         discovery_method.clone(),
@@ -333,6 +333,7 @@ pub async fn handle_peer_announcement(
 /// Handle a peer we have discovered - depending on NAT type
 pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
+    ipv6_hole_puncher: Option<HolePuncher>,
     local_announce_address: &AnnounceAddress,
     remote_announce_address: AnnounceAddress,
     discovery_method: DiscoveryMethod,
@@ -341,7 +342,7 @@ pub async fn handle_peer(
         if let Some(remote_ipv6_candidate) = remote_announce_address.clone().get_ipv6_candidate() {
             // TODO this should fall back to ipv4 on error
             return handle_connection_candidate(
-                hole_puncher,
+                ipv6_hole_puncher,
                 local_ipv6_candidate,
                 remote_ipv6_candidate,
                 remote_announce_address,
