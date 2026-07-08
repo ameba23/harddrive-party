@@ -556,12 +556,13 @@ mod tests {
             None,
         );
 
-        let (direct_peer, _) = handle_peer(None, &local, remote.clone(), DiscoveryMethod::Direct)
-            .await
-            .unwrap();
+        let (direct_peer, _) =
+            handle_peer(None, None, &local, remote.clone(), DiscoveryMethod::Direct)
+                .await
+                .unwrap();
         assert!(direct_peer.is_some());
 
-        let (mdns_peer, _) = handle_peer(None, &local, remote, DiscoveryMethod::Mdns)
+        let (mdns_peer, _) = handle_peer(None, None, &local, remote, DiscoveryMethod::Mdns)
             .await
             .unwrap();
         assert!(mdns_peer.is_none());
