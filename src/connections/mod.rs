@@ -21,7 +21,7 @@ use crate::{
     wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
-use harddrive_party_shared::wire_messages::AnnounceAddress;
+use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rand::Rng;
@@ -257,25 +257,25 @@ impl Hdp {
         }
 
         // Look at our known peers, and if there are any without NAT, connect to them
-        // for announce_address in self.shared_state.known_peers.iter() {
-        //     if let PeerConnectionDetails::NoNat(socket_address) =
-        //         announce_address.connection_details
-        //     {
-        //         let peer = DiscoveredPeer {
-        //             socket_address,
-        //             socket_option: None,
-        //             discovery_method: DiscoveryMethod::Direct,
-        //             announce_address,
-        //         };
-        //         info!("Connecting to known peer... {}", peer.announce_address.name);
-        //         spawn_outbound_connect(
-        //             self.server_connection.clone(),
-        //             self.shared_state.clone(),
-        //             self.rpc.clone(),
-        //             peer,
-        //         );
-        //     }
-        // }
+        for announce_address in self.shared_state.known_peers.iter() {
+            if let Some(PeerConnectionDetails::NoNat(socket_address)) =
+                announce_address.get_ipv4_candidate()
+            {
+                let peer = DiscoveredPeer {
+                    socket_address: *socket_address,
+                    socket_option: None,
+                    discovery_method: DiscoveryMethod::Direct,
+                    announce_address,
+                };
+                info!("Connecting to known peer... {}", peer.announce_address.name);
+                spawn_outbound_connect(
+                    self.server_connection.clone(),
+                    self.shared_state.clone(),
+                    self.rpc.clone(),
+                    peer,
+                );
+            }
+        }
 
         loop {
             select! {
@@ -319,8 +319,17 @@ impl Hdp {
                     for connection in connections {
                         connection.close(0u32.into(), b"shutdown");
                     }
+                    let mut endpoints = Vec::new();
                     if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                        endpoints.push(endpoint);
+                    }
+                    if let Some(endpoint) = self.ipv6_endpoint.clone() {
+                        endpoints.push(endpoint);
+                    }
+                    for endpoint in &endpoints {
                         endpoint.close(0u32.into(), b"shutdown");
+                    }
+                    for endpoint in endpoints {
                         if timeout(SHUTDOWN_WAIT_IDLE_TIMEOUT, endpoint.wait_idle())
                             .await
                             .is_err()

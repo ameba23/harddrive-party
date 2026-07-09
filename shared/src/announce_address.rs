@@ -52,7 +52,7 @@ impl AnnounceAddress {
         &self.connection_candidates
     }
 
-    pub fn has_nat(&self) -> bool {
+    pub fn has_ipv4_without_nat(&self) -> bool {
         // TODO improve this — note the name reads inverted; returns true only
         // when we advertise a direct v4 endpoint.
         matches!(
@@ -184,15 +184,6 @@ impl Variant {
             _ => unreachable!(),
         }
     }
-
-    /// Bytes following the IP for this variant (port only; v6 scope_id is added
-    /// separately in [`Shape::body_len`] / encoding).
-    fn tail_len(self) -> usize {
-        match self {
-            Variant::NoNat | Variant::Asymmetric => 2,
-            Variant::Symmetric => 0,
-        }
-    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -225,13 +216,19 @@ impl Shape {
     }
 
     fn body_len(self) -> usize {
-        let v4 = self.v4.map(|v| 4 + v.tail_len()).unwrap_or(0);
-        // v6 NoNat/Asymmetric also carries scope_id (4 bytes); Symmetric v6 is
-        // just an IpAddr with no scope info.
-        let v6 = self
-            .v6
-            .map(|v| 16 + v.tail_len() + if v.tail_len() > 0 { 4 } else { 0 })
-            .unwrap_or(0);
+        // v4 body: 4-byte IP, plus a 2-byte port for the variants that carry one.
+        let v4 = match self.v4 {
+            None => 0,
+            Some(Variant::Symmetric) => 4,
+            Some(Variant::NoNat | Variant::Asymmetric) => 4 + 2,
+        };
+        // v6 body: 16-byte IP; NoNat/Asymmetric additionally carry a 2-byte port
+        // and a 4-byte scope_id (Symmetric v6 is just an IpAddr, no scope).
+        let v6 = match self.v6 {
+            None => 0,
+            Some(Variant::Symmetric) => 16,
+            Some(Variant::NoNat | Variant::Asymmetric) => 16 + 2 + 4,
+        };
         v4 + v6
     }
 }

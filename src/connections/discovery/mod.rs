@@ -242,7 +242,7 @@ impl PeerDiscovery {
     /// If we are not behind NAT we allow connections without needing to
     /// know their announce address (containing public key) up front
     pub fn use_client_verification(&self) -> bool {
-        !self.announce_address.has_nat()
+        !self.announce_address.has_ipv4_without_nat()
     }
 }
 
@@ -330,7 +330,10 @@ pub async fn handle_peer_announcement(
     };
 }
 
-/// Handle a peer we have discovered - depending on NAT type
+/// Handle a peer we have discovered - depending on NAT type.
+///
+/// Prefers IPv6 when both peers advertise a v6 candidate; on error, falls back
+/// to IPv4 if both sides have a v4 candidate.
 pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
     ipv6_hole_puncher: Option<HolePuncher>,
@@ -338,37 +341,50 @@ pub async fn handle_peer(
     remote_announce_address: AnnounceAddress,
     discovery_method: DiscoveryMethod,
 ) -> Result<(Option<DiscoveredPeer>, SocketAddr), UiServerErrorWrapper> {
-    if let Some(local_ipv6_candidate) = local_announce_address.get_ipv6_candidate() {
-        if let Some(remote_ipv6_candidate) = remote_announce_address.clone().get_ipv6_candidate() {
-            // TODO this should fall back to ipv4 on error
-            return handle_connection_candidate(
-                ipv6_hole_puncher,
-                local_ipv6_candidate,
-                remote_ipv6_candidate,
-                remote_announce_address,
-                discovery_method,
-            )
-            .await;
+    let local_v6 = local_announce_address.get_ipv6_candidate();
+    let local_v4 = local_announce_address.get_ipv4_candidate();
+    // Clone the remote candidates up front so we can consume
+    // `remote_announce_address` when we hand it to `handle_connection_candidate`.
+    let remote_v6 = remote_announce_address.get_ipv6_candidate().cloned();
+    let remote_v4 = remote_announce_address.get_ipv4_candidate().cloned();
+
+    let can_use_v4 = local_v4.is_some() && remote_v4.is_some();
+
+    if let (Some(l6), Some(r6)) = (local_v6, remote_v6.as_ref()) {
+        match handle_connection_candidate(
+            ipv6_hole_puncher,
+            l6,
+            r6,
+            remote_announce_address.clone(),
+            discovery_method.clone(),
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(err) if can_use_v4 => {
+                warn!(
+                    "IPv6 connection attempt for {} failed, falling back to IPv4: {err}",
+                    remote_announce_address.name
+                );
+            }
+            Err(err) => return Err(err),
         }
     }
 
-    if let Some(local_ipv4_candidate) = local_announce_address.get_ipv4_candidate() {
-        if let Some(remote_ipv4_candidate) = remote_announce_address.clone().get_ipv4_candidate() {
-            return handle_connection_candidate(
-                hole_puncher,
-                local_ipv4_candidate,
-                remote_ipv4_candidate,
-                remote_announce_address,
-                discovery_method,
-            )
-            .await;
-        }
+    if let (Some(l4), Some(r4)) = (local_v4, remote_v4.as_ref()) {
+        return handle_connection_candidate(
+            hole_puncher,
+            l4,
+            r4,
+            remote_announce_address,
+            discovery_method,
+        )
+        .await;
     }
 
-    Err(UiServerErrorWrapper(UiServerError::PeerDiscovery(
-        // TODO add us, them details
-        "Cannot find a matching IP protocol".to_string(),
-    )))
+    Err(UiServerErrorWrapper(UiServerError::PeerDiscovery(format!(
+        "No matching IP protocol between local={local_announce_address:?} remote={remote_announce_address:?}"
+    ))))
 }
 
 /// Handle a peer we have discovered - depending on NAT type
