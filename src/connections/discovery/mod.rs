@@ -15,7 +15,7 @@ use log::{debug, error, info, warn};
 use quinn::AsyncUdpSocket;
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{Arc, RwLock},
 };
 use tokio::{
@@ -86,9 +86,18 @@ impl PeerDiscovery {
             SocketAddr::new(local_ip()?, 0)
         };
 
-        let (ipv6_socket, ipv6_hole_puncher) = match local_ipv6().ok() {
+        // Get IPV6 if available
+        let ipv6_addr = local_ipv6().ok().and_then(|ip| match ip {
+            IpAddr::V6(v6) if is_advertisable_ipv6(&v6) => Some(v6),
+            IpAddr::V6(v6) => {
+                debug!("Skipping non-advertisable local IPv6 address {v6}");
+                None
+            }
+            IpAddr::V4(_) => None,
+        });
+        let (ipv6_socket, ipv6_hole_puncher) = match ipv6_addr {
             Some(addr) => {
-                let socket = UdpSocket::bind(SocketAddr::new(addr, 0)).await?;
+                let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V6(addr), 0)).await?;
                 let (socket, hole_puncher) = PunchingUdpSocket::bind(socket).await?;
                 (Some(socket), Some(hole_puncher))
             }
@@ -254,6 +263,12 @@ fn is_private(ip: IpAddr) -> bool {
             ip_v6_addr.is_unique_local() || ip_v6_addr.is_unicast_link_local()
         }
     }
+}
+
+/// An IPv6 address is worth advertising to peers iff it can plausibly be reached
+/// off-link
+fn is_advertisable_ipv6(ip: &Ipv6Addr) -> bool {
+    !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !ip.is_unicast_link_local()
 }
 
 /// This is called when a peer is announced, either directly by the user or through a gossiped peer
