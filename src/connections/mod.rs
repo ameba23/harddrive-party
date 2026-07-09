@@ -226,13 +226,23 @@ impl Hdp {
 
     /// Loop handling incoming peer connections, and discovered peers
     pub async fn run(&mut self) {
-        let (incoming_connection_tx, mut incoming_connection_rx) = mpsc::channel(1024);
+        let mut endpoints = Vec::new();
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+            endpoints.push(endpoint);
+        }
+
+        if let Some(endpoint) = self.ipv6_endpoint.clone() {
+            endpoints.push(endpoint);
+        }
+
+        let (incoming_connection_tx, mut incoming_connection_rx) = mpsc::channel(1024);
+        for endpoint in endpoints {
+            let incoming_tx = incoming_connection_tx.clone();
             tokio::spawn(async move {
                 loop {
                     match endpoint.accept().await {
                         Some(incoming_conn) => {
-                            if incoming_connection_tx.send(incoming_conn).await.is_err() {
+                            if incoming_tx.send(incoming_conn).await.is_err() {
                                 warn!("Cannot handle incoming connections - channel closed");
                                 break;
                             }

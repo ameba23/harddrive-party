@@ -32,7 +32,7 @@ impl KnownPeers {
         Box::new(self.db.iter().filter_map(|kv_result| {
             let (k, v) = kv_result.ok()?;
 
-            Some(AnnounceAddress::new_with_connection_candidates(
+            Some(AnnounceAddress::from_candidates(
                 String::from_utf8(k.to_vec()).ok()?,
                 codec::deserialize(&v).ok()?,
             ))

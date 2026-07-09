@@ -4,12 +4,18 @@ use thaw::*;
 
 #[component]
 pub fn AnnounceAddressView(announce_address: AnnounceAddress) -> impl IntoView {
+    let details = announce_address
+        .connection_candidates()
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
     view! {
         <span>
             <Icon icon=icondata::AiUserOutlined />
             " "
             <span>
-                {format!("{} {}", announce_address.name, announce_address.connection_details)}
+                {format!("{} {}", announce_address.name, details)}
             </span>
         </span>
     }
@@ -47,7 +53,7 @@ mod tests {
         let handle = mount_to(host.clone(), || {
             view! {
                 <AnnounceAddressView announce_address=AnnounceAddress::from_string(
-                        "asphericKingCrabEJLLAHEK2".to_string(),
+                        "asphericKingCrabywBxChCS2".to_string(),
                     )
                     .unwrap() />
             }
@@ -67,7 +73,7 @@ mod tests {
         let handle = mount_to(host.clone(), || {
             view! {
                 <AnnounceAddressView announce_address=AnnounceAddress::from_string(
-                        "amberCloudYakG1/LAHFY0".to_string(),
+                        "amberCloudYakywBxWBtf1".to_string(),
                     )
                     .unwrap() />
             }

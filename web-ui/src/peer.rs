@@ -333,9 +333,9 @@ mod tests {
         let (announce_address, _set_announce_address) = signal(None::<String>);
         let (pending_peers, _set_pending_peers) = signal(HashSet::<String>::new());
         let (known_peers, _set_known_peers) = signal(vec![
-            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string()).unwrap(),
-            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string()).unwrap(),
-            AnnounceAddress::from_string("bobbyxjNkTQ1".to_string()).unwrap(),
+            AnnounceAddress::from_string("asphericKingCrabywBxChCS2".to_string()).unwrap(),
+            AnnounceAddress::from_string("amberCloudYakywBxWBtf1".to_string()).unwrap(),
+            AnnounceAddress::from_string("bobbyywBxYw3".to_string()).unwrap(),
         ]);
 
         let handle = mount_to(host.clone(), move || {
