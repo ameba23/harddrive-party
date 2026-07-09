@@ -97,8 +97,23 @@ impl PeerDiscovery {
         });
         let (ipv6_socket, ipv6_hole_puncher) = match ipv6_addr {
             Some(addr) => {
-                let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V6(addr), 0)).await?;
-                let (socket, hole_puncher) = PunchingUdpSocket::bind(socket).await?;
+                let raw_v6_socket = UdpSocket::bind(SocketAddr::new(IpAddr::V6(addr), 0)).await?;
+                // Run STUN over the v6 socket purely for the side effect: the
+                // outbound packet opens a firewall pinhole on carriers with
+                // Endpoint Independent Filtering, which lets peers dial us
+                // cold. The classification result itself is uninteresting for
+                // v6 (v6 doesn't NAT) — we log it and move on. STUN failure is
+                // non-fatal because the socket has typically still emitted at
+                // least one packet before giving up.
+                match stun_test(&raw_v6_socket, stun_servers.clone()).await {
+                    Ok(details) => {
+                        info!("IPv6 STUN test succeeded: {details:?}");
+                    }
+                    Err(err) => {
+                        warn!("IPv6 STUN test failed (continuing anyway): {err}");
+                    }
+                }
+                let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_v6_socket).await?;
                 (Some(socket), Some(hole_puncher))
             }
             None => (None, None),
@@ -137,7 +152,7 @@ impl PeerDiscovery {
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
-        // Only use the hole_puncher if we are not behind symmetric nat
+        // Only use the hole_puncher if we are not behind symmetric NAT
         let hole_puncher = match local_connection_details {
             PeerConnectionDetails::Symmetric(_) => None,
             _ => Some(hole_puncher.clone()),
@@ -145,7 +160,7 @@ impl PeerDiscovery {
 
         let addr = socket.local_addr()?;
 
-        // Id is used as an identifier for mdns services
+        // Id is used as an identifier for MDNS services
         let id = hex::encode(public_key);
         let known_peers = KnownPeers::new(known_peers_db);
 
@@ -166,7 +181,7 @@ impl PeerDiscovery {
             ipv6_connection_details,
         );
 
-        // Only use mdns if we are on a local network
+        // Only use MDNS if we are on a local network
         let _mdns_server = if use_mdns && is_private(local_addr.ip()) {
             Some(
                 MdnsServer::new(

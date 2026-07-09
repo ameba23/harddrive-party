@@ -1,10 +1,10 @@
 //! Public address / NAT type discovery using STUN
-use anyhow::anyhow;
 use harddrive_party_shared::wire_messages::PeerConnectionDetails;
 use log::{debug, warn};
 use rand::seq::SliceRandom;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use stunclient::StunClient;
+use thiserror::Error;
 use tokio::net::UdpSocket;
 
 /// How many servers to try before giving up
@@ -14,10 +14,9 @@ const MAX_STUN_SERVER_ATTEMPTS: usize = 10;
 pub async fn stun_test(
     socket: &UdpSocket,
     stun_servers: Option<Vec<String>>,
-) -> anyhow::Result<PeerConnectionDetails> {
+) -> Result<PeerConnectionDetails, StunClientError> {
     let (public_addr1, public_addr2) = multipe_attempt_stun_query(socket, stun_servers).await?;
 
-    // TODO here we should loop over IPs of all network interfaces
     let addr = socket.local_addr()?;
     let has_nat = addr.ip() != public_addr1.ip();
     let is_symmetric = public_addr1 != public_addr2;
@@ -37,77 +36,93 @@ pub async fn stun_test(
     Ok(details)
 }
 
-/// Try a selection of the availble stun servers until we get two results from different servers
+/// Try a selection of the available stun servers until we get two results from different servers.
+///
+/// The socket's own IP family determines which STUN server addresses we accept.
 async fn multipe_attempt_stun_query(
     socket: &UdpSocket,
     stun_servers_override: Option<Vec<String>>,
-) -> anyhow::Result<(SocketAddr, SocketAddr)> {
-    let local_ip = socket.local_addr()?.ip();
-    let selected_stun_servers: Vec<String> = if let Some(stun_servers) = stun_servers_override {
-        stun_servers
+) -> Result<(SocketAddr, SocketAddr), StunClientError> {
+    let local_addr = socket.local_addr()?;
+    let want_v6 = local_addr.is_ipv6();
+
+    let candidate_servers: Vec<String> = if let Some(overrides) = stun_servers_override {
+        overrides
     } else {
-        let mut stun_servers = STUN_SERVERS;
-        let (selected_stun_servers, _) =
-            stun_servers.partial_shuffle(&mut rand::thread_rng(), MAX_STUN_SERVER_ATTEMPTS);
-        selected_stun_servers
-            .iter()
-            .map(|server| (*server).to_string())
-            .collect()
+        let mut list = STUN_SERVERS.to_vec();
+        list.shuffle(&mut rand::thread_rng());
+        list.iter().map(|s| (*s).to_string()).collect()
     };
 
-    if selected_stun_servers.is_empty() {
-        return Err(anyhow!("No STUN servers provided"));
+    if candidate_servers.is_empty() {
+        return Err(StunClientError::NoServersProvided);
     }
 
     let mut first_test = None;
+    let mut attempts = 0usize;
 
-    for stun_server in &selected_stun_servers {
-        debug!("Attempting connection to stun server {stun_server}");
+    for host in &candidate_servers {
+        let server_addr = match resolve_stun_server(host, want_v6) {
+            Ok(addr) => addr,
+            Err(err) => {
+                debug!("Skipping stun server {host}: {err}");
+                continue;
+            }
+        };
+        attempts += 1;
+        if attempts > MAX_STUN_SERVER_ATTEMPTS {
+            break;
+        }
+
+        debug!("Attempting connection to stun server {host} ({server_addr})");
         match first_test {
             None => {
-                if let Ok((public_add1, stun_server1)) =
-                    stun_query(socket, stun_server, local_ip).await
+                if let Ok((public_addr1, server1)) =
+                    stun_query(socket, server_addr, local_addr.ip()).await
                 {
-                    first_test = Some((public_add1, stun_server1));
+                    first_test = Some((public_addr1, server1));
                 }
             }
-            Some((public_add1, stun_server1)) => {
-                if let Ok((public_add2, stun_server2)) =
-                    stun_query(socket, stun_server, local_ip).await
+            Some((public_addr1, server1)) => {
+                if let Ok((public_addr2, server2)) =
+                    stun_query(socket, server_addr, local_addr.ip()).await
                 {
-                    if stun_server1 != stun_server2 {
-                        return Ok((public_add1, public_add2));
+                    if server1 != server2 {
+                        return Ok((public_addr1, public_addr2));
                     }
                 }
             }
         }
     }
-    Err(anyhow!(
-        "Could not connect to any stun server - maybe no internet connection"
-    ))
+    Err(StunClientError::NoServersReachable)
 }
 
-/// Query a single stun server
+/// Resolve a STUN server hostname to a socket address whose family matches the
+/// local socket
+fn resolve_stun_server(host: &str, want_v6: bool) -> Result<SocketAddr, StunClientError> {
+    host.to_socket_addrs()?
+        .find(|x| x.is_ipv6() == want_v6)
+        .ok_or_else(|| StunClientError::NoMatchingFamily(host.to_string()))
+}
+
+/// Query a single already-resolved stun server address.
 async fn stun_query(
     socket: &UdpSocket,
-    stun_server: &str,
+    stun_server: SocketAddr,
     local_ip: IpAddr,
-) -> anyhow::Result<(SocketAddr, SocketAddr)> {
-    let stun_server = stun_server
-        .to_socket_addrs()?
-        .find(|x| x.is_ipv4())
-        .ok_or_else(|| anyhow!("Failed to get IP of stun server"))?;
-    let stun_client1 = StunClient::new(stun_server);
-    let public_addr1 = stun_client1.query_external_address_async(socket).await?;
-    if public_addr1.ip() != local_ip && !is_globally_reachable_ip(public_addr1.ip()) {
+) -> Result<(SocketAddr, SocketAddr), StunClientError> {
+    let stun_client = StunClient::new(stun_server);
+    let public_addr = stun_client.query_external_address_async(socket).await?;
+    if public_addr.ip() != local_ip && !is_globally_reachable_ip(public_addr.ip()) {
         warn!(
-            "Ignoring STUN response from {stun_server} with non-public mapped address {public_addr1}"
+            "Ignoring STUN response from {stun_server} with non-public mapped address {public_addr}"
         );
-        return Err(anyhow!(
-            "STUN server returned non-public mapped address {public_addr1}"
-        ));
+        return Err(StunClientError::NonPublicMappedAddress {
+            server: stun_server,
+            address: public_addr,
+        });
     }
-    Ok((public_addr1, stun_server))
+    Ok((public_addr, stun_server))
 }
 
 fn is_globally_reachable_ip(ip: IpAddr) -> bool {
@@ -225,6 +240,26 @@ pub(crate) mod test_utils {
         });
         (server_addr.to_string(), handle)
     }
+}
+
+/// Errors during STUN test
+#[derive(Debug, Error)]
+pub enum StunClientError {
+    #[error("No STUN servers provided")]
+    NoServersProvided,
+    #[error("Could not connect to any STUN server - maybe no internet connection")]
+    NoServersReachable,
+    #[error("No matching IP family for {0}")]
+    NoMatchingFamily(String),
+    #[error("STUN server {server} returned non-public mapped address {address}")]
+    NonPublicMappedAddress {
+        server: SocketAddr,
+        address: SocketAddr,
+    },
+    #[error("STUN protocol error: {0}")]
+    Stun(#[from] stunclient::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 #[cfg(test)]
