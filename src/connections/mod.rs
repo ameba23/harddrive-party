@@ -344,6 +344,13 @@ impl Hdp {
             }
         }
     }
+
+    /// If we have an IPv6 listener, return its local socket address
+    pub fn ipv6_listen_addr(&self) -> Option<SocketAddr> {
+        self.ipv6_endpoint
+            .as_ref()
+            .and_then(|e| e.local_addr().ok())
+    }
 }
 
 fn spawn_outbound_connect(

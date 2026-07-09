@@ -161,11 +161,20 @@ async fn main() -> anyhow::Result<()> {
                 },
             )
             .await?;
-            println!(
-                "{} listening for peers on {}",
-                hdp.shared_state.name.green(),
-                hdp.server_connection.to_string().yellow(),
-            );
+
+            match hdp.ipv6_listen_addr() {
+                Some(ipv6_addr) => println!(
+                    "{} listening for peers on IPv4: {} and IPv6: {}",
+                    hdp.shared_state.name.green(),
+                    hdp.server_connection.to_string().yellow(),
+                    ipv6_addr.to_string().yellow(),
+                ),
+                None => println!(
+                    "{} listening for peers on {}",
+                    hdp.shared_state.name.green(),
+                    hdp.server_connection.to_string().yellow(),
+                ),
+            }
 
             let shared_state = hdp.shared_state.clone();
 
