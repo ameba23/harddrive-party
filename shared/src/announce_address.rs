@@ -77,8 +77,17 @@ impl AnnounceAddress {
             return Err(AnnounceAddressDecodeError::BadLength);
         }
         let name_end = input_string.len() - 1 - base64_chars;
-        let name = input_string[..name_end].to_string();
-        let body_b64 = &input_string[name_end..input_string.len() - 1];
+        let shape_start = input_string.len() - 1;
+
+        let name = input_string
+            .get(..name_end)
+            .ok_or(AnnounceAddressDecodeError::BadLength)?
+            .to_string();
+
+        let body_b64 = input_string
+            .get(name_end..shape_start)
+            .ok_or(AnnounceAddressDecodeError::BadLength)?;
+
         let body = BASE64_STANDARD_NO_PAD.decode(body_b64)?;
         if body.len() != body_bytes {
             return Err(AnnounceAddressDecodeError::BadLength);
@@ -133,32 +142,44 @@ impl std::fmt::Display for AnnounceAddress {
         let mut shape = Shape { v4: None, v6: None };
 
         if let Some(v4) = self.get_ipv4_candidate() {
-            shape.v4 = Some(v4.variant());
             match v4 {
-                PeerConnectionDetails::NoNat(SocketAddr::V4(sa))
-                | PeerConnectionDetails::Asymmetric(SocketAddr::V4(sa)) => {
+                PeerConnectionDetails::NoNat(SocketAddr::V4(sa)) => {
+                    shape.v4 = Some(Variant::NoNat);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                }
+                PeerConnectionDetails::Asymmetric(SocketAddr::V4(sa)) => {
+                    shape.v4 = Some(Variant::Asymmetric);
                     body.extend_from_slice(&sa.ip().octets());
                     body.extend_from_slice(&sa.port().to_be_bytes());
                 }
                 PeerConnectionDetails::Symmetric(IpAddr::V4(ip)) => {
+                    shape.v4 = Some(Variant::Symmetric);
                     body.extend_from_slice(&ip.octets());
                 }
-                _ => unreachable!("get_ipv4_candidate returned non-v4"),
+                _ => {}
             }
         }
+
         if let Some(v6) = self.get_ipv6_candidate() {
-            shape.v6 = Some(v6.variant());
             match v6 {
-                PeerConnectionDetails::NoNat(SocketAddr::V6(sa))
-                | PeerConnectionDetails::Asymmetric(SocketAddr::V6(sa)) => {
+                PeerConnectionDetails::NoNat(SocketAddr::V6(sa)) => {
+                    shape.v6 = Some(Variant::NoNat);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                    body.extend_from_slice(&sa.scope_id().to_be_bytes());
+                }
+                PeerConnectionDetails::Asymmetric(SocketAddr::V6(sa)) => {
+                    shape.v6 = Some(Variant::Asymmetric);
                     body.extend_from_slice(&sa.ip().octets());
                     body.extend_from_slice(&sa.port().to_be_bytes());
                     body.extend_from_slice(&sa.scope_id().to_be_bytes());
                 }
                 PeerConnectionDetails::Symmetric(IpAddr::V6(ip)) => {
+                    shape.v6 = Some(Variant::Symmetric);
                     body.extend_from_slice(&ip.octets());
                 }
-                _ => unreachable!("get_ipv6_candidate returned non-v6"),
+                _ => {}
             }
         }
 
@@ -177,11 +198,10 @@ enum Variant {
 impl Variant {
     fn from_bits(bits: u8) -> Option<Self> {
         match bits & 0x3 {
-            0 => None,
             1 => Some(Variant::NoNat),
             2 => Some(Variant::Asymmetric),
             3 => Some(Variant::Symmetric),
-            _ => unreachable!(),
+            _ => None,
         }
     }
 }
@@ -312,14 +332,6 @@ impl PeerConnectionDetails {
 
     pub fn is_ipv6(&self) -> bool {
         self.ip().is_ipv6()
-    }
-
-    fn variant(&self) -> Variant {
-        match self {
-            PeerConnectionDetails::NoNat(_) => Variant::NoNat,
-            PeerConnectionDetails::Asymmetric(_) => Variant::Asymmetric,
-            PeerConnectionDetails::Symmetric(_) => Variant::Symmetric,
-        }
     }
 }
 
