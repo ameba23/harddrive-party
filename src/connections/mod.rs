@@ -65,6 +65,7 @@ pub struct Hdp {
     rpc: Rpc,
     /// The QUIC endpoint and TLS certificate
     pub server_connection: ServerConnection,
+    pub ipv6_endpoint: Option<Endpoint>,
     /// Peer discovery
     peer_discovery: PeerDiscovery,
     /// Channel for graceful shutdown signal
@@ -136,7 +137,7 @@ impl Hdp {
         let known_peers_db = db.open_tree(KNOWN_PEERS)?;
 
         // Setup peer discovery
-        let (socket_option, peer_discovery) = PeerDiscovery::new(
+        let (socket_option, ipv6_socket_option, peer_discovery) = PeerDiscovery::new(
             use_mdns,
             pk_hash,
             peers.clone(),
@@ -176,10 +177,10 @@ impl Hdp {
                 ServerConnection::WithEndpoint(
                     make_server_endpoint(
                         socket,
-                        cert_der,
-                        priv_key_der,
+                        cert_der.clone(),
+                        priv_key_der.clone_key(),
                         shared_state.known_peers.clone(),
-                        peer_discovery.use_client_verification(),
+                        peer_discovery.use_client_verification_on_ipv4(),
                     )
                     .await?,
                 )
@@ -189,8 +190,23 @@ impl Hdp {
                 // socket that peers can connect to
                 // Give cert_der and priv_key_der which we use to create an endpoint on a different
                 // port for each connecting peer
-                ServerConnection::Symmetric(cert_der, priv_key_der)
+                ServerConnection::Symmetric(cert_der.clone(), priv_key_der.clone_key())
             }
+        };
+
+        let ipv6_endpoint = match ipv6_socket_option {
+            Some(socket) => Some(
+                make_server_endpoint(
+                    socket,
+                    cert_der,
+                    priv_key_der,
+                    shared_state.known_peers.clone(),
+                    // No client verification, because we are publicly addressable
+                    false,
+                )
+                .await?,
+            ),
+            None => None,
         };
 
         Ok(Self {
@@ -205,18 +221,29 @@ impl Hdp {
             server_connection,
             peer_discovery,
             graceful_shutdown_rx,
+            ipv6_endpoint,
         })
     }
 
     /// Loop handling incoming peer connections, and discovered peers
     pub async fn run(&mut self) {
-        let (incoming_connection_tx, mut incoming_connection_rx) = mpsc::channel(1024);
+        let mut endpoints = Vec::new();
         if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+            endpoints.push(endpoint);
+        }
+
+        if let Some(endpoint) = self.ipv6_endpoint.clone() {
+            endpoints.push(endpoint);
+        }
+
+        let (incoming_connection_tx, mut incoming_connection_rx) = mpsc::channel(1024);
+        for endpoint in endpoints {
+            let incoming_tx = incoming_connection_tx.clone();
             tokio::spawn(async move {
                 loop {
                     match endpoint.accept().await {
                         Some(incoming_conn) => {
-                            if incoming_connection_tx.send(incoming_conn).await.is_err() {
+                            if incoming_tx.send(incoming_conn).await.is_err() {
                                 warn!("Cannot handle incoming connections - channel closed");
                                 break;
                             }
@@ -232,11 +259,11 @@ impl Hdp {
 
         // Look at our known peers, and if there are any without NAT, connect to them
         for announce_address in self.shared_state.known_peers.iter() {
-            if let PeerConnectionDetails::NoNat(socket_address) =
-                announce_address.connection_details
+            if let Some(PeerConnectionDetails::NoNat(socket_address)) =
+                announce_address.get_ipv4_candidate()
             {
                 let peer = DiscoveredPeer {
-                    socket_address,
+                    socket_address: *socket_address,
                     socket_option: None,
                     discovery_method: DiscoveryMethod::Direct,
                     announce_address,
@@ -293,8 +320,17 @@ impl Hdp {
                     for connection in connections {
                         connection.close(0u32.into(), b"shutdown");
                     }
+                    let mut endpoints = Vec::new();
                     if let ServerConnection::WithEndpoint(endpoint) = self.server_connection.clone() {
+                        endpoints.push(endpoint);
+                    }
+                    if let Some(endpoint) = self.ipv6_endpoint.clone() {
+                        endpoints.push(endpoint);
+                    }
+                    for endpoint in &endpoints {
                         endpoint.close(0u32.into(), b"shutdown");
+                    }
+                    for endpoint in endpoints {
                         if timeout(SHUTDOWN_WAIT_IDLE_TIMEOUT, endpoint.wait_idle())
                             .await
                             .is_err()
@@ -308,6 +344,13 @@ impl Hdp {
                 }
             }
         }
+    }
+
+    /// If we have an IPv6 listener, return its local socket address
+    pub fn ipv6_listen_addr(&self) -> Option<SocketAddr> {
+        self.ipv6_endpoint
+            .as_ref()
+            .and_then(|e| e.local_addr().ok())
     }
 }
 

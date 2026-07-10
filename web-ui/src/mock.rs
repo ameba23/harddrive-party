@@ -82,7 +82,7 @@ impl MockClient {
         Ok(Info {
             name: "mock-ui".to_string(),
             os_home_dir: Some("/home/pumkin".to_string()),
-            announce_address: "mock-uiC9Z/AAAB0".to_string(),
+            announce_address: "mock-uiwAACYwTS1".to_string(),
         })
     }
 
@@ -127,10 +127,10 @@ impl MockClient {
     }
     pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, ClientError> {
         Ok(vec![
-            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string())?,
-            AnnounceAddress::from_string("lunarTulipOxxjNkTQ1".to_string())?,
-            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string())?,
-            AnnounceAddress::from_string("cinderDeltaFoxxjNkyQ1".to_string())?,
+            AnnounceAddress::from_string("asphericKingCrabywBxChCS2".to_string())?,
+            AnnounceAddress::from_string("lunarTulipOxxjNkBw3".to_string())?,
+            AnnounceAddress::from_string("amberCloudYakywBxWBtf1".to_string())?,
+            AnnounceAddress::from_string("cinderDeltaFoxxjNkLA3".to_string())?,
         ])
     }
 

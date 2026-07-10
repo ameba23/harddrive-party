@@ -164,7 +164,7 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
                     .recv((&*self.socket).into(), bufs, metas);
 
                 if let Ok(msg_count) = res {
-                    forward_holepunch(&self.udp_recv_tx, bufs, metas, msg_count);
+                    forward_holepunch(&self.udp_recv_tx, &self.socket, bufs, metas, msg_count);
                 }
 
                 res
@@ -181,6 +181,7 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
 
 fn forward_holepunch(
     channel: &broadcast::Sender<IncomingHolepunchPacket>,
+    socket: &Arc<tokio::net::UdpSocket>,
     bufs: &[std::io::IoSliceMut<'_>],
     metas: &[quinn_udp::RecvMeta],
     msg_count: usize,
@@ -193,6 +194,23 @@ fn forward_holepunch(
             };
             debug!("Forwarding hole punch packet");
             let _ = channel.send(packet);
+
+            // Auto-ACK any incoming INIT so peers with an EIF-open firewall
+            // can complete the punch without both sides needing an active
+            // hole_punch_peer task. Sending [1] back also warms our own
+            // outbound firewall state toward the sender, which is what makes
+            // the subsequent QUIC dial from them reachable.
+            if buf[0] == INIT_PUNCH[0] {
+                let socket = socket.clone();
+                let dest = meta.addr;
+                tokio::spawn(async move {
+                    if let Err(err) = socket.send_to(&[1u8], dest).await {
+                        warn!("Failed to auto-ACK hole punch INIT from {dest}: {err}");
+                    } else {
+                        debug!("Auto-ACKed hole punch INIT from {dest}");
+                    }
+                });
+            }
         }
     }
 }

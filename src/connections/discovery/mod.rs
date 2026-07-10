@@ -10,12 +10,12 @@ use crate::{
 };
 use harddrive_party_shared::{ui_messages::UiServerError, wire_messages::PeerConnectionDetails};
 use hole_punch::HolePuncher;
-use local_ip_address::local_ip;
+use local_ip_address::{local_ip, local_ipv6};
 use log::{debug, error, info, warn};
 use quinn::AsyncUdpSocket;
 use std::{
     collections::HashMap,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv6Addr, SocketAddr},
     sync::{Arc, RwLock},
 };
 use tokio::{
@@ -72,7 +72,7 @@ impl PeerDiscovery {
         last_used_port: Option<u16>,
         known_peers_db: sled::Tree,
         stun_servers: Option<Vec<String>>,
-    ) -> anyhow::Result<(Option<PunchingUdpSocket>, Self)> {
+    ) -> anyhow::Result<(Option<PunchingUdpSocket>, Option<PunchingUdpSocket>, Self)> {
         // Channel for reporting discovered peers
         let (peers_tx, peers_rx) = channel(1024);
 
@@ -84,6 +84,39 @@ impl PeerDiscovery {
             local_addr
         } else {
             SocketAddr::new(local_ip()?, 0)
+        };
+
+        // Get IPV6 if available
+        let ipv6_addr = local_ipv6().ok().and_then(|ip| match ip {
+            IpAddr::V6(v6) if is_advertisable_ipv6(&v6) => Some(v6),
+            IpAddr::V6(v6) => {
+                debug!("Skipping non-advertisable local IPv6 address {v6}");
+                None
+            }
+            IpAddr::V4(_) => None,
+        });
+        let (ipv6_socket, ipv6_hole_puncher) = match ipv6_addr {
+            Some(addr) => {
+                let raw_v6_socket = UdpSocket::bind(SocketAddr::new(IpAddr::V6(addr), 0)).await?;
+                // Run STUN over the v6 socket purely for the side effect: the
+                // outbound packet opens a firewall pinhole on carriers with
+                // Endpoint Independent Filtering, which lets peers dial us
+                // cold. The classification result itself is uninteresting for
+                // v6 (v6 doesn't NAT) — we log it and move on. STUN failure is
+                // non-fatal because the socket has typically still emitted at
+                // least one packet before giving up.
+                match stun_test(&raw_v6_socket, stun_servers.clone()).await {
+                    Ok(details) => {
+                        info!("IPv6 STUN test succeeded: {details:?}");
+                    }
+                    Err(err) => {
+                        warn!("IPv6 STUN test failed (continuing anyway): {err}");
+                    }
+                }
+                let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_v6_socket).await?;
+                (Some(socket), Some(hole_puncher))
+            }
+            None => (None, None),
         };
 
         // If port is unspecified, used the same port as last time
@@ -119,7 +152,7 @@ impl PeerDiscovery {
 
         let (socket, hole_puncher) = PunchingUdpSocket::bind(raw_socket).await?;
 
-        // Only use the hole_puncher if we are not behind symmetric nat
+        // Only use the hole_puncher if we are not behind symmetric NAT
         let hole_puncher = match local_connection_details {
             PeerConnectionDetails::Symmetric(_) => None,
             _ => Some(hole_puncher.clone()),
@@ -127,7 +160,7 @@ impl PeerDiscovery {
 
         let addr = socket.local_addr()?;
 
-        // Id is used as an identifier for mdns services
+        // Id is used as an identifier for MDNS services
         let id = hex::encode(public_key);
         let known_peers = KnownPeers::new(known_peers_db);
 
@@ -137,12 +170,18 @@ impl PeerDiscovery {
             _ => Some(socket),
         };
 
-        let announce_address = AnnounceAddress {
-            connection_details: local_connection_details.clone(),
-            name: key_to_animal::key_to_name(&public_key),
+        let ipv6_connection_details = match ipv6_socket {
+            Some(ref s) => Some(PeerConnectionDetails::Asymmetric(s.local_addr()?)),
+            None => None,
         };
 
-        // Only use mdns if we are on a local network
+        let announce_address = AnnounceAddress::new(
+            key_to_animal::key_to_name(&public_key),
+            local_connection_details.clone(),
+            ipv6_connection_details,
+        );
+
+        // Only use MDNS if we are on a local network
         let _mdns_server = if use_mdns && is_private(local_addr.ip()) {
             Some(
                 MdnsServer::new(
@@ -175,18 +214,19 @@ impl PeerDiscovery {
         tokio::spawn(async move {
             while let Some(peer_connect) = peer_announce_rx.recv().await {
                 let discovery_method = peer_connect.discovery_method.clone();
-                let peer_name = peer_connect.announce_address.name.clone();
                 info!(
-                    "Handling {:?} peer announcement for {} ({:?})",
-                    discovery_method, peer_name, peer_connect.announce_address.connection_details
+                    "Handling {:?} peer announcement for {:?}",
+                    discovery_method, peer_connect.announce_address
                 );
+
                 let result = handle_peer_announcement(
                     hole_puncher.clone(),
+                    ipv6_hole_puncher.clone(),
                     own_announce_address.clone(),
                     peers_tx.clone(),
                     pending_peer_connections.clone(),
                     peers.clone(),
-                    peer_connect.announce_address,
+                    peer_connect.announce_address.clone(),
                     discovery_method.clone(),
                     known_peers.clone(),
                 )
@@ -199,13 +239,13 @@ impl PeerDiscovery {
                 } else {
                     info!(
                         "Finished handling {:?} peer announcement for {}",
-                        discovery_method, peer_name
+                        discovery_method, peer_connect.announce_address
                     );
                 }
             }
         });
 
-        Ok((socket_option, peer_discovery))
+        Ok((socket_option, ipv6_socket, peer_discovery))
     }
 
     pub fn get_pending_peer(
@@ -225,11 +265,8 @@ impl PeerDiscovery {
     ///
     /// If we are not behind NAT we allow connections without needing to
     /// know their announce address (containing public key) up front
-    pub fn use_client_verification(&self) -> bool {
-        !matches!(
-            self.announce_address.connection_details,
-            PeerConnectionDetails::NoNat(_)
-        )
+    pub fn use_client_verification_on_ipv4(&self) -> bool {
+        !self.announce_address.has_ipv4_without_nat()
     }
 }
 
@@ -243,11 +280,18 @@ fn is_private(ip: IpAddr) -> bool {
     }
 }
 
+/// An IPv6 address is worth advertising to peers iff it can plausibly be reached
+/// off-link
+fn is_advertisable_ipv6(ip: &Ipv6Addr) -> bool {
+    !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !ip.is_unicast_link_local()
+}
+
 /// This is called when a peer is announced, either directly by the user or through a gossiped peer
 /// announcement from another connected peer.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_peer_announcement(
     hole_puncher: Option<HolePuncher>,
+    ipv6_hole_puncher: Option<HolePuncher>,
     our_announce_address: AnnounceAddress,
     peers_tx: Sender<DiscoveredPeer>,
     pending_peer_connections: Arc<RwLock<HashMap<SocketAddr, (DiscoveryMethod, AnnounceAddress)>>>,
@@ -258,11 +302,8 @@ pub async fn handle_peer_announcement(
 ) -> Result<(), UiServerErrorWrapper> {
     known_peers.add_peer(&their_announce_address)?;
     info!(
-        "Peer announcement received via {:?}: local={:?} remote={} ({:?})",
-        discovery_method,
-        our_announce_address.connection_details,
-        their_announce_address.name,
-        their_announce_address.connection_details
+        "Peer announcement received via {:?}: local={:?} remote={:?}",
+        discovery_method, our_announce_address, their_announce_address,
     );
     // Check it is not ourself
     if our_announce_address == their_announce_address {
@@ -284,7 +325,8 @@ pub async fn handle_peer_announcement(
     debug!("Remote peer {their_announce_address:?}");
     return match handle_peer(
         hole_puncher.clone(),
-        &our_announce_address.connection_details,
+        ipv6_hole_puncher,
+        &our_announce_address,
         their_announce_address.clone(),
         discovery_method.clone(),
     )
@@ -318,14 +360,72 @@ pub async fn handle_peer_announcement(
     };
 }
 
-/// Handle a peer we have discovered - depending on NAT type
+/// Handle a peer we have discovered - depending on NAT type.
+///
+/// Prefers IPv6 when both peers advertise a v6 candidate; on error, falls back
+/// to IPv4 if both sides have a v4 candidate.
 pub async fn handle_peer(
     hole_puncher: Option<HolePuncher>,
+    ipv6_hole_puncher: Option<HolePuncher>,
+    local_announce_address: &AnnounceAddress,
+    remote_announce_address: AnnounceAddress,
+    discovery_method: DiscoveryMethod,
+) -> Result<(Option<DiscoveredPeer>, SocketAddr), UiServerErrorWrapper> {
+    let local_v6 = local_announce_address.get_ipv6_candidate();
+    let local_v4 = local_announce_address.get_ipv4_candidate();
+    // Clone the remote candidates up front so we can consume
+    // `remote_announce_address` when we hand it to `handle_connection_candidate`.
+    let remote_v6 = remote_announce_address.get_ipv6_candidate().cloned();
+    let remote_v4 = remote_announce_address.get_ipv4_candidate().cloned();
+
+    let can_use_v4 = local_v4.is_some() && remote_v4.is_some();
+
+    if let (Some(l6), Some(r6)) = (local_v6, remote_v6.as_ref()) {
+        match handle_connection_candidate(
+            ipv6_hole_puncher,
+            l6,
+            r6,
+            remote_announce_address.clone(),
+            discovery_method.clone(),
+        )
+        .await
+        {
+            Ok(result) => return Ok(result),
+            Err(err) if can_use_v4 => {
+                warn!(
+                    "IPv6 connection attempt for {} failed, falling back to IPv4: {err}",
+                    remote_announce_address.name
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    if let (Some(l4), Some(r4)) = (local_v4, remote_v4.as_ref()) {
+        return handle_connection_candidate(
+            hole_puncher,
+            l4,
+            r4,
+            remote_announce_address,
+            discovery_method,
+        )
+        .await;
+    }
+
+    Err(UiServerErrorWrapper(UiServerError::PeerDiscovery(format!(
+        "No matching IP protocol between local={local_announce_address:?} remote={remote_announce_address:?}"
+    ))))
+}
+
+/// Handle a peer we have discovered - depending on NAT type
+pub async fn handle_connection_candidate(
+    hole_puncher: Option<HolePuncher>,
     local: &PeerConnectionDetails,
+    remote: &PeerConnectionDetails,
     announce_address: AnnounceAddress,
     discovery_method: DiscoveryMethod,
 ) -> Result<(Option<DiscoveredPeer>, SocketAddr), UiServerErrorWrapper> {
-    match announce_address.connection_details {
+    match remote {
         PeerConnectionDetails::Symmetric(remote_ip) => match local {
             PeerConnectionDetails::Symmetric(_) => Err(UiServerError::PeerDiscovery(
                 "Symmetric to symmetric not yet supported".to_string(),
@@ -337,7 +437,7 @@ pub async fn handle_peer(
                         "Starting asymmetric->symmetric hole punch: remote_peer={} remote_ip={}",
                         announce_address.name, remote_ip
                     );
-                    let socket_address = puncher.hole_punch_peer_without_port(remote_ip).await?;
+                    let socket_address = puncher.hole_punch_peer_without_port(*remote_ip).await?;
                     info!(
                         "Asymmetric->symmetric hole punch found remote sender for {} at {}",
                         announce_address.name, socket_address
@@ -366,7 +466,7 @@ pub async fn handle_peer(
                                     "Starting asymmetric->asymmetric hole punch: peer={} local_public_addr={} remote_public_addr={}",
                                     announce_address.name, our_socket_address, socket_address
                                 );
-                                puncher.hole_punch_peer(socket_address).await?;
+                                puncher.hole_punch_peer(*socket_address).await?;
                                 info!(
                                     "Asymmetric->asymmetric hole punch completed for peer={} remote_public_addr={}",
                                     announce_address.name, socket_address
@@ -380,18 +480,18 @@ pub async fn handle_peer(
                             }
                             // Decide whether to connect or let them connect, by lexicographically
                             // comparing socket addresses
-                            Ok(if our_socket_address > &socket_address {
+                            Ok(if our_socket_address > socket_address {
                                 (
                                     Some(DiscoveredPeer {
                                         discovery_method,
                                         announce_address,
-                                        socket_address,
+                                        socket_address: *socket_address,
                                         socket_option: None,
                                     }),
-                                    socket_address,
+                                    *socket_address,
                                 )
                             } else {
-                                (None, socket_address)
+                                (None, *socket_address)
                             })
                         }
                         None => Err(UiServerError::PeerDiscovery(
@@ -405,7 +505,7 @@ pub async fn handle_peer(
                         "Starting birthday-paradox hard side: peer={} target_addr={}",
                         announce_address.name, socket_address
                     );
-                    let (socket, socket_address) = birthday_hard_side(socket_address).await?;
+                    let (socket, socket_address) = birthday_hard_side(*socket_address).await?;
                     info!(
                         "Birthday-paradox hard side obtained socket for peer={} target_addr={}",
                         announce_address.name, socket_address
@@ -435,19 +535,19 @@ pub async fn handle_peer(
                     // Automatic discovery can be observed by both peers, so it still uses a
                     // deterministic tie-break to avoid duplicate connections.
                     let should_connect = discovery_method == DiscoveryMethod::Direct
-                        || our_socket_address > &socket_address;
+                        || our_socket_address > socket_address;
                     Ok(if should_connect {
                         (
                             Some(DiscoveredPeer {
                                 discovery_method,
                                 announce_address,
-                                socket_address,
+                                socket_address: *socket_address,
                                 socket_option: None,
                             }),
-                            socket_address,
+                            *socket_address,
                         )
                     } else {
-                        (None, socket_address)
+                        (None, *socket_address)
                     })
                 }
                 PeerConnectionDetails::Symmetric(_) => {
@@ -458,20 +558,20 @@ pub async fn handle_peer(
                         Some(DiscoveredPeer {
                             discovery_method,
                             announce_address,
-                            socket_address,
+                            socket_address: *socket_address,
                             socket_option: Some(socket),
                         }),
-                        socket_address,
+                        *socket_address,
                     ))
                 }
                 _ => Ok((
                     Some(DiscoveredPeer {
                         discovery_method,
                         announce_address,
-                        socket_address,
+                        socket_address: *socket_address,
                         socket_option: None,
                     }),
-                    socket_address,
+                    *socket_address,
                 )),
             }
         }
@@ -488,25 +588,27 @@ pub struct PeerConnect {
 mod tests {
     use super::*;
 
-    fn announce_address(addr: SocketAddr) -> AnnounceAddress {
-        AnnounceAddress {
-            connection_details: PeerConnectionDetails::NoNat(addr),
-            name: "amberCloudYak".to_string(),
-        }
-    }
-
     #[tokio::test]
     async fn direct_no_nat_connects_even_when_tie_break_would_wait() {
-        let local = PeerConnectionDetails::NoNat("127.0.0.1:1000".parse().unwrap());
+        let local = AnnounceAddress::new(
+            "alice".to_string(),
+            PeerConnectionDetails::NoNat("127.0.0.1:1000".parse().unwrap()),
+            None,
+        );
         let remote_addr = "127.0.0.1:2000".parse().unwrap();
-        let remote = announce_address(remote_addr);
+        let remote = AnnounceAddress::new(
+            "bob".to_string(),
+            PeerConnectionDetails::NoNat(remote_addr),
+            None,
+        );
 
-        let (direct_peer, _) = handle_peer(None, &local, remote.clone(), DiscoveryMethod::Direct)
-            .await
-            .unwrap();
+        let (direct_peer, _) =
+            handle_peer(None, None, &local, remote.clone(), DiscoveryMethod::Direct)
+                .await
+                .unwrap();
         assert!(direct_peer.is_some());
 
-        let (mdns_peer, _) = handle_peer(None, &local, remote, DiscoveryMethod::Mdns)
+        let (mdns_peer, _) = handle_peer(None, None, &local, remote, DiscoveryMethod::Mdns)
             .await
             .unwrap();
         assert!(mdns_peer.is_none());

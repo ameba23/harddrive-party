@@ -6,179 +6,292 @@ use thiserror::Error;
 /// Details of an announced peer
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
 pub struct AnnounceAddress {
-    pub connection_details: PeerConnectionDetails,
+    connection_candidates: Vec<PeerConnectionDetails>,
     pub name: String,
 }
 
 impl AnnounceAddress {
-    /// Deserialize bytes to an AnnounceAddress - doing this manually gives us a small saving over
-    /// using bincode - meaning the addresses are slightly shorted
+    pub fn new(
+        name: String,
+        connection_details_ipv4: PeerConnectionDetails,
+        connection_details_ipv6: Option<PeerConnectionDetails>,
+    ) -> Self {
+        debug_assert!(connection_details_ipv4.is_ipv4());
+        let mut connection_candidates = vec![connection_details_ipv4];
+        if let Some(v6) = connection_details_ipv6 {
+            debug_assert!(v6.is_ipv6());
+            connection_candidates.push(v6);
+        }
+        Self {
+            name,
+            connection_candidates,
+        }
+    }
+
+    /// Only used to reconstruct after deserializing the internal candidate list
+    /// (e.g. from storage). Prefer [`Self::new`] for ordinary construction.
+    pub fn from_candidates(
+        name: String,
+        connection_candidates: Vec<PeerConnectionDetails>,
+    ) -> Self {
+        Self {
+            name,
+            connection_candidates,
+        }
+    }
+
+    pub fn get_ipv4_candidate(&self) -> Option<&PeerConnectionDetails> {
+        self.connection_candidates.iter().find(|c| c.is_ipv4())
+    }
+
+    pub fn get_ipv6_candidate(&self) -> Option<&PeerConnectionDetails> {
+        self.connection_candidates.iter().find(|c| c.is_ipv6())
+    }
+
+    pub fn connection_candidates(&self) -> &Vec<PeerConnectionDetails> {
+        &self.connection_candidates
+    }
+
+    pub fn has_ipv4_without_nat(&self) -> bool {
+        // TODO improve this — note the name reads inverted; returns true only
+        // when we advertise a direct v4 endpoint.
+        matches!(
+            self.get_ipv4_candidate(),
+            Some(PeerConnectionDetails::NoNat(_))
+        )
+    }
+
     pub fn from_string(input_string: String) -> Result<Self, AnnounceAddressDecodeError> {
-        let type_value: u8 = input_string
+        if input_string.is_empty() {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+        let shape_char = input_string
             .chars()
             .last()
+            .ok_or(AnnounceAddressDecodeError::BadLength)?;
+        let shape = Shape::from_hex(shape_char)?;
+
+        let body_bytes = shape.body_len();
+        let base64_chars = base64_len_no_pad(body_bytes);
+        if input_string.len() < 1 + base64_chars {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+        let name_end = input_string.len() - 1 - base64_chars;
+        let shape_start = input_string.len() - 1;
+
+        let name = input_string
+            .get(..name_end)
             .ok_or(AnnounceAddressDecodeError::BadLength)?
-            .to_string()
-            .parse()
-            .map_err(|_| AnnounceAddressDecodeError::ParseInt)?;
-
-        let suffux_length_bytes = match type_value {
-            0 => 4 + 2,
-            1 => 4,
-            2 => 4 + 2,
-            3 => 16 + 2,
-            4 => 16,
-            5 => 16 + 2,
-            _ => panic!("Bad type value"),
-        };
-        let suffix_length_chars = (suffux_length_bytes * 8usize).div_ceil(6);
-        let truncated_string = input_string
-            [input_string.len() - 1 - suffix_length_chars..input_string.len() - 1]
             .to_string();
-        let input = BASE64_STANDARD_NO_PAD.decode(truncated_string)?;
-        let name = &input_string[..input_string.len() - 1 - suffix_length_chars].to_string();
-        let (type_value, ip, port) = if type_value > 2 {
-            if input.len() < 16 {
-                return Err(AnnounceAddressDecodeError::BadLength);
-            }
-            // IPV6
-            let ip_bytes = &input[input.len() - 16..];
-            let ip_u128 = u128::from_be_bytes(
-                ip_bytes
-                    .try_into()
-                    .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
-            );
-            let ip = IpAddr::V6(Ipv6Addr::from_bits(ip_u128));
 
-            let type_value = type_value - 3;
-            let port = if type_value == 1 {
-                None
-            } else {
-                if input.len() < 16 + 2 {
-                    return Err(AnnounceAddressDecodeError::BadLength);
+        let body_b64 = input_string
+            .get(name_end..shape_start)
+            .ok_or(AnnounceAddressDecodeError::BadLength)?;
+
+        let body = BASE64_STANDARD_NO_PAD.decode(body_b64)?;
+        if body.len() != body_bytes {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+
+        let mut cursor = Cursor::new(&body);
+        let mut connection_candidates = Vec::with_capacity(shape.candidate_count());
+        if let Some(variant) = shape.v4 {
+            let ip = Ipv4Addr::from(cursor.take_array::<4>()?);
+            connection_candidates.push(match variant {
+                Variant::NoNat => PeerConnectionDetails::NoNat(SocketAddr::V4(SocketAddrV4::new(
+                    ip,
+                    cursor.take_u16()?,
+                ))),
+                Variant::Asymmetric => PeerConnectionDetails::Asymmetric(SocketAddr::V4(
+                    SocketAddrV4::new(ip, cursor.take_u16()?),
+                )),
+                Variant::Symmetric => PeerConnectionDetails::Symmetric(IpAddr::V4(ip)),
+            });
+        }
+        if let Some(variant) = shape.v6 {
+            let ip = Ipv6Addr::from(cursor.take_array::<16>()?);
+            connection_candidates.push(match variant {
+                Variant::NoNat => {
+                    let port = cursor.take_u16()?;
+                    let scope_id = cursor.take_u32()?;
+                    PeerConnectionDetails::NoNat(SocketAddr::V6(SocketAddrV6::new(
+                        ip, port, 0, scope_id,
+                    )))
                 }
-                let port_bytes = &input[input.len() - 16 - 2..input.len() - 16];
-
-                Some(u16::from_be_bytes(
-                    port_bytes
-                        .try_into()
-                        .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
-                ))
-            };
-
-            (type_value, ip, port)
-        } else {
-            if input.len() < 4 {
-                return Err(AnnounceAddressDecodeError::BadLength);
-            }
-            let ip_bytes = &input[input.len() - 4..];
-            let ip_u32 = u32::from_be_bytes(
-                ip_bytes
-                    .try_into()
-                    .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
-            );
-            let ip = IpAddr::V4(Ipv4Addr::from_bits(ip_u32));
-
-            let port = if type_value == 1 {
-                None
-            } else {
-                if input.len() < 4 + 2 {
-                    return Err(AnnounceAddressDecodeError::BadLength);
+                Variant::Asymmetric => {
+                    let port = cursor.take_u16()?;
+                    let scope_id = cursor.take_u32()?;
+                    PeerConnectionDetails::Asymmetric(SocketAddr::V6(SocketAddrV6::new(
+                        ip, port, 0, scope_id,
+                    )))
                 }
-
-                let port_bytes = &input[input.len() - 4 - 2..input.len() - 4];
-
-                Some(u16::from_be_bytes(
-                    port_bytes
-                        .try_into()
-                        .map_err(|_| AnnounceAddressDecodeError::BadLength)?,
-                ))
-            };
-            (type_value, ip, port)
-        };
-
-        let connection_details = match type_value {
-            0 => {
-                let port = port.ok_or(AnnounceAddressDecodeError::NoPort)?;
-                let socket_addr = match ip {
-                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port)),
-                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)),
-                };
-                PeerConnectionDetails::NoNat(socket_addr)
-            }
-            1 => PeerConnectionDetails::Symmetric(ip),
-            2 => {
-                let port = port.ok_or(AnnounceAddressDecodeError::NoPort)?;
-                let socket_addr = match ip {
-                    IpAddr::V4(ip) => SocketAddr::V4(SocketAddrV4::new(ip, port)),
-                    IpAddr::V6(ip) => SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)),
-                };
-                PeerConnectionDetails::Asymmetric(socket_addr)
-            }
-            _ => return Err(AnnounceAddressDecodeError::UnrecognizedTypeValue),
-        };
+                Variant::Symmetric => PeerConnectionDetails::Symmetric(IpAddr::V6(ip)),
+            });
+        }
 
         Ok(AnnounceAddress {
-            connection_details,
-            name: name.to_string(),
+            name,
+            connection_candidates,
         })
     }
 }
 
 impl std::fmt::Display for AnnounceAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut type_value = match self.connection_details {
-            PeerConnectionDetails::NoNat(_) => 0,
-            PeerConnectionDetails::Symmetric(_) => 1,
-            PeerConnectionDetails::Asymmetric(_) => 2,
-        };
+        let mut body = Vec::new();
+        let mut shape = Shape { v4: None, v6: None };
 
-        if self.connection_details.ip().is_ipv6() {
-            type_value += 3;
+        if let Some(v4) = self.get_ipv4_candidate() {
+            match v4 {
+                PeerConnectionDetails::NoNat(SocketAddr::V4(sa)) => {
+                    shape.v4 = Some(Variant::NoNat);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                }
+                PeerConnectionDetails::Asymmetric(SocketAddr::V4(sa)) => {
+                    shape.v4 = Some(Variant::Asymmetric);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                }
+                PeerConnectionDetails::Symmetric(IpAddr::V4(ip)) => {
+                    shape.v4 = Some(Variant::Symmetric);
+                    body.extend_from_slice(&ip.octets());
+                }
+                _ => {}
+            }
         }
-        let ip = match self.connection_details.ip() {
-            IpAddr::V4(ip_v4) => {
-                let ip_bits = ip_v4.to_bits();
-                let ip_bytes = ip_bits.to_be_bytes();
-                ip_bytes.to_vec()
+
+        if let Some(v6) = self.get_ipv6_candidate() {
+            match v6 {
+                PeerConnectionDetails::NoNat(SocketAddr::V6(sa)) => {
+                    shape.v6 = Some(Variant::NoNat);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                    body.extend_from_slice(&sa.scope_id().to_be_bytes());
+                }
+                PeerConnectionDetails::Asymmetric(SocketAddr::V6(sa)) => {
+                    shape.v6 = Some(Variant::Asymmetric);
+                    body.extend_from_slice(&sa.ip().octets());
+                    body.extend_from_slice(&sa.port().to_be_bytes());
+                    body.extend_from_slice(&sa.scope_id().to_be_bytes());
+                }
+                PeerConnectionDetails::Symmetric(IpAddr::V6(ip)) => {
+                    shape.v6 = Some(Variant::Symmetric);
+                    body.extend_from_slice(&ip.octets());
+                }
+                _ => {}
             }
-            IpAddr::V6(ip_v6) => {
-                let ip_bits = ip_v6.to_bits();
-                let ip_bytes = ip_bits.to_be_bytes();
-                ip_bytes.to_vec()
-            }
-        };
+        }
 
-        let port = match self.connection_details.port() {
-            Some(port) => port.to_be_bytes().to_vec(),
-            None => Vec::new(),
-        };
-
-        let mut connection_details: Vec<u8> = Vec::new();
-        connection_details.extend_from_slice(&port);
-        connection_details.extend_from_slice(&ip);
-        let connection_details_string = BASE64_STANDARD_NO_PAD.encode(&connection_details);
-
-        write!(
-            f,
-            "{}{}{}",
-            self.name, connection_details_string, type_value,
-        )
+        let base64 = BASE64_STANDARD_NO_PAD.encode(&body);
+        write!(f, "{}{}{:x}", self.name, base64, shape.to_nibble())
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Variant {
+    NoNat = 1,
+    Asymmetric = 2,
+    Symmetric = 3,
+}
+
+impl Variant {
+    fn from_bits(bits: u8) -> Option<Self> {
+        match bits & 0x3 {
+            1 => Some(Variant::NoNat),
+            2 => Some(Variant::Asymmetric),
+            3 => Some(Variant::Symmetric),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Shape {
+    v4: Option<Variant>,
+    v6: Option<Variant>,
+}
+
+impl Shape {
+    fn from_hex(c: char) -> Result<Self, AnnounceAddressDecodeError> {
+        let nibble = c
+            .to_digit(16)
+            .ok_or(AnnounceAddressDecodeError::UnrecognizedShape)? as u8;
+        let v4 = Variant::from_bits(nibble);
+        let v6 = Variant::from_bits(nibble >> 2);
+        if v4.is_none() && v6.is_none() {
+            return Err(AnnounceAddressDecodeError::UnrecognizedShape);
+        }
+        Ok(Shape { v4, v6 })
+    }
+
+    fn to_nibble(self) -> u8 {
+        let v4 = self.v4.map(|v| v as u8).unwrap_or(0);
+        let v6 = self.v6.map(|v| v as u8).unwrap_or(0);
+        (v6 << 2) | v4
+    }
+
+    fn candidate_count(self) -> usize {
+        self.v4.is_some() as usize + self.v6.is_some() as usize
+    }
+
+    fn body_len(self) -> usize {
+        // v4 body: 4-byte IP, plus a 2-byte port for the variants that carry one.
+        let v4 = match self.v4 {
+            None => 0,
+            Some(Variant::Symmetric) => 4,
+            Some(Variant::NoNat | Variant::Asymmetric) => 4 + 2,
+        };
+        // v6 body: 16-byte IP; NoNat/Asymmetric additionally carry a 2-byte port
+        // and a 4-byte scope_id (Symmetric v6 is just an IpAddr, no scope).
+        let v6 = match self.v6 {
+            None => 0,
+            Some(Variant::Symmetric) => 16,
+            Some(Variant::NoNat | Variant::Asymmetric) => 16 + 2 + 4,
+        };
+        v4 + v6
+    }
+}
+
+struct Cursor<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
+    }
+    fn take_array<const N: usize>(&mut self) -> Result<[u8; N], AnnounceAddressDecodeError> {
+        if self.pos + N > self.buf.len() {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+        let mut out = [0u8; N];
+        out.copy_from_slice(&self.buf[self.pos..self.pos + N]);
+        self.pos += N;
+        Ok(out)
+    }
+    fn take_u16(&mut self) -> Result<u16, AnnounceAddressDecodeError> {
+        Ok(u16::from_be_bytes(self.take_array::<2>()?))
+    }
+    fn take_u32(&mut self) -> Result<u32, AnnounceAddressDecodeError> {
+        Ok(u32::from_be_bytes(self.take_array::<4>()?))
+    }
+}
+
+/// Chars produced by [`BASE64_STANDARD_NO_PAD`] for `n` input bytes
+fn base64_len_no_pad(n: usize) -> usize {
+    (n * 4).div_ceil(3)
 }
 
 #[derive(Error, Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum AnnounceAddressDecodeError {
     #[error("Bad length")]
     BadLength,
-    #[error("Type value is invalid")]
-    UnrecognizedTypeValue,
-    #[error("Cannot parse integer")]
-    ParseInt,
+    #[error("Unrecognized shape marker")]
+    UnrecognizedShape,
     #[error("Bad base64")]
     Base64(String),
-    #[error("No port given when one was expected")]
-    NoPort,
 }
 
 impl From<base64::DecodeError> for AnnounceAddressDecodeError {
@@ -212,6 +325,14 @@ impl PeerConnectionDetails {
             PeerConnectionDetails::Symmetric(_) => None,
         }
     }
+
+    pub fn is_ipv4(&self) -> bool {
+        self.ip().is_ipv4()
+    }
+
+    pub fn is_ipv6(&self) -> bool {
+        self.ip().is_ipv6()
+    }
 }
 
 impl std::fmt::Display for PeerConnectionDetails {
@@ -236,49 +357,131 @@ impl std::fmt::Display for PeerConnectionDetails {
 mod tests {
     use super::*;
 
-    #[test]
-    fn announce_address_encoding() {
-        let announce_addresses = vec![
-            // IPV4
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::NoNat("127.0.0.1:3000".parse().unwrap()),
-                name: "foobar".to_string(),
-            },
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap()),
-                name: "angryOstrich".to_string(),
-            },
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::Asymmetric(
-                    "8.8.8.8:2000".parse().unwrap(),
-                ),
-                name: "wagglingWallaby".to_string(),
-            },
-            // IPV6
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::NoNat(
-                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
-                ),
-                name: "foobar".to_string(),
-            },
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::Symmetric(
-                    "2001:db8:85a3::8a2e:370:7334".parse().unwrap(),
-                ),
-                name: "angryOstrich".to_string(),
-            },
-            AnnounceAddress {
-                connection_details: PeerConnectionDetails::Asymmetric(
-                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
-                ),
-                name: "wagglingWallaby".to_string(),
-            },
-        ];
+    /// Convert to and from string representation
+    fn roundtrip(a: AnnounceAddress) {
+        let s = a.to_string();
+        let b = AnnounceAddress::from_string(s.clone())
+            .unwrap_or_else(|e| panic!("decode failed for {s:?}: {e}"));
+        assert_eq!(a, b, "roundtrip mismatch for {s:?}");
+    }
 
-        for announce_address in announce_addresses {
-            let string = announce_address.to_string();
-            let announce_address_2 = AnnounceAddress::from_string(string).unwrap();
-            assert_eq!(announce_address, announce_address_2);
+    // Tests use struct-literal construction so that we can exercise v6-only
+    // and multi-candidate shapes that AnnounceAddress::new() doesn't produce.
+    fn addr(name: &str, candidates: Vec<PeerConnectionDetails>) -> AnnounceAddress {
+        AnnounceAddress {
+            name: name.to_string(),
+            connection_candidates: candidates,
         }
+    }
+
+    #[test]
+    fn roundtrip_v4_only() {
+        for a in [
+            addr(
+                "foobar",
+                vec![PeerConnectionDetails::NoNat(
+                    "127.0.0.1:3000".parse().unwrap(),
+                )],
+            ),
+            addr(
+                "angryOstrich",
+                vec![PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap())],
+            ),
+            addr(
+                "wagglingWallaby",
+                vec![PeerConnectionDetails::Asymmetric(
+                    "8.8.8.8:2000".parse().unwrap(),
+                )],
+            ),
+        ] {
+            roundtrip(a);
+        }
+    }
+
+    #[test]
+    fn roundtrip_v6_only() {
+        for a in [
+            addr(
+                "foobar",
+                vec![PeerConnectionDetails::NoNat(
+                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
+                )],
+            ),
+            addr(
+                "angryOstrich",
+                vec![PeerConnectionDetails::Symmetric(
+                    "2001:db8:85a3::8a2e:370:7334".parse().unwrap(),
+                )],
+            ),
+            addr(
+                "wagglingWallaby",
+                vec![PeerConnectionDetails::Asymmetric(
+                    "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
+                )],
+            ),
+        ] {
+            roundtrip(a);
+        }
+    }
+
+    #[test]
+    fn roundtrip_v4_plus_v6() {
+        roundtrip(AnnounceAddress::new(
+            "dualstackDuck".to_string(),
+            PeerConnectionDetails::NoNat("192.168.1.5:1234".parse().unwrap()),
+            Some(PeerConnectionDetails::NoNat(
+                "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
+            )),
+        ));
+        roundtrip(AnnounceAddress::new(
+            "mobileMouse".to_string(),
+            PeerConnectionDetails::Asymmetric("1.2.3.4:9999".parse().unwrap()),
+            Some(PeerConnectionDetails::Symmetric(
+                "2001:db8::1".parse().unwrap(),
+            )),
+        ));
+    }
+
+    #[test]
+    fn roundtrip_preserves_v6_scope_id() {
+        let sa = SocketAddrV6::new("fe80::1".parse().unwrap(), 1234, 0, 7);
+        let a = addr(
+            "linkLocalLemur",
+            vec![PeerConnectionDetails::NoNat(SocketAddr::V6(sa))],
+        );
+        roundtrip(a);
+    }
+
+    #[test]
+    fn empty_input_errors() {
+        assert_eq!(
+            AnnounceAddress::from_string(String::new()).unwrap_err(),
+            AnnounceAddressDecodeError::BadLength,
+        );
+    }
+
+    #[test]
+    fn zero_shape_errors() {
+        assert_eq!(
+            AnnounceAddress::from_string("x0".to_string()).unwrap_err(),
+            AnnounceAddressDecodeError::UnrecognizedShape,
+        );
+    }
+
+    #[test]
+    fn non_hex_shape_errors() {
+        assert_eq!(
+            AnnounceAddress::from_string("abcz".to_string()).unwrap_err(),
+            AnnounceAddressDecodeError::UnrecognizedShape,
+        );
+    }
+
+    #[test]
+    fn truncated_body_errors() {
+        // shape=1 → v4 NoNat body = 6 bytes = 8 base64 chars, but we give 2.
+        assert_eq!(
+            AnnounceAddress::from_string("nameXY1".to_string()).unwrap_err(),
+            AnnounceAddressDecodeError::BadLength,
+        );
     }
 }
