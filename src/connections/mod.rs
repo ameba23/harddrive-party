@@ -180,7 +180,7 @@ impl Hdp {
                         cert_der.clone(),
                         priv_key_der.clone_key(),
                         shared_state.known_peers.clone(),
-                        peer_discovery.use_client_verification(),
+                        peer_discovery.use_client_verification_on_ipv4(),
                     )
                     .await?,
                 )
@@ -201,7 +201,8 @@ impl Hdp {
                     cert_der,
                     priv_key_der,
                     shared_state.known_peers.clone(),
-                    true,
+                    // No client verification, because we are publicly addressable
+                    false,
                 )
                 .await?,
             ),

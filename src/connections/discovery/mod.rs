@@ -171,7 +171,7 @@ impl PeerDiscovery {
         };
 
         let ipv6_connection_details = match ipv6_socket {
-            Some(ref s) => Some(PeerConnectionDetails::NoNat(s.local_addr()?)),
+            Some(ref s) => Some(PeerConnectionDetails::Asymmetric(s.local_addr()?)),
             None => None,
         };
 
@@ -265,7 +265,7 @@ impl PeerDiscovery {
     ///
     /// If we are not behind NAT we allow connections without needing to
     /// know their announce address (containing public key) up front
-    pub fn use_client_verification(&self) -> bool {
+    pub fn use_client_verification_on_ipv4(&self) -> bool {
         !self.announce_address.has_ipv4_without_nat()
     }
 }
