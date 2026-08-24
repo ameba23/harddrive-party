@@ -91,7 +91,7 @@ impl MdnsServer {
                         }
                     }
                     ServiceEvent::ServiceRemoved(_type, fullname) => {
-                        debug!("mdns peer removed {:?}", &fullname);
+                        debug!("mdns peer removed {:?}", fullname);
                     }
                     _ => {}
                 }
