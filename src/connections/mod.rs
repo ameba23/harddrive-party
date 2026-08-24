@@ -406,6 +406,12 @@ async fn handle_connection(
 ) -> Result<(), UiServerError> {
     let (peer_name, peer_id) = certificate_to_name(remote_cert)
         .map_err(|err| UiServerError::PeerDiscovery(err.to_string()))?;
+    if peer_id == shared_state.id {
+        conn.close(1u32.into(), b"self connection");
+        return Err(UiServerError::ConnectionError(
+            "Refusing connection to our own peer identity".to_string(),
+        ));
+    }
     let peer_info = PeerInfo {
         id: peer_id,
         name: peer_name.clone(),

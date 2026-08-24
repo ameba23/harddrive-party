@@ -262,7 +262,6 @@ pub async fn handle_peer_announcement(
     discovery_method: DiscoveryMethod,
     known_peers: KnownPeers,
 ) -> Result<(), UiServerErrorWrapper> {
-    known_peers.add_peer(&their_announce_address)?;
     info!(
         "Peer announcement received via {:?}: local={:?} remote={} ({:?})",
         discovery_method,
@@ -271,9 +270,12 @@ pub async fn handle_peer_announcement(
         their_announce_address.connection_details
     );
     // Check it is not ourself
-    if our_announce_address == their_announce_address {
+    if our_announce_address.public_key == their_announce_address.public_key {
         return Err(UiServerError::PeerDiscovery("Cannot connect to ourself".to_string()).into());
     }
+
+    // Persist as a known peer
+    known_peers.add_peer(&their_announce_address)?;
 
     // Check that we are not already connected to this peer
     if peers
@@ -497,6 +499,7 @@ pub struct PeerConnect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn announce_address(addr: SocketAddr) -> AnnounceAddress {
         AnnounceAddress {
@@ -520,6 +523,39 @@ mod tests {
             .await
             .unwrap();
         assert!(mdns_peer.is_none());
+    }
+
+    #[tokio::test]
+    async fn reflected_self_announcement_is_rejected_before_persistence() {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage.path()).unwrap();
+        let known_peers = KnownPeers::new(db.open_tree(b"known").unwrap());
+        let public_key = PeerId::new([7; 32]);
+        let ours = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1000".parse().unwrap()),
+            public_key,
+        };
+        let reflected_old_address = AnnounceAddress {
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:2000".parse().unwrap()),
+            public_key,
+        };
+        let (peers_tx, _peers_rx) = channel(1);
+
+        let error = handle_peer_announcement(
+            None,
+            ours,
+            peers_tx,
+            Default::default(),
+            Default::default(),
+            reflected_old_address,
+            DiscoveryMethod::Gossip,
+            known_peers.clone(),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Cannot connect to ourself"));
+        assert!(!known_peers.has(&public_key));
     }
 
     #[test]
