@@ -16,15 +16,19 @@ use crate::{
     },
     errors::UiServerErrorWrapper,
     peer::Peer,
-    subtree_names::{CONFIG, KNOWN_PEERS},
-    ui_messages::{UiEvent, UiServerError},
+    subtree_names::{CONFIG, KNOWN_PEERS_V1},
+    ui_messages::{PeerInfo, UiEvent, UiServerError},
     wire_messages::{AnnouncePeer, Request},
     SharedState,
 };
-use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
+use harddrive_party_shared::{
+    wire_messages::{AnnounceAddress, PeerConnectionDetails},
+    PeerId,
+};
 use log::{debug, error, info, warn};
 use quinn::Endpoint;
 use rand::Rng;
+use ring::signature::{Ed25519KeyPair, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use std::{
     collections::HashMap,
@@ -44,9 +48,6 @@ use x509_parser::prelude::{FromDer, X509Certificate};
 /// The maximum number of bytes a request message may be
 const MAX_REQUEST_SIZE: usize = 1024;
 
-/// The size in bytes of a public key (certificate hash)
-const PUBLIC_KEY_LENGTH: usize = 32;
-
 /// Number of times to attempt to reconnect to a peer following lost connection
 const RECONNECT_MAX_ATTEMPTS: usize = 20;
 /// Initial delay for reconnection attempt (backs off exponentially)
@@ -55,8 +56,6 @@ const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_secs(120);
 /// How long to wait for the QUIC endpoint to drain during graceful shutdown.
 const SHUTDOWN_WAIT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
-type PublicKey = [u8; PUBLIC_KEY_LENGTH];
-
 /// A harddrive-party instance
 pub struct Hdp {
     /// Shared state between UI server and backend
@@ -113,10 +112,10 @@ impl Hdp {
         };
 
         // Derive a human-readable name from the public key
-        let (name, pk_hash) =
+        let (name, peer_id) =
             certificate_to_name(CertificateDer::from_slice(&cert_der.clone()).into_owned())?;
 
-        let peers: Arc<Mutex<HashMap<String, Peer>>> = Default::default();
+        let peers: Arc<Mutex<HashMap<PeerId, Peer>>> = Default::default();
 
         // Read the port from storage
         // We attempt to use the same port as last time if possible, so that if the process is
@@ -133,12 +132,12 @@ impl Hdp {
             })
             .flatten();
 
-        let known_peers_db = db.open_tree(KNOWN_PEERS)?;
+        let known_peers_db = db.open_tree(KNOWN_PEERS_V1)?;
 
         // Setup peer discovery
         let (socket_option, peer_discovery) = PeerDiscovery::new(
             use_mdns,
-            pk_hash,
+            peer_id,
             peers.clone(),
             local_addr,
             last_used_port,
@@ -148,16 +147,34 @@ impl Hdp {
         .await?;
 
         let (graceful_shutdown_tx, graceful_shutdown_rx) = mpsc::channel(1);
+        let signing_key = Ed25519KeyPair::from_pkcs8(priv_key_der.secret_der())
+            .map_err(|_| anyhow::anyhow!("stored Ed25519 private key is invalid"))?;
+        if signing_key.public_key().as_ref() != peer_id.as_bytes() {
+            return Err(anyhow::anyhow!(
+                "stored certificate and Ed25519 private key do not match"
+            ));
+        }
+        let signing_bytes = AnnouncePeer::signing_bytes(&peer_discovery.announce_address)?;
+        let self_announcement = AnnouncePeer {
+            announce_address: peer_discovery.announce_address.clone(),
+            signature: signing_key
+                .sign(&signing_bytes)
+                .as_ref()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("Ed25519 produced an invalid signature length"))?,
+        };
 
         // Setup shared state used by UI server
         let shared_state = SharedState::new(
             db,
             share_dirs,
             download_dir,
+            peer_id,
             name,
             peer_discovery.peer_announce_tx.clone(),
             peers,
             peer_discovery.announce_address.clone(),
+            self_announcement,
             graceful_shutdown_tx,
             peer_discovery.known_peers.clone(),
         )
@@ -201,6 +218,7 @@ impl Hdp {
                 peer_discovery.peer_announce_tx.clone(),
                 shared_state.peers.clone(),
                 shared_state.known_peers.clone(),
+                shared_state.verified_announcements.clone(),
             ),
             server_connection,
             peer_discovery,
@@ -241,7 +259,10 @@ impl Hdp {
                     discovery_method: DiscoveryMethod::Direct,
                     announce_address,
                 };
-                info!("Connecting to known peer... {}", peer.announce_address.name);
+                info!(
+                    "Connecting to known peer... {}",
+                    PeerInfo::from_id(peer.announce_address.public_key).name
+                );
                 spawn_outbound_connect(
                     self.server_connection.clone(),
                     self.shared_state.clone(),
@@ -265,8 +286,8 @@ impl Hdp {
                     ).await {
                         error!("Error when handling incoming peer connection {err:?}");
                          if let Some((_, announce_address)) = maybe_peer_details {
-                            let name = announce_address.name;
-                             self.shared_state.send_event(UiEvent::PeerConnectionFailed { name, error: err.to_string() }).await;
+                            let peer = PeerInfo::from_id(announce_address.public_key);
+                             self.shared_state.send_event(UiEvent::PeerConnectionFailed { peer, error: err.to_string() }).await;
                         }
                     }
                 }
@@ -317,10 +338,14 @@ fn spawn_outbound_connect(
     rpc: Rpc,
     peer: DiscoveredPeer,
 ) {
-    let name = peer.announce_address.name.clone();
+    let peer_id = peer.announce_address.public_key;
+    let peer_info = PeerInfo::from_id(peer_id);
     tokio::spawn(async move {
-        if !begin_outbound_connect(&shared_state, &name).await {
-            debug!("Skipping outbound connect to {name}; already connected or pending");
+        if !begin_outbound_connect(&shared_state, peer_id).await {
+            debug!(
+                "Skipping outbound connect to {} ({}); already connected or pending",
+                peer_info.name, peer_id
+            );
             return;
         }
 
@@ -329,13 +354,16 @@ fn spawn_outbound_connect(
             .pending_outbound_connections
             .lock()
             .await
-            .remove(&name);
+            .remove(&peer_id);
 
         if let Err(err) = result {
-            error!("Cannot connect to peer {name}: {err:?}");
+            error!(
+                "Cannot connect to peer {} ({}): {err:?}",
+                peer_info.name, peer_id
+            );
             shared_state
                 .send_event(UiEvent::PeerConnectionFailed {
-                    name,
+                    peer: peer_info,
                     error: err.to_string(),
                 })
                 .await;
@@ -344,26 +372,26 @@ fn spawn_outbound_connect(
 }
 
 /// Reserve an outbound connect slot unless the peer is already connected or pending.
-async fn begin_outbound_connect(shared_state: &SharedState, peer_name: &str) -> bool {
+async fn begin_outbound_connect(shared_state: &SharedState, peer_id: PeerId) -> bool {
     if shared_state
         .pending_outbound_connections
         .lock()
         .await
-        .contains(peer_name)
+        .contains(&peer_id)
     {
         return false;
     }
 
-    if shared_state.peers.lock().await.contains_key(peer_name) {
+    if shared_state.peers.lock().await.contains_key(&peer_id) {
         return false;
     }
 
     let mut pending = shared_state.pending_outbound_connections.lock().await;
-    if pending.contains(peer_name) {
+    if pending.contains(&peer_id) {
         return false;
     }
 
-    pending.insert(peer_name.to_string());
+    pending.insert(peer_id);
     true
 }
 
@@ -376,8 +404,21 @@ async fn handle_connection(
     maybe_peer_details: Option<(DiscoveryMethod, AnnounceAddress)>,
     remote_cert: CertificateDer<'static>,
 ) -> Result<(), UiServerError> {
-    let (peer_name, peer_public_key) = certificate_to_name(remote_cert)
+    let (peer_name, peer_id) = certificate_to_name(remote_cert)
         .map_err(|err| UiServerError::PeerDiscovery(err.to_string()))?;
+    let peer_info = PeerInfo {
+        id: peer_id,
+        name: peer_name.clone(),
+    };
+    if maybe_peer_details
+        .as_ref()
+        .is_some_and(|(_, address)| address.public_key != peer_id)
+    {
+        conn.close(1u32.into(), b"announce key does not match TLS certificate");
+        return Err(UiServerError::ConnectionError(
+            "Announced public key does not match TLS certificate".to_string(),
+        ));
+    }
 
     debug!("[{}] Connected to peer {}", shared_state.name, peer_name);
 
@@ -385,12 +426,12 @@ async fn handle_connection(
     let conn_stable_id = conn.stable_id();
 
     tokio::spawn(async move {
-        let (peer_connection, other_connections, other_announces) = {
+        let peer_connection = {
             let manually_disconnected = shared_state
                 .manually_disconnected_peers
                 .lock()
                 .await
-                .contains(&peer_name);
+                .contains(&peer_id);
             if manually_disconnected {
                 debug!("Rejecting connection from {peer_name} because it is manually disconnected");
                 conn.close(0u32.into(), b"manually disconnected");
@@ -398,95 +439,72 @@ async fn handle_connection(
             }
 
             let mut peers = shared_state.peers.lock().await;
-            if let Some(existing_peer) = peers.get(&peer_name) {
+            if let Some(existing_peer) = peers.get(&peer_id) {
                 if existing_peer.connection.close_reason().is_none() {
                     warn!("Duplicate connection for {peer_name}; keeping existing connection");
                     conn.close(0u32.into(), b"duplicate connection");
                     return;
                 }
 
-                let replaced_peer = peers
-                    .remove(&peer_name)
-                    .expect("peer should exist after get");
+                let replaced_peer = peers.remove(&peer_id).expect("peer should exist after get");
                 debug!("Replacing existing connection for {peer_name}");
                 replaced_peer
                     .connection
                     .close(0u32.into(), b"replaced connection");
             }
 
-            let other_connections = peers
-                .values()
-                .map(|other_peer| other_peer.connection.clone())
-                .collect::<Vec<_>>();
-            let other_announces = peers
-                .values()
-                .filter_map(|other_peer| other_peer.announce_address.clone())
-                .collect::<Vec<_>>();
-
             let peer = Peer::new(
                 conn.clone(),
                 shared_state.event_broadcaster.clone(),
                 shared_state.download_dir.clone(),
-                peer_public_key,
+                peer_id,
                 shared_state.wishlist.clone(),
-                announce_address.clone(),
+                None,
             );
             let peer_connection = peer.connection.clone();
-            peers.insert(peer_name.clone(), peer);
+            peers.insert(peer_id, peer);
             let direction = if incoming { "incoming" } else { "outgoing" };
             info!("[{}] connected to {} peers", direction, peers.len());
-            (peer_connection, other_connections, other_announces)
+            peer_connection
         };
 
         shared_state
             .manually_disconnected_peers
             .lock()
             .await
-            .remove(&peer_name);
+            .remove(&peer_id);
 
-        if !incoming {
-            let self_announce = Request::AnnouncePeer(AnnouncePeer {
-                announce_address: shared_state.announce_address.clone(),
-            });
-            if let Err(err) = SharedState::request_connection(self_announce, &peer_connection).await
-            {
-                warn!("Could not self-announce to {peer_name}: {err}");
-            }
+        let self_announce = Request::AnnouncePeer(shared_state.self_announcement.clone());
+        if let Err(err) = SharedState::request_connection(self_announce, &peer_connection).await {
+            warn!("Could not self-announce to {peer_name}: {err}");
         }
 
-        if let Some(ref announce_address) = announce_address {
-            let announce_peer = Request::AnnouncePeer(AnnouncePeer {
-                announce_address: announce_address.clone(),
-            });
-
-            for other_connection in other_connections {
-                if let Err(err) =
-                    SharedState::request_connection(announce_peer.clone(), &other_connection).await
-                {
-                    error!("Failed to send announce message: {err:?}");
-                }
-            }
-        }
-
-        for announce_address_other in other_announces {
-            let request = Request::AnnouncePeer(AnnouncePeer {
-                announce_address: announce_address_other,
-            });
+        // Existing records are already signature-verified. Send them only after our
+        // self-announcement so the receiver can authenticate this connection first.
+        let verified_announcements = shared_state
+            .verified_announcements
+            .lock()
+            .await
+            .values()
+            .filter(|announcement| announcement.peer_id() != peer_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        for announcement in verified_announcements {
+            let request = Request::AnnouncePeer(announcement);
             if let Err(err) = SharedState::request_connection(request, &peer_connection).await {
                 error!("Failed to send announce message to new peer: {err:?}");
             }
         }
-
         shared_state
             .send_event(UiEvent::PeerConnected {
-                name: peer_name.clone(),
+                peer: peer_info.clone(),
             })
             .await;
 
         let err = loop {
             match accept_incoming_request(&conn).await {
                 Ok((send, buf)) => {
-                    rpc.request(buf, send, peer_name.clone()).await;
+                    rpc.request(buf, send, peer_id).await;
                 }
                 Err(err) => {
                     warn!("Failed to handle request: {err:?}");
@@ -497,19 +515,20 @@ async fn handle_connection(
 
         let (was_connected, reconnect_announce_address) = {
             let mut peers = shared_state.peers.lock().await;
-            let maybe_announce_address = peers.get(&peer_name).and_then(|peer| {
-                (peer.connection.stable_id() == conn_stable_id)
-                    .then(|| peer.announce_address.clone())
+            let is_current_connection = peers
+                .get(&peer_id)
+                .is_some_and(|peer| peer.connection.stable_id() == conn_stable_id);
+            let maybe_announce_address = peers.get(&peer_id).and_then(|peer| {
+                peer.announcement
+                    .as_ref()
+                    .map(|announcement| announcement.announce_address.clone())
             });
-            let should_remove = maybe_announce_address.is_some();
-            if should_remove {
-                peers.remove(&peer_name);
+            if is_current_connection {
+                peers.remove(&peer_id);
             }
             (
-                should_remove,
-                announce_address
-                    .clone()
-                    .or(maybe_announce_address.flatten()),
+                is_current_connection,
+                announce_address.clone().or(maybe_announce_address),
             )
         };
 
@@ -517,7 +536,7 @@ async fn handle_connection(
             info!("Peer disconnected: {} ({})", peer_name, err);
             shared_state
                 .send_event(UiEvent::PeerDisconnected {
-                    name: peer_name.clone(),
+                    peer: peer_info.clone(),
                     error: err.to_string(),
                 })
                 .await;
@@ -540,7 +559,7 @@ async fn handle_connection(
             .manually_disconnected_peers
             .lock()
             .await
-            .contains(&peer_name)
+            .contains(&peer_id)
         {
             debug!(
                 "Skipping reconnect to {} because it was intentionally disconnected",
@@ -652,7 +671,7 @@ async fn connect_to_peer(
 /// This internally verifies the signature, and only accepts Ed25519.
 pub fn certificate_to_name(
     cert: CertificateDer<'static>,
-) -> Result<(String, PublicKey), rustls::Error> {
+) -> Result<(String, PeerId), rustls::Error> {
     let (_, cert) = X509Certificate::from_der(&cert)
         .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
 
@@ -673,7 +692,10 @@ pub fn certificate_to_name(
         .try_into()
         .map_err(|_| rustls::Error::InvalidCertificate(rustls::CertificateError::BadEncoding))?;
 
-    Ok((key_to_animal::key_to_name(&public_key), public_key))
+    Ok((
+        key_to_animal::key_to_name(&public_key),
+        PeerId::new(public_key),
+    ))
 }
 
 /// Accept an incoming request on a QUIC connection, and read the request message

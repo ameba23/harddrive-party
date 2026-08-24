@@ -73,8 +73,8 @@ pub fn Shares(
                 }
             }}
             {move || {
-                match app_context.own_name.get() {
-                    Some(name) => Either::Left(view! { <Peer name is_self=true /> }),
+                match app_context.own_peer.get() {
+                    Some(peer) => Either::Left(view! { <Peer peer is_self=true /> }),
                     None => Either::Right(view! { <span /> }),
                 }
             }}

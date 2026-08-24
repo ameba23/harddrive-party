@@ -1,4 +1,5 @@
 use crate::{display_bytes, AppContext, PeerPath};
+use harddrive_party_shared::ui_messages::PeerInfo;
 use leptos::prelude::*;
 use leptos_router::hooks::{use_location, use_navigate};
 use std::collections::HashSet;
@@ -6,8 +7,8 @@ use thaw::*;
 
 #[component]
 pub fn HdpHeader(
-    peers: ReadSignal<HashSet<String>>,
-    own_name: ReadSignal<Option<String>>,
+    peers: ReadSignal<HashSet<PeerInfo>>,
+    own_peer: ReadSignal<Option<PeerInfo>>,
 ) -> impl IntoView {
     let location = use_location();
     let selected_value = location.pathname;
@@ -15,10 +16,10 @@ pub fn HdpHeader(
 
     let files = use_context::<AppContext>().unwrap().get_files;
 
-    let shared_files_size = move || match own_name.get() {
+    let shared_files_size = move || match own_peer.get() {
         Some(me) => {
             match files.get().get(&PeerPath {
-                peer_name: me,
+                peer: me,
                 path: "".to_string(),
             }) {
                 Some(file) => display_bytes(file.size.unwrap_or_default()),

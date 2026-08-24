@@ -1,3 +1,4 @@
+use crate::PeerId;
 use base64::{prelude::BASE64_STANDARD_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -7,20 +8,23 @@ use thiserror::Error;
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone, Hash, Eq)]
 pub struct AnnounceAddress {
     pub connection_details: PeerConnectionDetails,
-    pub name: String,
+    pub public_key: PeerId,
 }
 
 impl AnnounceAddress {
     /// Deserialize bytes to an AnnounceAddress - doing this manually gives us a small saving over
     /// using bincode - meaning the addresses are slightly shorted
     pub fn from_string(input_string: String) -> Result<Self, AnnounceAddressDecodeError> {
-        let type_value: u8 = input_string
-            .chars()
+        if !input_string.is_ascii() {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+        let type_value = input_string
+            .as_bytes()
             .last()
+            .copied()
             .ok_or(AnnounceAddressDecodeError::BadLength)?
-            .to_string()
-            .parse()
-            .map_err(|_| AnnounceAddressDecodeError::ParseInt)?;
+            .checked_sub(b'0')
+            .ok_or(AnnounceAddressDecodeError::ParseInt)?;
 
         let suffux_length_bytes = match type_value {
             0 => 4 + 2,
@@ -29,14 +33,21 @@ impl AnnounceAddress {
             3 => 16 + 2,
             4 => 16,
             5 => 16 + 2,
-            _ => panic!("Bad type value"),
+            _ => return Err(AnnounceAddressDecodeError::UnrecognizedTypeValue),
         };
         let suffix_length_chars = (suffux_length_bytes * 8usize).div_ceil(6);
-        let truncated_string = input_string
-            [input_string.len() - 1 - suffix_length_chars..input_string.len() - 1]
-            .to_string();
+        let expected_length = PeerId::ENCODED_LENGTH + suffix_length_chars + 1;
+        if input_string.len() != expected_length {
+            return Err(AnnounceAddressDecodeError::BadLength);
+        }
+        let public_key = input_string[..PeerId::ENCODED_LENGTH].parse().map_err(
+            |error: crate::peer_id::PeerIdParseError| {
+                AnnounceAddressDecodeError::PublicKey(error.to_string())
+            },
+        )?;
+        let truncated_string =
+            &input_string[PeerId::ENCODED_LENGTH..PeerId::ENCODED_LENGTH + suffix_length_chars];
         let input = BASE64_STANDARD_NO_PAD.decode(truncated_string)?;
-        let name = &input_string[..input_string.len() - 1 - suffix_length_chars].to_string();
         let (type_value, ip, port) = if type_value > 2 {
             if input.len() < 16 {
                 return Err(AnnounceAddressDecodeError::BadLength);
@@ -120,7 +131,7 @@ impl AnnounceAddress {
 
         Ok(AnnounceAddress {
             connection_details,
-            name: name.to_string(),
+            public_key,
         })
     }
 }
@@ -162,7 +173,7 @@ impl std::fmt::Display for AnnounceAddress {
         write!(
             f,
             "{}{}{}",
-            self.name, connection_details_string, type_value,
+            self.public_key, connection_details_string, type_value,
         )
     }
 }
@@ -179,6 +190,8 @@ pub enum AnnounceAddressDecodeError {
     Base64(String),
     #[error("No port given when one was expected")]
     NoPort,
+    #[error("Invalid public key: {0}")]
+    PublicKey(String),
 }
 
 impl From<base64::DecodeError> for AnnounceAddressDecodeError {
@@ -238,40 +251,41 @@ mod tests {
 
     #[test]
     fn announce_address_encoding() {
+        let public_key = PeerId::new(std::array::from_fn(|i| i as u8));
         let announce_addresses = vec![
             // IPV4
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::NoNat("127.0.0.1:3000".parse().unwrap()),
-                name: "foobar".to_string(),
+                public_key,
             },
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap()),
-                name: "angryOstrich".to_string(),
+                public_key,
             },
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::Asymmetric(
                     "8.8.8.8:2000".parse().unwrap(),
                 ),
-                name: "wagglingWallaby".to_string(),
+                public_key,
             },
             // IPV6
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::NoNat(
                     "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
                 ),
-                name: "foobar".to_string(),
+                public_key,
             },
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::Symmetric(
                     "2001:db8:85a3::8a2e:370:7334".parse().unwrap(),
                 ),
-                name: "angryOstrich".to_string(),
+                public_key,
             },
             AnnounceAddress {
                 connection_details: PeerConnectionDetails::Asymmetric(
                     "[2001:db8:85a3::8a2e:370:7334]:443".parse().unwrap(),
                 ),
-                name: "wagglingWallaby".to_string(),
+                public_key,
             },
         ];
 
@@ -279,6 +293,26 @@ mod tests {
             let string = announce_address.to_string();
             let announce_address_2 = AnnounceAddress::from_string(string).unwrap();
             assert_eq!(announce_address, announce_address_2);
+        }
+    }
+
+    #[test]
+    fn malformed_and_legacy_codes_are_rejected_without_panicking() {
+        let id = PeerId::new([7; 32]);
+        let valid = AnnounceAddress {
+            public_key: id,
+            connection_details: PeerConnectionDetails::NoNat("127.0.0.1:3000".parse().unwrap()),
+        }
+        .to_string();
+        for invalid in [
+            String::new(),
+            "amberCloudYakEJLLAHEK2".to_string(),
+            format!("{}{}", &valid[..valid.len() - 1], "9"),
+            format!("+{}", &valid[1..]),
+            valid[..valid.len() - 1].to_string(),
+            format!("{valid}x"),
+        ] {
+            assert!(AnnounceAddress::from_string(invalid).is_err());
         }
     }
 }

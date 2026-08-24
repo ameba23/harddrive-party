@@ -19,7 +19,7 @@ impl Requests {
 
     pub fn insert(&mut self, request: &UiDownloadRequest) -> Option<PeerPath> {
         let peer_path = PeerPath {
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             path: request.path.clone(),
         };
         // To make them be ordered newest first, invert the timestamp
@@ -47,12 +47,12 @@ fn request_files(files: &BTreeMap<PeerPath, File>, peer_path: &PeerPath) -> Vec<
     }
     request_files.extend(
         files
-            .range(
-                peer_path.clone()..PeerPath {
-                    peer_name: peer_path.peer_name.clone(),
-                    path: upper_bound,
-                },
-            )
+            .iter()
+            .filter(|(candidate, _)| {
+                candidate.peer.id == peer_path.peer.id
+                    && candidate.path >= peer_path.path
+                    && candidate.path < upper_bound
+            })
             .filter(|(_, file)| file.name != peer_path.path)
             .map(|(_, file)| file.clone()),
     );
@@ -84,9 +84,9 @@ pub fn Request(file: File) -> impl IntoView {
     let request_option = file.request.get_untracked();
     match request_option {
         Some(request) => {
-            let request_peer_name = request.peer_name.clone();
+            let request_peer_name = request.peer.name.clone();
             let peer_path = PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: request.path.clone(),
             };
 
@@ -108,7 +108,7 @@ pub fn Request(file: File) -> impl IntoView {
                     </div>
                 </div>
             }
-                .into_any()
+            .into_any()
         }
         None => view! { <li>"Never happens"</li> }.into_any(),
     }

@@ -6,10 +6,11 @@ use futures::{
 use harddrive_party_shared::{
     client::ClientError,
     ui_messages::{
-        DownloadEvent, DownloadInfo, FilesQuery, Info, PeerPath, UiDownloadRequest, UiEvent,
-        UiRequestedFile, UiServerError, UploadInfo,
+        DownloadEvent, DownloadInfo, FilesQuery, Info, PeerInfo, PeerPath, UiDownloadRequest,
+        UiEvent, UiRequestedFile, UiServerError, UploadInfo,
     },
-    wire_messages::{AnnounceAddress, Entry, IndexQuery, LsResponse},
+    wire_messages::{AnnounceAddress, Entry, IndexQuery, LsResponse, PeerConnectionDetails},
+    PeerId,
 };
 use leptos::prelude::document;
 use std::{
@@ -20,6 +21,13 @@ use std::{
     time::Duration,
 };
 use wasm_bindgen_futures::spawn_local;
+
+fn mock_peer(name: &str, byte: u8) -> PeerInfo {
+    PeerInfo {
+        id: PeerId::new([byte; 32]),
+        name: name.to_string(),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum MockScenario {
@@ -80,9 +88,14 @@ impl MockClient {
 
     pub async fn info(&self) -> Result<Info, ClientError> {
         Ok(Info {
+            id: PeerId::new([9; 32]),
             name: "mock-ui".to_string(),
             os_home_dir: Some("/home/pumkin".to_string()),
-            announce_address: "mock-uiC9Z/AAAB0".to_string(),
+            announce_address: AnnounceAddress {
+                public_key: PeerId::new([9; 32]),
+                connection_details: PeerConnectionDetails::NoNat("127.0.0.1:3031".parse().unwrap()),
+            }
+            .to_string(),
         })
     }
 
@@ -97,18 +110,21 @@ impl MockClient {
     pub async fn files(
         &self,
         query: FilesQuery,
-    ) -> Result<LocalBoxStream<'static, Result<(LsResponse, String), UiServerError>>, ClientError>
+    ) -> Result<LocalBoxStream<'static, Result<(LsResponse, PeerInfo), UiServerError>>, ClientError>
     {
-        let peers = ["asphericKingCrab", "lunarTulipOx"];
+        let peers = [
+            mock_peer("asphericKingCrab", 1),
+            mock_peer("lunarTulipOx", 2),
+        ];
         let mut responses = Vec::new();
         for peer in peers {
-            if let Some(ref requested_peer) = query.peer_name {
-                if requested_peer != peer {
+            if let Some(requested_peer) = query.peer_id {
+                if requested_peer != peer.id {
                     continue;
                 }
             }
-            let entries = apply_query(peer_entries(peer, &self.scenario), &query.query);
-            responses.push(Ok((LsResponse::Success(entries), peer.to_string())));
+            let entries = apply_query(peer_entries(&peer.name, &self.scenario), &query.query);
+            responses.push(Ok((LsResponse::Success(entries), peer)));
         }
         Ok(stream::iter(responses).boxed_local())
     }
@@ -122,16 +138,18 @@ impl MockClient {
         Ok(())
     }
 
-    pub async fn disconnect(&self, _peer_name: String) -> Result<(), ClientError> {
+    pub async fn disconnect(&self, _peer_id: PeerId) -> Result<(), ClientError> {
         Ok(())
     }
     pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, ClientError> {
-        Ok(vec![
-            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string())?,
-            AnnounceAddress::from_string("lunarTulipOxxjNkTQ1".to_string())?,
-            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string())?,
-            AnnounceAddress::from_string("cinderDeltaFoxxjNkyQ1".to_string())?,
-        ])
+        Ok((1..=4)
+            .map(|byte| AnnounceAddress {
+                public_key: PeerId::new([byte; 32]),
+                connection_details: PeerConnectionDetails::NoNat(
+                    format!("203.0.113.{byte}:7007").parse().unwrap(),
+                ),
+            })
+            .collect())
     }
 
     pub async fn requested_files(
@@ -166,7 +184,7 @@ impl MockClient {
             total_size: 3 * 1024 * 1024 * 1024,
             request_id: 2000,
             timestamp: Duration::from_secs(1_710_000_000),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: mock_peer("asphericKingCrab", 1),
             is_dir: false,
         }])])
         .boxed_local())
@@ -186,12 +204,12 @@ pub fn start_mock_events(scenario: MockScenario) -> Receiver<UiEvent> {
     spawn_local(async move {
         let _ = out_tx
             .send(UiEvent::PeerConnected {
-                name: "asphericKingCrab".to_string(),
+                peer: mock_peer("asphericKingCrab", 1),
             })
             .await;
         let _ = out_tx
             .send(UiEvent::PeerConnected {
-                name: "lunarTulipOx".to_string(),
+                peer: mock_peer("lunarTulipOx", 2),
             })
             .await;
 
@@ -221,7 +239,7 @@ pub fn start_mock_events(scenario: MockScenario) -> Receiver<UiEvent> {
                     bytes_read: upload_bytes,
                     total_size: total_bytes,
                     speed: upload_step as usize,
-                    peer_name: "lunarTulipOx".to_string(),
+                    peer: mock_peer("lunarTulipOx", 2),
                 }))
                 .await
                 .is_err()
@@ -239,7 +257,7 @@ pub fn start_mock_events(scenario: MockScenario) -> Receiver<UiEvent> {
                 .send(UiEvent::Download(DownloadEvent {
                     request_id: 2000,
                     path: "film/trailer.mov".to_string(),
-                    peer_name: "asphericKingCrab".to_string(),
+                    peer: mock_peer("asphericKingCrab", 1),
                     download_info: DownloadInfo::Downloading {
                         path: "film/trailer.mov".to_string(),
                         bytes_read: download_bytes,
@@ -258,7 +276,7 @@ pub fn start_mock_events(scenario: MockScenario) -> Receiver<UiEvent> {
                     .send(UiEvent::Download(DownloadEvent {
                         request_id: 2000,
                         path: "film/trailer.mov".to_string(),
-                        peer_name: "asphericKingCrab".to_string(),
+                        peer: mock_peer("asphericKingCrab", 1),
                         download_info: DownloadInfo::Completed(Duration::from_secs(tick)),
                     }))
                     .await
@@ -273,7 +291,7 @@ pub fn start_mock_events(scenario: MockScenario) -> Receiver<UiEvent> {
             if matches!(scenario, MockScenario::Errory) && tick % 12 == 0 {
                 if out_tx
                     .send(UiEvent::PeerConnectionFailed {
-                        name: "lunarTulipOx".to_string(),
+                        peer: mock_peer("lunarTulipOx", 2),
                         error: "Simulated timeout".to_string(),
                     })
                     .await

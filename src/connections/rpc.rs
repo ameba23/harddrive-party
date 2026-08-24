@@ -7,12 +7,13 @@ use crate::{
     },
     peer::Peer,
     shares::{EntryParseError, Shares},
-    ui_messages::{UiEvent, UploadInfo},
+    ui_messages::{PeerInfo, UiEvent, UploadInfo},
     SharedState,
 };
 use harddrive_party_shared::{
     codec::{deserialize, serialize, DecodeError},
     wire_messages::{AnnouncePeer, IndexQuery, LsResponse, LsResponseError, ReadQuery, Request},
+    PeerId,
 };
 use log::{debug, error, info, warn};
 use quinn::WriteError;
@@ -48,7 +49,7 @@ struct ReadRequest {
     start: Option<u64>,
     end: Option<u64>,
     output: quinn::SendStream,
-    requester_name: String,
+    requester: PeerInfo,
 }
 
 /// Remote Procedure Call - process remote requests
@@ -59,8 +60,9 @@ pub struct Rpc {
     /// Channel for sending upload requests
     upload_tx: Sender<ReadRequest>,
     peer_announce_tx: Sender<PeerConnect>,
-    peers: Arc<Mutex<HashMap<String, Peer>>>,
+    peers: Arc<Mutex<HashMap<PeerId, Peer>>>,
     known_peers: KnownPeers,
+    verified_announcements: Arc<Mutex<HashMap<PeerId, AnnouncePeer>>>,
 }
 
 impl Rpc {
@@ -68,8 +70,9 @@ impl Rpc {
         shares: Shares,
         event_broadcaster: broadcast::Sender<UiEvent>,
         peer_announce_tx: Sender<PeerConnect>,
-        peers: Arc<Mutex<HashMap<String, Peer>>>,
+        peers: Arc<Mutex<HashMap<PeerId, Peer>>>,
         known_peers: KnownPeers,
+        verified_announcements: Arc<Mutex<HashMap<PeerId, AnnouncePeer>>>,
     ) -> Rpc {
         let (upload_tx, upload_rx) = channel(65536);
         let shares_clone = shares.clone();
@@ -89,11 +92,13 @@ impl Rpc {
             peer_announce_tx,
             peers,
             known_peers,
+            verified_announcements,
         }
     }
 
     /// Handle a request
-    pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream, peer_name: String) {
+    pub async fn request(&self, buf: Vec<u8>, output: quinn::SendStream, peer_id: PeerId) {
+        let peer_info = PeerInfo::from_id(peer_id);
         let request: Result<Request, DecodeError> = deserialize(&buf);
         match request {
             Ok(req) => {
@@ -110,7 +115,7 @@ impl Rpc {
                     }
                     Request::Read(ReadQuery { path, start, end }) => {
                         if self
-                            .read(path, start, end, output, peer_name)
+                            .read(path, start, end, output, peer_info)
                             .await
                             .is_err()
                         {
@@ -118,17 +123,54 @@ impl Rpc {
                         }
                     }
                     Request::AnnouncePeer(announce_peer) => {
-                        if announce_peer.announce_address.name == peer_name {
+                        let awaiting_self_announcement = self
+                            .peers
+                            .lock()
+                            .await
+                            .get(&peer_id)
+                            .is_some_and(|peer| peer.announcement.is_none());
+
+                        if announce_peer.peer_id() == peer_id {
+                            if !announce_peer.verify() {
+                                warn!(
+                                    "Closing connection to {} ({}) after invalid self-announcement",
+                                    PeerInfo::from_id(peer_id).name,
+                                    peer_id
+                                );
+                                if let Some(peer) = self.peers.lock().await.get(&peer_id) {
+                                    peer.connection
+                                        .close(1u32.into(), b"invalid self-announcement");
+                                }
+                                return;
+                            }
                             info!("Received self-announcement {announce_peer:?}");
-                            self.handle_self_announcement(&announce_peer, &peer_name)
-                                .await;
+                            self.handle_self_announcement(&announce_peer, peer_id).await;
+                        } else if awaiting_self_announcement {
+                            warn!(
+                                "Closing connection to {} ({}) after mismatched self-announcement",
+                                PeerInfo::from_id(peer_id).name,
+                                peer_id
+                            );
+                            if let Some(peer) = self.peers.lock().await.get(&peer_id) {
+                                peer.connection
+                                    .close(1u32.into(), b"mismatched self-announcement");
+                            }
                         } else {
+                            if !announce_peer.verify() {
+                                warn!(
+                                    "Dropping invalid gossip from {} about {}",
+                                    peer_id,
+                                    announce_peer.peer_id()
+                                );
+                                return;
+                            }
                             info!(
                                 "Received gossiped peer announcement from {} about {} ({:?})",
-                                peer_name,
-                                announce_peer.announce_address.name,
+                                peer_id,
+                                announce_peer.peer_id(),
                                 announce_peer.announce_address.connection_details
                             );
+                            self.store_and_relay_verified(&announce_peer, peer_id).await;
                             if self
                                 .peer_announce_tx
                                 .send(PeerConnect {
@@ -152,35 +194,54 @@ impl Rpc {
     }
 
     /// Handle a self-announcement and relay it to existing peers
-    async fn handle_self_announcement(&self, announce_peer: &AnnouncePeer, sender: &str) {
-        let other_connections = {
+    async fn handle_self_announcement(&self, announce_peer: &AnnouncePeer, sender: PeerId) {
+        {
             let mut peers = self.peers.lock().await;
 
             // Add the announce details to the Peer struct
-            if let Some(sender_peer) = peers.get_mut(sender) {
-                sender_peer.announce_address = Some(announce_peer.announce_address.clone());
+            if let Some(sender_peer) = peers.get_mut(&sender) {
+                sender_peer.announcement = Some(announce_peer.clone());
             } else {
                 warn!("Got self-announcement from peer we are not connected to");
             }
-
-            // Snapshot peers so we don't hold locks while awaiting network sends
-            peers
-                .iter()
-                .filter(|(other_name, _)| other_name.as_str() != sender)
-                .map(|(_, peer)| peer.connection.clone())
-                .collect::<Vec<_>>()
-        };
+        }
 
         // Also add it to the known peers list
         if let Err(err) = self.known_peers.add_peer(&announce_peer.announce_address) {
             warn!("Could not persist announce details for {sender}: {err}");
         }
 
-        // Tell all existing peers about this sender
+        self.store_and_relay_verified(announce_peer, sender).await;
+    }
+
+    /// Retain a verified record for the lifetime of this process and relay a new or changed
+    /// record once to every connection except the one it came from.
+    async fn store_and_relay_verified(&self, announce_peer: &AnnouncePeer, sender: PeerId) {
+        let should_relay = {
+            let mut announcements = self.verified_announcements.lock().await;
+            if announcements.get(&announce_peer.peer_id()) == Some(announce_peer) {
+                false
+            } else {
+                announcements.insert(announce_peer.peer_id(), announce_peer.clone());
+                true
+            }
+        };
+        if !should_relay {
+            return;
+        }
+        let other_connections = self
+            .peers
+            .lock()
+            .await
+            .iter()
+            .filter(|(other_id, _)| **other_id != sender && **other_id != announce_peer.peer_id())
+            .map(|(_, peer)| peer.connection.clone())
+            .collect::<Vec<_>>();
+
         for other_connection in other_connections {
             info!(
-                "Relaying self-announcement for {} to an existing peer connection",
-                sender
+                "Relaying verified announcement for {} to an existing peer connection",
+                announce_peer.peer_id()
             );
             let request = Request::AnnouncePeer(announce_peer.clone());
             if let Err(err) = SharedState::request_connection(request, &other_connection).await {
@@ -242,7 +303,7 @@ impl Rpc {
         start: Option<u64>,
         end: Option<u64>,
         output: quinn::SendStream,
-        requester_name: String,
+        requester: PeerInfo,
     ) -> Result<(), RpcError> {
         self.upload_tx
             .send(ReadRequest {
@@ -250,7 +311,7 @@ impl Rpc {
                 start,
                 end,
                 output,
-                requester_name,
+                requester,
             })
             .await
             .map_err(|_| RpcError::ChannelClosed)?;
@@ -288,7 +349,7 @@ impl Uploader {
             start,
             end,
             mut output,
-            requester_name,
+            requester,
         } = read_request;
         match self.get_file_portion(path.clone(), start, end).await {
             Ok((file, size)) => {
@@ -323,7 +384,7 @@ impl Uploader {
                                 bytes_read,
                                 total_size: size,
                                 speed: speedometer.measure(),
-                                peer_name: requester_name.clone(),
+                                peer: requester.clone(),
                             }))
                             .is_err()
                         {
@@ -340,7 +401,7 @@ impl Uploader {
                         bytes_read,
                         total_size: size,
                         speed: speedometer.measure(),
-                        peer_name: requester_name,
+                        peer: requester,
                     }))
                     .is_err()
                 {

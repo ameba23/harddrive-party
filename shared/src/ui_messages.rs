@@ -1,14 +1,30 @@
 //! Messages for communicating with the user interface over websocket
 
-use crate::{announce_address::AnnounceAddressDecodeError, wire_messages::IndexQuery};
+use crate::{announce_address::AnnounceAddressDecodeError, wire_messages::IndexQuery, PeerId};
 use serde::{Deserialize, Serialize};
 use std::{fmt, time::Duration};
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct FilesQuery {
-    pub peer_name: Option<String>,
+    pub peer_id: Option<PeerId>,
     pub query: IndexQuery,
+}
+
+/// Canonical peer identity plus its derived human-readable label.
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Hash)]
+pub struct PeerInfo {
+    pub id: PeerId,
+    pub name: String,
+}
+
+impl PeerInfo {
+    pub fn from_id(id: PeerId) -> Self {
+        Self {
+            id,
+            name: key_to_animal::key_to_name(id.as_bytes()),
+        }
+    }
 }
 
 /// 'Events' are messages sent from the server which are not in response to a particular
@@ -16,11 +32,11 @@ pub struct FilesQuery {
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub enum UiEvent {
     /// A peer has connected
-    PeerConnected { name: String },
+    PeerConnected { peer: PeerInfo },
     /// A peer has disconnected
-    PeerDisconnected { name: String, error: String },
+    PeerDisconnected { peer: PeerInfo, error: String },
     /// A peer connection failed
-    PeerConnectionFailed { name: String, error: String },
+    PeerConnectionFailed { peer: PeerInfo, error: String },
     /// Part of a file has been uploaded
     Uploaded(UploadInfo),
     /// Download
@@ -29,6 +45,7 @@ pub enum UiEvent {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct Info {
+    pub id: PeerId,
     pub name: String,
     pub os_home_dir: Option<String>,
     pub announce_address: String,
@@ -47,8 +64,8 @@ pub struct UiDownloadRequest {
     pub request_id: u32,
     /// Time when request made relative to unix epoch
     pub timestamp: Duration,
-    /// Name of peer who holds file
-    pub peer_name: String,
+    /// Peer who holds the file.
+    pub peer: PeerInfo,
     /// Whether the requested path is a directory.
     pub is_dir: bool,
 }
@@ -71,7 +88,7 @@ pub struct UploadInfo {
     pub bytes_read: u64,
     pub total_size: u64,
     pub speed: usize,
-    pub peer_name: String,
+    pub peer: PeerInfo,
 }
 
 /// An error in response to a UI command
@@ -118,8 +135,8 @@ pub struct DownloadEvent {
     pub request_id: u32,
     /// File path of requested file of directory
     pub path: String,
-    /// Name of the peer who holds the file or directory
-    pub peer_name: String,
+    /// Peer who holds the file or directory.
+    pub peer: PeerInfo,
     pub download_info: DownloadInfo,
     // pub total_size: u64,
 }
@@ -136,11 +153,11 @@ impl fmt::Display for DownloadEvent {
                 write!(
                     f,
                     "Downloading {}/{} {} bytes read, {} total bytes read, {} bps",
-                    self.peer_name, path, bytes_read, total_bytes_read, speed
+                    self.peer.name, path, bytes_read, total_bytes_read, speed
                 )
             }
             DownloadInfo::Completed(_time) => {
-                write!(f, "Completed {}/{}", self.peer_name, self.path)
+                write!(f, "Completed {}/{}", self.peer.name, self.path)
             }
         }
     }
@@ -149,8 +166,8 @@ impl fmt::Display for DownloadEvent {
 /// Represents a remote file
 #[derive(Serialize, Deserialize, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PeerPath {
-    /// The name of the peer who holds the file
-    pub peer_name: String,
+    /// The peer who holds the file.
+    pub peer: PeerInfo,
     /// The path to the remote file
     pub path: String,
 }

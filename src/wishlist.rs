@@ -10,7 +10,7 @@ use crate::{
 use async_stream::stream;
 use futures::{stream::BoxStream, StreamExt};
 use harddrive_party_shared::ui_messages::UiRequestedFile;
-use key_to_animal::key_to_name;
+use harddrive_party_shared::{ui_messages::PeerInfo, PeerId};
 use log::warn;
 use std::{
     str::Utf8Error,
@@ -181,7 +181,7 @@ impl DownloadRequest {
             total_size: self.total_size,
             request_id: self.request_id,
             timestamp: self.timestamp,
-            peer_name: key_to_name(&self.peer_public_key),
+            peer: PeerInfo::from_id(PeerId::new(self.peer_public_key)),
             progress,
             is_dir: self.is_dir,
         }

@@ -182,9 +182,13 @@ mod tests {
     use tokio::sync::mpsc::{channel, Receiver};
 
     fn announce_address(addr: SocketAddr, name: &str) -> AnnounceAddress {
+        let mut key = [0; 32];
+        for (index, byte) in name.bytes().enumerate() {
+            key[index % key.len()] ^= byte;
+        }
         AnnounceAddress {
             connection_details: PeerConnectionDetails::NoNat(addr),
-            name: name.to_string(),
+            public_key: harddrive_party_shared::PeerId::new(key),
         }
     }
 
@@ -246,7 +250,7 @@ mod tests {
         // pathway (e.g. a hostname conflict suppressing one peer's records)
         // would prevent Alice from ever seeing Bob.
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !alice_known.has(&bob_announce.name) {
+        while !alice_known.has(&bob_announce.public_key) {
             if tokio::time::Instant::now() >= deadline {
                 panic!("Alice did not learn of Bob via mDNS within timeout");
             }

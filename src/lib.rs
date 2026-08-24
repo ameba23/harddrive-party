@@ -18,7 +18,7 @@ use crate::{
     peer::{remote_path_is_within_request, safe_remote_relative_path, Peer},
     shares::Shares,
     ui_messages::{PeerPath, UiEvent, UiServerError},
-    wire_messages::{AnnounceAddress, Request},
+    wire_messages::{AnnounceAddress, AnnouncePeer, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use async_stream::try_stream;
@@ -26,6 +26,7 @@ use futures::{pin_mut, StreamExt};
 use harddrive_party_shared::{
     codec::{deserialize, serialize},
     wire_messages::{IndexQuery, LsResponse},
+    PeerId,
 };
 use log::{debug, error, warn};
 use quinn::RecvStream;
@@ -55,15 +56,17 @@ pub mod subtree_names {
     pub const REQUESTS_PROGRESS: &[u8; 1] = b"P";
     pub const REQUESTED_FILES_BY_PEER: &[u8; 1] = b"p";
     pub const REQUESTED_FILES_BY_REQUEST_ID: &[u8; 1] = b"C";
-    pub const KNOWN_PEERS: &[u8; 1] = b"k";
+    /// Legacy, name-keyed peer records. Kept untouched and deliberately ignored.
+    pub const KNOWN_PEERS_LEGACY: &[u8; 1] = b"k";
+    pub const KNOWN_PEERS_V1: &[u8; 2] = b"k1";
 }
 
 /// Shared state used by both the peer connections and user interface server
 #[derive(Clone)]
 pub struct SharedState {
-    /// A map of peer names to active peer connections
-    pub peers: Arc<Mutex<HashMap<String, Peer>>>,
-    /// A list of known peer names
+    /// A map of canonical public-key IDs to active peer connections.
+    pub peers: Arc<Mutex<HashMap<PeerId, Peer>>>,
+    /// Persistent connection details keyed by exact public key.
     pub known_peers: KnownPeers,
     /// The index of shared files
     pub shares: Shares,
@@ -77,16 +80,22 @@ pub struct SharedState {
     pub download_dir: PathBuf,
     /// A name derived from our public key
     pub name: String,
+    /// Our canonical public-key identity.
+    pub id: PeerId,
     /// Our own connection details
     pub announce_address: AnnounceAddress,
+    /// Our signed, gossip-authorized self-announcement.
+    pub self_announcement: AnnouncePeer,
+    /// Signature-verified remote announcements retained for live gossip only.
+    pub verified_announcements: Arc<Mutex<HashMap<PeerId, AnnouncePeer>>>,
     /// Our OS home directory path
     pub os_home_dir: Option<String>,
     /// Whether graceful shutdown has started
     pub shutting_down: Arc<AtomicBool>,
     /// Peers intentionally disconnected until an explicit future connect call.
-    pub(crate) manually_disconnected_peers: Arc<Mutex<HashSet<String>>>,
+    pub(crate) manually_disconnected_peers: Arc<Mutex<HashSet<PeerId>>>,
     /// Peers with an outbound connect task currently in progress.
-    pub(crate) pending_outbound_connections: Arc<Mutex<HashSet<String>>>,
+    pub(crate) pending_outbound_connections: Arc<Mutex<HashSet<PeerId>>>,
     /// Channel for graceful shutdown signal
     graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
 }
@@ -97,10 +106,12 @@ impl SharedState {
         db: sled::Db,
         share_dirs: Vec<String>,
         download_dir: PathBuf,
+        id: PeerId,
         name: String,
         peer_announce_tx: Sender<PeerConnect>,
-        peers: Arc<Mutex<HashMap<String, Peer>>>,
+        peers: Arc<Mutex<HashMap<PeerId, Peer>>>,
         announce_address: AnnounceAddress,
+        self_announcement: AnnouncePeer,
         graceful_shutdown_tx: tokio::sync::mpsc::Sender<()>,
         known_peers: KnownPeers,
     ) -> anyhow::Result<Self> {
@@ -125,8 +136,11 @@ impl SharedState {
             event_broadcaster,
             peer_announce_tx,
             download_dir,
+            id,
             name,
             announce_address,
+            self_announcement,
+            verified_announcements: Default::default(),
             os_home_dir,
             shutting_down: Arc::new(AtomicBool::new(false)),
             manually_disconnected_peers: Default::default(),
@@ -143,10 +157,10 @@ impl SharedState {
     }
 
     /// Open a request stream and write a request to the peer with the given name
-    pub async fn request(&self, request: Request, name: &str) -> Result<RecvStream, RequestError> {
+    pub async fn request(&self, request: Request, id: &PeerId) -> Result<RecvStream, RequestError> {
         let connection = {
             let peers = self.peers.lock().await;
-            let peer = peers.get(name).ok_or(RequestError::PeerNotFound)?;
+            let peer = peers.get(id).ok_or(RequestError::PeerNotFound)?;
             peer.connection.clone()
         };
         Self::request_connection(request, &connection).await
@@ -185,7 +199,7 @@ impl SharedState {
             )
             .into());
         }
-        let peer_name = announce_address.name.clone();
+        let peer_id = announce_address.public_key;
         let discovery_method = DiscoveryMethod::Direct;
 
         let (response_tx, response_rx) = oneshot::channel();
@@ -207,17 +221,17 @@ impl SharedState {
         self.manually_disconnected_peers
             .lock()
             .await
-            .remove(&peer_name);
+            .remove(&peer_id);
         Ok(())
     }
 
     /// Intentionally disconnect from a connected peer and suppress automatic reconnects until an
     /// explicit future connect call.
-    pub async fn disconnect_peer(&self, peer_name: &str) -> Result<(), UiServerErrorWrapper> {
+    pub async fn disconnect_peer(&self, peer_id: &PeerId) -> Result<(), UiServerErrorWrapper> {
         let connection = {
             let peers = self.peers.lock().await;
             let peer = peers
-                .get(peer_name)
+                .get(peer_id)
                 .ok_or_else(|| UiServerError::ConnectionError("Peer not connected".to_string()))?;
             peer.connection.clone()
         };
@@ -225,7 +239,7 @@ impl SharedState {
         self.manually_disconnected_peers
             .lock()
             .await
-            .insert(peer_name.to_string());
+            .insert(*peer_id);
         connection.close(0u32.into(), b"disconnect");
         Ok(())
     }
@@ -242,11 +256,11 @@ impl SharedState {
             recursive: true,
         });
 
-        let recv = self.request(ls_request, &peer_path.peer_name).await?;
+        let recv = self.request(ls_request, &peer_path.peer.id).await?;
 
         let peer_public_key = {
             let peers = self.peers.lock().await;
-            match peers.get(&peer_path.peer_name) {
+            match peers.get(&peer_path.peer.id) {
                 Some(peer) => peer.public_key,
                 None => {
                     warn!("Handling request to download a file from a peer who is not connected");
@@ -269,7 +283,7 @@ impl SharedState {
                         Err(err) => {
                             warn!(
                                 "Ignoring unsafe download entry from peer {}: {err}",
-                                peer_path.peer_name
+                                peer_path.peer.name
                             );
                             continue;
                         }
@@ -278,7 +292,7 @@ impl SharedState {
                     if !remote_path_is_within_request(&requested_path, &entry_path) {
                         warn!(
                             "Ignoring download entry outside requested path from peer {}: {}",
-                            peer_path.peer_name, entry.name
+                            peer_path.peer.name, entry.name
                         );
                         continue;
                     }
@@ -288,7 +302,7 @@ impl SharedState {
                             entry.name.clone(),
                             entry.size,
                             id,
-                            peer_public_key,
+                            peer_public_key.into_bytes(),
                             entry.is_dir,
                         )) {
                             error!("Cannot add download request {err:?}");
@@ -463,7 +477,7 @@ mod tests {
             bob_hdp.run().await;
         });
 
-        wait_for_peer_presence(&bob, &alice.name, true).await;
+        wait_for_peer_presence(&bob, alice.id, true).await;
 
         let alice_client = ui_server::client::Client::new(alice_url);
         let bob_client = ui_server::client::Client::new(bob_url);
@@ -471,11 +485,10 @@ mod tests {
         (alice, bob, alice_client, bob_client)
     }
 
-    async fn wait_for_peer_presence(shared_state: &SharedState, peer_name: &str, present: bool) {
-        let peer_name = peer_name.to_string();
+    async fn wait_for_peer_presence(shared_state: &SharedState, peer_id: PeerId, present: bool) {
         let observed = timeout(Duration::from_secs(30), async {
             loop {
-                if shared_state.peers.lock().await.contains_key(&peer_name) == present {
+                if shared_state.peers.lock().await.contains_key(&peer_id) == present {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -485,23 +498,22 @@ mod tests {
 
         assert!(
             observed.is_ok(),
-            "Timed out waiting for peer {peer_name} presence to become {present}"
+            "Timed out waiting for peer {peer_id} presence to become {present}"
         );
     }
 
     async fn wait_for_pending_outbound_presence(
         shared_state: &SharedState,
-        peer_name: &str,
+        peer_id: PeerId,
         present: bool,
     ) {
-        let peer_name = peer_name.to_string();
         let observed = timeout(Duration::from_secs(5), async {
             loop {
                 if shared_state
                     .pending_outbound_connections
                     .lock()
                     .await
-                    .contains(&peer_name)
+                    .contains(&peer_id)
                     == present
                 {
                     return;
@@ -513,7 +525,33 @@ mod tests {
 
         assert!(
             observed.is_ok(),
-            "Timed out waiting for pending outbound presence for {peer_name} to become {present}"
+            "Timed out waiting for pending outbound presence for {peer_id} to become {present}"
+        );
+    }
+
+    async fn wait_for_signed_announcement(shared_state: &SharedState, peer_id: PeerId) {
+        let observed = timeout(Duration::from_secs(5), async {
+            loop {
+                if shared_state
+                    .peers
+                    .lock()
+                    .await
+                    .get(&peer_id)
+                    .is_some_and(|peer| {
+                        peer.announcement
+                            .as_ref()
+                            .is_some_and(|announcement| announcement.verify())
+                    })
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            observed.is_ok(),
+            "Timed out waiting for signed announcement from {peer_id}"
         );
     }
 
@@ -542,7 +580,7 @@ mod tests {
         assert_eq!(response_entries, create_test_entries());
 
         let query = FilesQuery {
-            peer_name: None,
+            peer_id: None,
             query: IndexQuery {
                 recursive: true,
                 ..Default::default()
@@ -552,8 +590,8 @@ mod tests {
 
         let mut response_entries = HashSet::new();
         while let Some(item) = response_stream.next().await {
-            if let (LsResponse::Success(entries), peer_name) = item.unwrap() {
-                if peer_name == alice.name {
+            if let (LsResponse::Success(entries), peer) = item.unwrap() {
+                if peer.id == alice.id {
                     for entry in entries {
                         response_entries.insert(entry);
                     }
@@ -565,7 +603,7 @@ mod tests {
         let request_id = bob_client
             .download(&PeerPath {
                 path: "test-data/somefile".to_string(),
-                peer_name: alice.name,
+                peer: harddrive_party_shared::ui_messages::PeerInfo::from_id(alice.id),
             })
             .await
             .unwrap();
@@ -591,7 +629,7 @@ mod tests {
             setup_connected_peers(vec!["tests/test-data".to_string()]).await;
 
         let query = FilesQuery {
-            peer_name: Some(alice.name.clone()),
+            peer_id: Some(alice.id),
             query: IndexQuery {
                 recursive: true,
                 ..Default::default()
@@ -601,8 +639,8 @@ mod tests {
 
         let mut response_entries = HashSet::new();
         while let Some(item) = response_stream.next().await {
-            if let (LsResponse::Success(entries), peer_name) = item.unwrap() {
-                if peer_name == alice.name {
+            if let (LsResponse::Success(entries), peer) = item.unwrap() {
+                if peer.id == alice.id {
                     for entry in entries {
                         response_entries.insert(entry);
                     }
@@ -619,7 +657,7 @@ mod tests {
             setup_connected_peers(vec!["tests/test-data".to_string()]).await;
 
         let query = FilesQuery {
-            peer_name: Some(alice.name.clone()),
+            peer_id: Some(alice.id),
             query: IndexQuery {
                 searchterm: Some("somefile".to_string()),
                 recursive: true,
@@ -630,8 +668,8 @@ mod tests {
 
         let mut response_entries = HashSet::new();
         while let Some(item) = response_stream.next().await {
-            if let (LsResponse::Success(entries), peer_name) = item.unwrap() {
-                if peer_name == alice.name {
+            if let (LsResponse::Success(entries), peer) = item.unwrap() {
+                if peer.id == alice.id {
                     for entry in entries {
                         response_entries.insert(entry);
                     }
@@ -679,10 +717,10 @@ mod tests {
 
         // Wait until Alice's authoritative peer map includes Carol.
         // This avoids races where a broadcast event is emitted before we subscribe.
-        let carol_name = carol.name.clone();
+        let carol_id = carol.id;
         let connected = timeout(Duration::from_secs(5), async move {
             loop {
-                if alice.peers.lock().await.contains_key(&carol_name) {
+                if alice.peers.lock().await.contains_key(&carol_id) {
                     return true;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -695,19 +733,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn both_connection_directions_exchange_signed_self_announcements() {
+        init_logger();
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+
+        wait_for_signed_announcement(&alice, bob.id).await;
+        wait_for_signed_announcement(&bob, alice.id).await;
+        assert_eq!(
+            alice
+                .peers
+                .lock()
+                .await
+                .get(&bob.id)
+                .unwrap()
+                .announcement
+                .as_ref()
+                .unwrap()
+                .peer_id(),
+            bob.id
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_third_party_gossip_is_dropped_without_closing_connection() {
+        init_logger();
+        let (alice, bob, _alice_client, _bob_client) = setup_connected_peers(vec![]).await;
+        wait_for_signed_announcement(&alice, bob.id).await;
+        wait_for_signed_announcement(&bob, alice.id).await;
+
+        let connection = bob
+            .peers
+            .lock()
+            .await
+            .get(&alice.id)
+            .unwrap()
+            .connection
+            .clone();
+        let forged_id = PeerId::new([88; 32]);
+        let forged = wire_messages::AnnouncePeer {
+            announce_address: AnnounceAddress {
+                public_key: forged_id,
+                connection_details: wire_messages::PeerConnectionDetails::NoNat(
+                    "203.0.113.88:7088".parse().unwrap(),
+                ),
+            },
+            signature: [0; 64],
+        };
+        assert!(!forged.verify());
+
+        let _recv = SharedState::request_connection(Request::AnnouncePeer(forged), &connection)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(!alice.known_peers.has(&forged_id));
+        assert!(connection.close_reason().is_none());
+        assert!(alice.peers.lock().await.contains_key(&bob.id));
+    }
+
+    #[tokio::test]
     async fn disconnect_peer_suppresses_reconnect_until_explicit_connect() {
         init_logger();
         let (alice, bob, _alice_client, bob_client) = setup_connected_peers(vec![]).await;
 
-        wait_for_peer_presence(&bob, &alice.name, true).await;
+        wait_for_peer_presence(&bob, alice.id, true).await;
 
-        bob_client.disconnect(alice.name.clone()).await.unwrap();
+        bob_client.disconnect(alice.id).await.unwrap();
 
-        wait_for_peer_presence(&bob, &alice.name, false).await;
+        wait_for_peer_presence(&bob, alice.id, false).await;
 
         tokio::time::sleep(Duration::from_millis(500)).await;
         assert!(
-            !bob.peers.lock().await.contains_key(&alice.name),
+            !bob.peers.lock().await.contains_key(&alice.id),
             "Peer reconnected after intentional disconnect"
         );
 
@@ -717,7 +814,7 @@ mod tests {
                     recursive: false,
                     ..Default::default()
                 }),
-                &alice.name,
+                &alice.id,
             )
             .await
             .unwrap_err();
@@ -726,7 +823,7 @@ mod tests {
         bob.connect_to_peer(alice.announce_address.clone())
             .await
             .unwrap();
-        wait_for_peer_presence(&bob, &alice.name, true).await;
+        wait_for_peer_presence(&bob, alice.id, true).await;
     }
 
     #[tokio::test]
@@ -744,7 +841,7 @@ mod tests {
             .local_addr()
             .unwrap();
         let unreachable_peer = AnnounceAddress {
-            name: "retryingPeer".to_string(),
+            public_key: PeerId::new([42; 32]),
             connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
         };
 
@@ -762,7 +859,7 @@ mod tests {
 
         let observed = timeout(Duration::from_secs(5), async {
             loop {
-                if alice.peers.lock().await.contains_key(&bob.name) {
+                if alice.peers.lock().await.contains_key(&bob.id) {
                     return;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -791,7 +888,7 @@ mod tests {
             .local_addr()
             .unwrap();
         let unreachable_peer = AnnounceAddress {
-            name: "retryingPeer".to_string(),
+            public_key: PeerId::new([43; 32]),
             connection_details: wire_messages::PeerConnectionDetails::NoNat(unreachable_addr),
         };
 
@@ -799,7 +896,7 @@ mod tests {
             .connect_to_peer(unreachable_peer.clone())
             .await
             .unwrap();
-        wait_for_pending_outbound_presence(&alice, &unreachable_peer.name, true).await;
+        wait_for_pending_outbound_presence(&alice, unreachable_peer.public_key, true).await;
 
         alice
             .connect_to_peer(unreachable_peer.clone())
@@ -818,7 +915,7 @@ mod tests {
             "expected only one pending outbound connect task after duplicate announcements"
         );
         assert!(
-            pending.contains(&unreachable_peer.name),
+            pending.contains(&unreachable_peer.public_key),
             "expected duplicate announcements to keep exactly one pending outbound connect"
         );
     }
@@ -842,7 +939,7 @@ mod tests {
             .manually_disconnected_peers
             .lock()
             .await
-            .contains(&alice.name);
+            .contains(&alice.id);
         assert!(
             !manually_disconnected,
             "failed explicit connect should not leave manual reconnect state behind"
@@ -866,18 +963,18 @@ mod tests {
 
         let connection = {
             let peers = bob.peers.lock().await;
-            peers.get(&alice.name).unwrap().connection.clone()
+            peers.get(&alice.id).unwrap().connection.clone()
         };
         let original_stable_id = connection.stable_id();
         connection.close(0u32.into(), b"test disconnect");
 
-        let peer_name = alice.name.clone();
+        let peer_id = alice.id;
         let reconnected = timeout(Duration::from_secs(30), async {
             loop {
                 let reconnected = {
                     let peers = bob.peers.lock().await;
                     peers
-                        .get(&peer_name)
+                        .get(&peer_id)
                         .is_some_and(|peer| peer.connection.stable_id() != original_stable_id)
                 };
                 if reconnected {
@@ -903,7 +1000,7 @@ mod tests {
         let mut alice_events = alice_client.event_stream().await.unwrap();
         let mut read_stream = bob_client
             .read(
-                alice.name.clone(),
+                alice.id,
                 ReadQuery {
                     path: "test-data/somefile".to_string(),
                     start: None,
@@ -919,8 +1016,7 @@ mod tests {
         let uploaded = timeout(Duration::from_secs(15), async move {
             while let Some(event) = alice_events.next().await {
                 if let Ok(UiEvent::Uploaded(upload_info)) = event {
-                    if upload_info.path == "test-data/somefile" && upload_info.peer_name == bob.name
-                    {
+                    if upload_info.path == "test-data/somefile" && upload_info.peer.id == bob.id {
                         return true;
                     }
                 }
@@ -947,7 +1043,7 @@ mod tests {
 
         let mut read_stream = bob_client
             .read(
-                alice.name.clone(),
+                alice.id,
                 ReadQuery {
                     path: path.clone(),
                     start: Some(start),

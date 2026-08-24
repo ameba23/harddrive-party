@@ -4,7 +4,7 @@ use crate::{
     errors::UiServerErrorWrapper,
     peer::DOWNLOAD_BLOCK_SIZE,
     process_length_prefix,
-    ui_messages::{FilesQuery, UiServerError},
+    ui_messages::{FilesQuery, PeerInfo, UiServerError},
     ui_server::Bincode,
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, Request},
     RequestError, SharedState,
@@ -20,6 +20,7 @@ use harddrive_party_shared::{
     codec::serialize,
     ui_messages::{Info, PeerPath, UiDownloadRequest, UiRequestedFile},
     wire_messages::ReadQuery,
+    PeerId,
 };
 use log::{debug, error, warn};
 use serde::Serialize;
@@ -45,9 +46,12 @@ pub async fn post_connect(
 /// DELETE `/connect`
 pub async fn delete_connect(
     State(shared_state): State<SharedState>,
-    peer_name: String,
+    peer_id: String,
 ) -> Result<StatusCode, UiServerErrorWrapper> {
-    shared_state.disconnect_peer(&peer_name).await?;
+    let peer_id = peer_id
+        .parse::<PeerId>()
+        .map_err(|error| UiServerError::RequestError(format!("Invalid peer ID: {error}")))?;
+    shared_state.disconnect_peer(&peer_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -59,30 +63,26 @@ pub async fn post_files(
     let (mut response_tx, response_rx) = mpsc::channel(256);
 
     // If no name given send the query to all connected peers
-    let requests = match files_query.peer_name {
-        Some(name) => {
-            vec![(Request::Ls(files_query.query), name)]
+    let requests = match files_query.peer_id {
+        Some(id) => {
+            vec![(Request::Ls(files_query.query), id)]
         }
         None => {
             let peers = shared_state.peers.lock().await;
             peers
                 .keys()
-                .map(|peer_name| {
-                    (
-                        Request::Ls(files_query.query.clone()),
-                        peer_name.to_string(),
-                    )
-                })
+                .map(|peer_id| (Request::Ls(files_query.query.clone()), *peer_id))
                 .collect()
         }
     };
     debug!("Making request to {} peers", requests.len());
 
-    for (request, peer_name) in requests {
+    for (request, peer_id) in requests {
+        let peer_info = PeerInfo::from_id(peer_id);
         {
             let cached_responses = {
                 let peers = shared_state.peers.lock().await;
-                let peer = peers.get(&peer_name).ok_or(RequestError::PeerNotFound)?;
+                let peer = peers.get(&peer_id).ok_or(RequestError::PeerNotFound)?;
                 peer.index_cache.clone()
             };
 
@@ -96,9 +96,9 @@ pub async fn post_files(
                 for entries in responses {
                     let ls_response = LsResponse::Success(entries);
                     if let Ok(serialized_res) =
-                        serialize(&Ok::<(LsResponse, String), UiServerError>((
+                        serialize(&Ok::<(LsResponse, PeerInfo), UiServerError>((
                             ls_response,
-                            peer_name.to_string(),
+                            peer_info.clone(),
                         )))
                     {
                         let serialized_res = create_length_prefixed_message(&serialized_res);
@@ -114,10 +114,10 @@ pub async fn post_files(
                 continue;
             }
         }
-        debug!("Sending ls query to {peer_name}");
-        let peer_name_clone = peer_name.clone();
+        debug!("Sending ls query to {}", peer_info.name);
+        let peer_info_clone = peer_info.clone();
 
-        let recv = shared_state.request(request.clone(), &peer_name).await?;
+        let recv = shared_state.request(request.clone(), &peer_id).await?;
         let ls_response_stream = process_length_prefix(recv).await?;
 
         let mut response_tx = response_tx.clone();
@@ -138,10 +138,9 @@ pub async fn post_files(
                         cached_entries.push(entries.clone());
                     }
                 }
-                if let Ok(serialized_res) = serialize(&Ok::<(LsResponse, String), UiServerError>((
-                    ls_response,
-                    peer_name_clone.to_string(),
-                ))) {
+                if let Ok(serialized_res) = serialize(&Ok::<(LsResponse, PeerInfo), UiServerError>(
+                    (ls_response, peer_info_clone.clone()),
+                )) {
                     let serialized_res = create_length_prefixed_message(&serialized_res);
                     if response_tx.send(serialized_res).await.is_err() {
                         warn!("Response channel closed");
@@ -154,7 +153,7 @@ pub async fn post_files(
             }
             if !cached_entries.is_empty() && !cache_full {
                 let peers = shared_state.peers.lock().await;
-                if let Some(peer) = peers.get(&peer_name) {
+                if let Some(peer) = peers.get(&peer_id) {
                     if let Ok(mut cache) = peer.index_cache.lock() {
                         debug!("Writing {} items to index cache", cached_entries.len());
                         cache.put(request, cached_entries);
@@ -229,11 +228,28 @@ pub async fn get_info(
     Ok((
         StatusCode::OK,
         Bincode(Info {
+            id: shared_state.id,
             name: shared_state.name.clone(),
             announce_address: shared_state.get_ui_announce_address(),
             os_home_dir: shared_state.os_home_dir,
         }),
     ))
+}
+
+/// GET `/peers`
+/// Return connected peers with canonical IDs and derived display names.
+pub async fn get_peers(
+    State(shared_state): State<SharedState>,
+) -> Result<(StatusCode, Bincode<Vec<PeerInfo>>), UiServerErrorWrapper> {
+    let peers = shared_state
+        .peers
+        .lock()
+        .await
+        .keys()
+        .copied()
+        .map(PeerInfo::from_id)
+        .collect();
+    Ok((StatusCode::OK, Bincode(peers)))
 }
 
 /// GET `/known-peers`
@@ -277,10 +293,10 @@ pub async fn delete_shares(
 /// Returns a raw byte stream with 64kb chunks which may be too big for some clients
 pub async fn post_read(
     State(shared_state): State<SharedState>,
-    Bincode((read_query, peer_name)): Bincode<(ReadQuery, String)>,
+    Bincode((read_query, peer_id)): Bincode<(ReadQuery, PeerId)>,
 ) -> Result<(StatusCode, Body), UiServerErrorWrapper> {
     let request = Request::Read(read_query);
-    let mut recv = shared_state.request(request, &peer_name).await?;
+    let mut recv = shared_state.request(request, &peer_id).await?;
 
     // TODO handle errors here
     let (mut response_tx, response_rx) = mpsc::channel(256);
