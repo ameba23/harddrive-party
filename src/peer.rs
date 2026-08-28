@@ -8,17 +8,13 @@ use std::{
 
 use crate::{
     connections::{get_timestamp, speedometer::Speedometer},
-    ui_messages::{DownloadEvent, DownloadInfo, UiEvent},
-    wire_messages::{ReadQuery, Request},
+    ui_messages::{DownloadEvent, DownloadInfo, PeerInfo, UiEvent},
+    wire_messages::{AnnouncePeer, ReadQuery, Request},
     wishlist::{DownloadRequest, RequestedFile, WishList},
 };
 use anyhow::anyhow;
 use futures::{pin_mut, StreamExt};
-use harddrive_party_shared::{
-    codec::serialize,
-    wire_messages::{AnnounceAddress, Entry},
-};
-use key_to_animal::key_to_name;
+use harddrive_party_shared::{codec::serialize, wire_messages::Entry, PeerId};
 use log::{debug, error, warn};
 use lru::LruCache;
 use quinn::{Connection, RecvStream};
@@ -53,9 +49,9 @@ pub struct Peer {
     /// The QUIC connection to this peer
     pub connection: Connection,
     /// The peer's public ed25519 key
-    pub public_key: [u8; 32],
-    /// The peer's public connection details if known
-    pub announce_address: Option<AnnounceAddress>,
+    pub public_key: PeerId,
+    /// The peer's verified, gossip-authorized announcement, if received.
+    pub announcement: Option<AnnouncePeer>,
     /// Cache for peer's file index, to avoid making duplicate requests
     pub index_cache: Arc<Mutex<IndexCache>>,
 }
@@ -65,19 +61,19 @@ impl Peer {
         connection: Connection,
         event_broadcaster: broadcast::Sender<UiEvent>,
         download_dir: PathBuf,
-        public_key: [u8; 32],
+        public_key: PeerId,
         wishlist: WishList,
-        announce_address: Option<AnnounceAddress>,
+        announcement: Option<AnnouncePeer>,
     ) -> Self {
         let connection_clone = connection.clone();
 
-        let peer_name = key_to_name(&public_key);
+        let peer_info = PeerInfo::from_id(public_key);
         // Process requests for this peer in a separate task
         tokio::spawn(async move {
             if let Err(err) = process_requests(
                 public_key,
                 connection_clone,
-                peer_name,
+                peer_info,
                 wishlist,
                 download_dir,
                 event_broadcaster,
@@ -91,7 +87,7 @@ impl Peer {
         Self {
             connection,
             public_key,
-            announce_address,
+            announcement,
             index_cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(CACHE_SIZE).expect("Cache size to be non-zero"),
             ))),
@@ -101,21 +97,21 @@ impl Peer {
 
 /// Loop over requests for files from this peer
 async fn process_requests(
-    public_key: [u8; 32],
+    public_key: PeerId,
     connection: Connection,
-    peer_name: String,
+    peer_info: PeerInfo,
     wishlist: WishList,
     download_dir: PathBuf,
     event_broadcaster: broadcast::Sender<UiEvent>,
 ) -> anyhow::Result<()> {
-    let request_stream = wishlist.requests_for_peer(&public_key);
+    let request_stream = wishlist.requests_for_peer(public_key.as_bytes());
     pin_mut!(request_stream);
     // Handle download requests for this peer in serial
     while let Some(mut request) = request_stream.next().await {
         if let Some(reason) = connection.close_reason() {
             debug!(
                 "Stopping request processing for {} because the connection is closed: {}",
-                peer_name, reason
+                peer_info.name, reason
             );
             break;
         }
@@ -130,7 +126,7 @@ async fn process_requests(
             &connection,
             &download_dir,
             event_broadcaster.clone(),
-            peer_name.clone(),
+            peer_info.clone(),
             progress,
             associated_request.clone(),
         )
@@ -150,7 +146,7 @@ async fn process_requests(
                                 .send(UiEvent::Download(DownloadEvent {
                                     request_id: id,
                                     path: associated_request.path.clone(),
-                                    peer_name: peer_name.clone(),
+                                    peer: peer_info.clone(),
                                     download_info: DownloadInfo::Completed(get_timestamp()),
                                 }))
                                 .is_err()
@@ -168,7 +164,7 @@ async fn process_requests(
                 if let Some(reason) = connection.close_reason() {
                     debug!(
                         "Stopping request processing for {} after download error because the connection is closed: {}",
-                        peer_name, reason
+                        peer_info.name, reason
                     );
                     break;
                 }
@@ -184,7 +180,7 @@ async fn download(
     connection: &Connection,
     download_dir: &Path,
     event_broadcaster: broadcast::Sender<UiEvent>,
-    peer_name: String,
+    peer_info: PeerInfo,
     progress_request: u64,
     associated_request: DownloadRequest,
 ) -> anyhow::Result<()> {
@@ -249,7 +245,7 @@ async fn download(
                             .send(UiEvent::Download(DownloadEvent {
                                 request_id: id,
                                 path: associated_request.path.clone(),
-                                peer_name: peer_name.clone(),
+                                peer: peer_info.clone(),
                                 download_info: DownloadInfo::Downloading {
                                     path: requested_file.path.clone(),
                                     bytes_read,
@@ -285,7 +281,7 @@ async fn download(
     if event_broadcaster
         .send(UiEvent::Download(DownloadEvent {
             request_id: id,
-            peer_name: peer_name.clone(),
+            peer: peer_info.clone(),
             path: associated_request.path.clone(),
             download_info: DownloadInfo::Downloading {
                 path: requested_file.path.clone(),

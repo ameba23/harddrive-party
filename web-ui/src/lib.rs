@@ -16,8 +16,9 @@ use file::DownloadStatus;
 use futures::{stream::LocalBoxStream, StreamExt};
 use harddrive_party_shared::{
     client::Client,
-    ui_messages::{PeerPath, UiRequestedFile, UiServerError},
+    ui_messages::{PeerInfo, PeerPath, UiRequestedFile, UiServerError},
     wire_messages::{AnnounceAddress, IndexQuery},
+    PeerId,
 };
 pub use hdp::*;
 use leptos::{prelude::*, task::spawn_local};
@@ -41,7 +42,7 @@ pub fn App() -> impl IntoView {
 }
 
 type SharesStream = LocalBoxStream<'static, Result<LsResponse, UiServerError>>;
-type FilesStream = LocalBoxStream<'static, Result<(LsResponse, String), UiServerError>>;
+type FilesStream = LocalBoxStream<'static, Result<(LsResponse, PeerInfo), UiServerError>>;
 type RequestsStream = LocalBoxStream<'static, Result<Vec<UiDownloadRequest>, UiServerError>>;
 type RequestedFilesStream = LocalBoxStream<'static, Result<Vec<UiRequestedFile>, UiServerError>>;
 
@@ -151,11 +152,11 @@ impl UiClient {
         }
     }
 
-    pub async fn disconnect(&self, peer_name: String) -> Result<(), AppError> {
+    pub async fn disconnect(&self, peer_id: PeerId) -> Result<(), AppError> {
         match self {
-            UiClient::Real(client) => client.disconnect(peer_name).await.map_err(AppError::from),
+            UiClient::Real(client) => client.disconnect(peer_id).await.map_err(AppError::from),
             #[cfg(feature = "mock-ui")]
-            UiClient::Mock(client) => client.disconnect(peer_name).await.map_err(AppError::from),
+            UiClient::Mock(client) => client.disconnect(peer_id).await.map_err(AppError::from),
         }
     }
     pub async fn known_peers(&self) -> Result<Vec<AnnounceAddress>, AppError> {
@@ -186,9 +187,9 @@ impl UiClient {
 #[derive(Clone)]
 pub struct AppContext {
     pub client: ReadSignal<UiClient>,
-    pub own_name: ReadSignal<Option<String>>,
-    pub get_peers: ReadSignal<HashSet<String>>,
-    pub set_peers: WriteSignal<HashSet<String>>,
+    pub own_peer: ReadSignal<Option<PeerInfo>>,
+    pub get_peers: ReadSignal<HashSet<PeerInfo>>,
+    pub set_peers: WriteSignal<HashSet<PeerInfo>>,
     pub get_files: ReadSignal<BTreeMap<PeerPath, File>>,
     pub set_files: WriteSignal<BTreeMap<PeerPath, File>>,
     pub set_requests: WriteSignal<Requests>,
@@ -205,9 +206,9 @@ pub struct AppContext {
 impl AppContext {
     pub fn new(
         client: UiClient,
-        own_name: ReadSignal<Option<String>>,
-        get_peers: ReadSignal<HashSet<String>>,
-        set_peers: WriteSignal<HashSet<String>>,
+        own_peer: ReadSignal<Option<PeerInfo>>,
+        get_peers: ReadSignal<HashSet<PeerInfo>>,
+        set_peers: WriteSignal<HashSet<PeerInfo>>,
         get_files: ReadSignal<BTreeMap<PeerPath, File>>,
         set_files: WriteSignal<BTreeMap<PeerPath, File>>,
         set_requests: WriteSignal<Requests>,
@@ -223,7 +224,7 @@ impl AppContext {
         let (client, _set_client) = signal(client);
         Self {
             client,
-            own_name,
+            own_peer,
             get_peers,
             set_peers,
             get_files,
@@ -242,8 +243,8 @@ impl AppContext {
 
     #[cfg(test)]
     pub fn for_tests() -> Self {
-        let (own_name, _) = signal(Some("mock-ui".to_string()));
-        let (get_peers, set_peers) = signal(HashSet::<String>::new());
+        let (own_peer, _) = signal(Some(PeerInfo::from_id(PeerId::new([0; 32]))));
+        let (get_peers, set_peers) = signal(HashSet::<PeerInfo>::new());
         let (get_files, set_files) = signal(BTreeMap::<PeerPath, File>::new());
         let (_requests, set_requests) = signal(Requests::new());
         let (uploads, set_uploads) = signal(Uploads::new());
@@ -255,7 +256,7 @@ impl AppContext {
 
         Self::new(
             UiClient::real("http://127.0.0.1:3030".parse().expect("url should parse")),
-            own_name,
+            own_peer,
             get_peers,
             set_peers,
             get_files,
@@ -275,7 +276,7 @@ impl AppContext {
     pub fn shares_query(&self, query: IndexQuery) {
         let client = self.client.get_untracked();
         let set_files = self.set_files.clone();
-        let own_name = self.own_name.get_untracked();
+        let own_peer = self.own_peer.get_untracked();
         let set_error_message = self.set_error_message.clone();
         spawn_local(async move {
             match client.shares(query).await {
@@ -285,17 +286,17 @@ impl AppContext {
                             Ok(ls_response) => match ls_response {
                                 LsResponse::Success(entries) => {
                                     debug!("processing entries");
-                                    if let Some(ref own_name) = own_name {
+                                    if let Some(ref own_peer) = own_peer {
                                         set_files.update(|files| {
                                             for entry in entries {
                                                 let peer_path = PeerPath {
-                                                    peer_name: own_name.clone(),
+                                                    peer: own_peer.clone(),
                                                     path: entry.name.clone(),
                                                 };
                                                 if !files.contains_key(&peer_path) {
                                                     files.insert(
                                                         peer_path,
-                                                        File::from_entry(entry, own_name.clone()),
+                                                        File::from_entry(entry, own_peer.clone()),
                                                     );
                                                 }
                                             }
@@ -338,7 +339,7 @@ impl AppContext {
                         .map_or(0, |file| file.size.unwrap_or_default());
                     let request = UiDownloadRequest {
                         path: peer_path.path.clone(),
-                        peer_name: peer_path.peer_name.clone(),
+                        peer: peer_path.peer.clone(),
                         progress: 0,
                         total_size,
                         request_id: id,
@@ -360,7 +361,7 @@ impl AppContext {
                             })
                             .or_insert(File {
                                 name: request.path.clone(),
-                                peer_name: request.peer_name.clone(),
+                                peer: request.peer.clone(),
                                 size: None,
                                 download_status: RwSignal::new(DownloadStatus::Requested(id)),
                                 request: RwSignal::new(Some(request.clone())),
@@ -373,7 +374,7 @@ impl AppContext {
                         upper_bound.push_str("~");
                         for (_, file) in files.range_mut(
                             peer_path.clone()..PeerPath {
-                                peer_name: peer_path.peer_name.clone(),
+                                peer: peer_path.peer.clone(),
                                 path: upper_bound,
                             },
                         ) {
@@ -407,23 +408,23 @@ impl AppContext {
         });
     }
 
-    pub fn disconnect(&self, peer_name: String) {
+    pub fn disconnect(&self, peer: PeerInfo) {
         let client = self.client.get_untracked();
         let set_error_message = self.set_error_message.clone();
         let set_peers = self.set_peers.clone();
         let set_files = self.set_files.clone();
         let set_search_results = self.set_search_results.clone();
         spawn_local(async move {
-            match client.disconnect(peer_name.clone()).await {
+            match client.disconnect(peer.id).await {
                 Ok(()) => {
                     set_peers.update(|peers| {
-                        peers.remove(&peer_name);
+                        peers.remove(&peer);
                     });
                     set_files.update(|files| {
-                        files.retain(|peer_path, _| peer_path.peer_name != peer_name);
+                        files.retain(|peer_path, _| peer_path.peer.id != peer.id);
                     });
                     set_search_results.update(|results| {
-                        results.retain(|peer_path| peer_path.peer_name != peer_name);
+                        results.retain(|peer_path| peer_path.peer.id != peer.id);
                     });
                 }
                 Err(err) => {
@@ -445,17 +446,17 @@ impl AppContext {
                 Ok(mut files_stream) => {
                     while let Some(response) = files_stream.next().await {
                         match response {
-                            Ok((ls_response, peer_name)) => match ls_response {
+                            Ok((ls_response, peer)) => match ls_response {
                                 LsResponse::Success(entries) => {
                                     debug!("Processing entrys");
 
                                     set_peers.update(|peers| {
-                                        peers.insert(peer_name.clone());
+                                        peers.insert(peer.clone());
                                     });
                                     set_files.update(|files| {
                                         for entry in entries {
                                             let peer_path = PeerPath {
-                                                peer_name: peer_name.clone(),
+                                                peer: peer.clone(),
                                                 path: entry.name.clone(),
                                             };
                                             files
@@ -465,7 +466,7 @@ impl AppContext {
                                                     file.is_dir = Some(entry.is_dir);
                                                 })
                                                 .or_insert_with(|| {
-                                                    File::from_entry(entry, peer_name.clone())
+                                                    File::from_entry(entry, peer.clone())
                                                 });
                                         }
                                     });
@@ -511,7 +512,7 @@ impl AppContext {
                                     DownloadStatus::Requested(request.request_id)
                                 };
                                 let peer_path = PeerPath {
-                                    peer_name: request.peer_name.clone(),
+                                    peer: request.peer.clone(),
                                     path: request.path.clone(),
                                 };
                                 files
@@ -522,7 +523,7 @@ impl AppContext {
                                     })
                                     .or_insert(File {
                                         name: request.path.clone(),
-                                        peer_name: request.peer_name.clone(),
+                                        peer: request.peer.clone(),
                                         size: Some(request.total_size),
                                         download_status: RwSignal::new(download_status.clone()),
                                         request: RwSignal::new(Some(request.clone())),
@@ -533,12 +534,11 @@ impl AppContext {
                                 // Now set all child files to the same download status
                                 let mut upper_bound = peer_path.path.clone();
                                 upper_bound.push_str("~");
-                                for (_, file) in files.range_mut(
-                                    peer_path.clone()..PeerPath {
-                                        peer_name: peer_path.peer_name.clone(),
-                                        path: upper_bound,
-                                    },
-                                ) {
+                                for (_, file) in files.iter_mut().filter(|(candidate, _)| {
+                                    candidate.peer.id == peer_path.peer.id
+                                        && candidate.path >= peer_path.path
+                                        && candidate.path < upper_bound
+                                }) {
                                     let merged = file
                                         .download_status
                                         .get_untracked()
@@ -584,7 +584,7 @@ impl AppContext {
                                     DownloadStatus::Requested(request.request_id)
                                 };
                                 let peer_path = PeerPath {
-                                    peer_name: request.peer_name.clone(),
+                                    peer: request.peer.clone(),
                                     path: requested_file.path.clone(),
                                 };
                                 files
@@ -599,7 +599,7 @@ impl AppContext {
                                     })
                                     .or_insert(File {
                                         name: requested_file.path,
-                                        peer_name: request.peer_name.clone(),
+                                        peer: request.peer.clone(),
                                         size: Some(requested_file.size),
                                         download_status: RwSignal::new(download_status),
                                         request: RwSignal::new(None),
@@ -609,7 +609,7 @@ impl AppContext {
                             }
                             files
                                 .entry(PeerPath {
-                                    peer_name: request.peer_name.clone(),
+                                    peer: request.peer.clone(),
                                     path: request.path.clone(),
                                 })
                                 .and_modify(|file| {
@@ -685,7 +685,7 @@ impl AppContext {
                 searchterm: Some(searchterm),
                 recursive: true,
             },
-            peer_name: None,
+            peer_id: None,
         };
         let client = self.client.get_untracked();
         let set_search_results = self.set_search_results.clone();
@@ -700,13 +700,13 @@ impl AppContext {
                     });
                     while let Some(response) = files_stream.next().await {
                         match response {
-                            Ok((ls_response, peer_name)) => match ls_response {
+                            Ok((ls_response, peer)) => match ls_response {
                                 LsResponse::Success(entries) => {
                                     set_search_results.update(|search_results| {
                                         for entry in entries.clone() {
                                             let peer_path = PeerPath {
                                                 path: entry.name.clone(),
-                                                peer_name: peer_name.clone(),
+                                                peer: peer.clone(),
                                             };
                                             search_results.push(peer_path);
                                         }
@@ -716,7 +716,7 @@ impl AppContext {
                                         for entry in entries {
                                             let peer_path = PeerPath {
                                                 path: entry.name.clone(),
-                                                peer_name: peer_name.clone(),
+                                                peer: peer.clone(),
                                             };
                                             files
                                                 .entry(peer_path)
@@ -724,10 +724,7 @@ impl AppContext {
                                                     file.size = Some(entry.size);
                                                     file.is_dir = Some(entry.is_dir);
                                                 })
-                                                .or_insert(File::from_entry(
-                                                    entry,
-                                                    peer_name.clone(),
-                                                ));
+                                                .or_insert(File::from_entry(entry, peer.clone()));
                                         }
                                     });
                                 }

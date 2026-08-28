@@ -3,11 +3,12 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use futures::StreamExt;
 use harddrive_party::{
-    ui_messages::{DownloadInfo, PeerPath, UiEvent},
+    ui_messages::{DownloadInfo, PeerInfo, PeerPath, UiEvent},
     ui_server::{client::Client, http_server},
     wire_messages::{AnnounceAddress, IndexQuery, LsResponse, ReadQuery},
     Hdp,
 };
+use harddrive_party_shared::PeerId;
 use std::{env, net::SocketAddr, path::PathBuf};
 use tokio::fs::create_dir_all;
 use tokio::signal;
@@ -59,7 +60,7 @@ enum CliCommand {
     },
     /// Download a file or dir
     Download {
-        /// Peername and path - given as "peername/path"
+        /// Peer ID (or unambiguous exact display name) and path: "peer/path"
         path: String,
     },
     /// Query remote peers' file index
@@ -86,7 +87,7 @@ enum CliCommand {
     },
     /// Read a single remote file directly to stdout
     Read {
-        /// Peername and path - given as "peername/path"
+        /// Peer ID (or unambiguous exact display name) and path: "peer/path"
         path: String,
         /// Offset to start reading at (defaults to beginning of file)
         #[arg(short, long)]
@@ -101,7 +102,7 @@ enum CliCommand {
     },
     /// Disconnect from a peer
     Disconnect {
-        peer_name: String,
+        peer: String,
     },
     Stop,
 }
@@ -216,7 +217,7 @@ async fn main() -> anyhow::Result<()> {
             recursive,
         } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = match path {
+            let (peer_selector, peer_path) = match path {
                 Some(given_path) => {
                     let (peer_name, peer_path) = path_to_peer_path(given_path)?;
                     (peer_name, Some(peer_path))
@@ -225,9 +226,13 @@ async fn main() -> anyhow::Result<()> {
             };
 
             let client = Client::new(cli.ui_address.parse()?);
+            let peer_id = match peer_selector {
+                Some(selector) => Some(resolve_peer(&client, &selector).await?.id),
+                None => None,
+            };
             let mut responses = client
                 .files(harddrive_party::ui_messages::FilesQuery {
-                    peer_name,
+                    peer_id,
                     query: IndexQuery {
                         path: peer_path,
                         searchterm,
@@ -238,17 +243,22 @@ async fn main() -> anyhow::Result<()> {
 
             while let Some(response) = responses.next().await {
                 match response {
-                    Ok((ls_response, peer_name)) => match ls_response {
+                    Ok((ls_response, peer)) => match ls_response {
                         LsResponse::Success(entries) => {
                             for entry in entries {
                                 if entry.is_dir {
                                     println!(
                                         "{} {} bytes",
-                                        format!("[{}/{}]", peer_name, entry.name).blue(),
+                                        format!("[{}/{}]", display_peer(&peer), entry.name).blue(),
                                         entry.size
                                     );
                                 } else {
-                                    println!("{}/{} {}", peer_name, entry.name, entry.size);
+                                    println!(
+                                        "{}/{} {}",
+                                        display_peer(&peer),
+                                        entry.name,
+                                        entry.size
+                                    );
                                 }
                             }
                         }
@@ -306,13 +316,18 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Download { path } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path)?;
+            let (peer_selector, peer_path) = path_to_peer_path(path)?;
 
             let client = Client::new(cli.ui_address.parse()?);
+            let peer = resolve_peer(
+                &client,
+                &peer_selector.ok_or(anyhow!("Peer ID or name must be given"))?,
+            )
+            .await?;
             let request_id = client
                 .download(&PeerPath {
                     path: peer_path,
-                    peer_name: peer_name.ok_or(anyhow!("Peer name must be given"))?,
+                    peer,
                 })
                 .await?;
             let mut event_stream = client.event_stream().await?;
@@ -329,12 +344,17 @@ async fn main() -> anyhow::Result<()> {
         }
         CliCommand::Read { path, start, end } => {
             // Split path into peername and path components
-            let (peer_name, peer_path) = path_to_peer_path(path)?;
+            let (peer_selector, peer_path) = path_to_peer_path(path)?;
 
             let client = Client::new(cli.ui_address.parse()?);
+            let peer = resolve_peer(
+                &client,
+                &peer_selector.ok_or(anyhow!("Incomplete peer path"))?,
+            )
+            .await?;
             let mut stream = client
                 .read(
-                    peer_name.ok_or(anyhow!("Incomplete peer path"))?,
+                    peer.id,
                     ReadQuery {
                         path: peer_path,
                         start,
@@ -357,11 +377,13 @@ async fn main() -> anyhow::Result<()> {
             let mut event_stream = client.event_stream().await?;
             while let Some(event) = event_stream.next().await {
                 match event? {
-                    UiEvent::PeerConnected { name } if announce_address_parsed.name == name => {
+                    UiEvent::PeerConnected { peer }
+                        if announce_address_parsed.public_key == peer.id =>
+                    {
                         break;
                     }
-                    UiEvent::PeerConnectionFailed { name, error }
-                        if announce_address_parsed.name == name =>
+                    UiEvent::PeerConnectionFailed { peer, error }
+                        if announce_address_parsed.public_key == peer.id =>
                     {
                         return Err(anyhow!("{error}"));
                     }
@@ -369,13 +391,17 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        CliCommand::Disconnect { peer_name } => {
+        CliCommand::Disconnect { peer } => {
             let client = Client::new(cli.ui_address.parse()?);
+            let peer = resolve_peer(&client, &peer).await?;
             let mut event_stream = client.event_stream().await?;
-            client.disconnect(peer_name.clone()).await?;
+            client.disconnect(peer.id).await?;
             while let Some(event) = event_stream.next().await {
-                if let UiEvent::PeerDisconnected { name, .. } = event? {
-                    if name == peer_name {
+                if let UiEvent::PeerDisconnected {
+                    peer: disconnected, ..
+                } = event?
+                {
+                    if disconnected.id == peer.id {
                         break;
                     }
                 }
@@ -394,6 +420,41 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     Ok(())
+}
+
+fn display_peer(peer: &PeerInfo) -> String {
+    format!("{}#{}", peer.name, peer.id.abbreviated())
+}
+
+async fn resolve_peer(client: &Client, selector: &str) -> anyhow::Result<PeerInfo> {
+    let peers = client.peers().await?;
+    resolve_peer_from(peers, selector)
+}
+
+fn resolve_peer_from(peers: Vec<PeerInfo>, selector: &str) -> anyhow::Result<PeerInfo> {
+    if let Ok(id) = selector.parse::<PeerId>() {
+        return peers
+            .into_iter()
+            .find(|peer| peer.id == id)
+            .ok_or_else(|| anyhow!("Peer {id} is not connected"));
+    }
+
+    let matches = peers
+        .into_iter()
+        .filter(|peer| peer.name == selector)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [] => Err(anyhow!("No connected peer named {selector:?}")),
+        [peer] => Ok(peer.clone()),
+        _ => Err(anyhow!(
+            "Peer name {selector:?} is ambiguous; matching IDs: {}",
+            matches
+                .iter()
+                .map(|peer| peer.id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 fn path_to_peer_path(path: String) -> anyhow::Result<(Option<String>, String)> {
@@ -443,5 +504,47 @@ fn get_home_dir() -> anyhow::Result<PathBuf> {
             home_dir.push(username);
             Ok(home_dir)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selector_rejects_ambiguous_names_but_full_ids_work() {
+        let first = PeerInfo {
+            id: PeerId::new([1; 32]),
+            name: "sameAnimal".to_string(),
+        };
+        let second = PeerInfo {
+            id: PeerId::new([2; 32]),
+            name: "sameAnimal".to_string(),
+        };
+        let peers = vec![first.clone(), second.clone()];
+
+        let error = resolve_peer_from(peers.clone(), "sameAnimal").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("ambiguous"));
+        assert!(message.contains(&first.id.to_string()));
+        assert!(message.contains(&second.id.to_string()));
+
+        assert_eq!(
+            resolve_peer_from(peers, &second.id.to_string()).unwrap(),
+            second
+        );
+    }
+
+    #[test]
+    fn selector_names_are_exact_and_case_sensitive() {
+        let peer = PeerInfo {
+            id: PeerId::new([3; 32]),
+            name: "CaseSensitiveCat".to_string(),
+        };
+        assert!(resolve_peer_from(vec![peer.clone()], "casesensitivecat").is_err());
+        assert_eq!(
+            resolve_peer_from(vec![peer.clone()], "CaseSensitiveCat").unwrap(),
+            peer
+        );
     }
 }

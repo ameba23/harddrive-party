@@ -4,7 +4,7 @@ use crate::{
     ui_messages::{FilesQuery, UiDownloadRequest, UploadInfo},
     AppContext, PeerPath,
 };
-use harddrive_party_shared::wire_messages::IndexQuery;
+use harddrive_party_shared::{ui_messages::PeerInfo, wire_messages::IndexQuery};
 use leptos::{
     either::{Either, EitherOf4, EitherOf6},
     prelude::*,
@@ -17,8 +17,8 @@ use thaw::*;
 pub struct File {
     /// Path of file
     pub name: String,
-    /// Name of peer who holds this file
-    pub peer_name: String,
+    /// Canonical identity of the peer who holds this file.
+    pub peer: PeerInfo,
     /// Size, if known
     pub size: Option<u64>,
     pub is_dir: Option<bool>,
@@ -28,10 +28,10 @@ pub struct File {
 }
 
 impl File {
-    pub fn from_entry(entry: Entry, peer_name: String) -> Self {
+    pub fn from_entry(entry: Entry, peer: PeerInfo) -> Self {
         Self {
             name: entry.name,
-            peer_name,
+            peer,
             size: Some(entry.size),
             is_dir: Some(entry.is_dir),
             is_expanded: RwSignal::new(false),
@@ -42,12 +42,12 @@ impl File {
 
     pub fn from_downloading_file(
         name: String,
-        peer_name: String,
+        peer: PeerInfo,
         download_status: DownloadStatus,
     ) -> Self {
         Self {
             name,
-            peer_name,
+            peer,
             size: None,
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
@@ -61,7 +61,7 @@ impl From<UploadInfo> for File {
     fn from(upload: UploadInfo) -> Self {
         Self {
             name: upload.path,
-            peer_name: upload.peer_name,
+            peer: upload.peer,
             size: Some(upload.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
@@ -90,10 +90,10 @@ pub enum FileDisplayContext {
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let (file_name, _set_file_name) = signal(file.name);
-    let peer_name_for_uploader = file.peer_name.clone();
+    let peer_for_uploader = file.peer.clone();
 
     let app_context_1 = app_context.clone();
-    let peer_name_for_download = file.peer_name.clone();
+    let peer_for_download = file.peer.clone();
 
     let is_dir = file.is_dir == Some(true);
 
@@ -105,7 +105,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
             && context != FileDisplayContext::Transfer
         {
             let app_ctx = app_context_1.clone();
-            let p_name = peer_name_for_download.clone();
+            let peer = peer_for_download.clone();
             Either::Left(view! {
                 <span title="Download">
                     <Button
@@ -115,7 +115,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             app_ctx
                                 .download(PeerPath {
                                     path: file_name.get().to_string(),
-                                    peer_name: p_name.clone(),
+                                    peer: peer.clone(),
                                 });
                         }
                         size=ButtonSize::Small
@@ -127,7 +127,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         }
     };
 
-    let peer_name = file.peer_name.clone();
+    let peer = file.peer.clone();
     let expand_dir = move |_| {
         if file.is_dir.unwrap_or_default() {
             if file.is_expanded.get() {
@@ -143,8 +143,10 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                 if is_shared {
                     app_context.shares_query(query);
                 } else {
-                    let peer_name = Some(peer_name.clone());
-                    app_context.files(FilesQuery { query, peer_name });
+                    app_context.files(FilesQuery {
+                        query,
+                        peer_id: Some(peer.id),
+                    });
                 }
 
                 // Issue here is that if this is repeatedly clicked before file is loaded we lose
@@ -158,7 +160,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
         let full_path = file_name.get();
         let uploader_label = match context {
             FileDisplayContext::Transfer => match file.download_status.get() {
-                DownloadStatus::Uploading { .. } => Some(peer_name_for_uploader.clone()),
+                DownloadStatus::Uploading { .. } => Some(peer_for_uploader.name.clone()),
                 _ => None,
             },
             _ => None,

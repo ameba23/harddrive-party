@@ -4,11 +4,13 @@ use crate::{
     file::{File, FileDisplayContext},
     AppContext, PeerPath,
 };
-use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
+use harddrive_party_shared::{
+    ui_messages::PeerInfo,
+    wire_messages::{AnnounceAddress, PeerConnectionDetails},
+};
 use leptos::{either::Either, prelude::*};
 use qrcode::{render::svg, QrCode};
 use std::collections::HashSet;
-use std::ops::Bound::Included;
 use thaw::*;
 
 fn is_visible_in_peer_tree(
@@ -35,7 +37,7 @@ fn is_visible_in_peer_tree(
         }
 
         let Some(ancestor) = files.get(&PeerPath {
-            peer_name: peer_path.peer_name.clone(),
+            peer: peer_path.peer.clone(),
             path: current.clone(),
         }) else {
             return false;
@@ -50,17 +52,17 @@ fn is_visible_in_peer_tree(
 }
 
 #[component]
-pub fn Peer(name: String, is_self: bool) -> impl IntoView {
+pub fn Peer(peer: PeerInfo, is_self: bool) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let files = app_context.get_files;
 
     // This signal is used below to provide context to File
-    let (peer_signal, _set_peer) = signal((name.clone(), is_self));
+    let (peer_signal, _set_peer) = signal((peer.clone(), is_self));
 
     let root_size = move || {
         display_bytes(
             match files.get().get(&PeerPath {
-                peer_name: peer_signal.get().0,
+                peer: peer_signal.get().0,
                 path: "".to_string(),
             }) {
                 Some(file) => file.size.unwrap_or_default(),
@@ -76,17 +78,10 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
         // Calling .get() clones - we should ideally use .with(|files| files.range...)
         let files = files.get();
         // Get only files from this peer using a range of the BTreeMap
+        let peer_id = peer_signal.get().0.id;
         files
-            .range((
-                Included(PeerPath {
-                    peer_name: peer_signal.get().0,
-                    path: "".to_string(),
-                }),
-                Included(PeerPath {
-                    peer_name: format!("{}~", peer_signal.get().0),
-                    path: "".to_string(), // TODO
-                }),
-            ))
+            .iter()
+            .filter(move |(peer_path, _)| peer_path.peer.id == peer_id)
             .filter(|(peer_path, _)| is_visible_in_peer_tree(&files, peer_path))
             .map(|(_, file)| file.clone()) // TODO ideally dont clone
             .collect::<Vec<File>>()
@@ -102,7 +97,10 @@ pub fn Peer(name: String, is_self: bool) -> impl IntoView {
                 >
                     <div>
                         <Icon icon=icondata::AiUserOutlined />
-                        {move || peer_signal.get().0}
+                        {move || {
+                            let peer = peer_signal.get().0;
+                            format!("{}#{}", peer.name, peer.id.abbreviated())
+                        }}
                         " "
                         {root_size}
                         " shared"
@@ -179,8 +177,8 @@ pub fn Peers(
                 <div>
                     <For
                         each=move || app_context.get_peers.get()
-                        key=|name| name.clone()
-                        children=move |name| view! { <Peer name is_self=false /> }
+                        key=|peer| peer.id
+                        children=move |peer| view! { <Peer peer is_self=false /> }
                     />
                 </div>
             })
@@ -194,7 +192,9 @@ pub fn Peers(
             .get()
             .into_iter()
             .filter(|announce_address| {
-                !connected.contains(&announce_address.name)
+                !connected
+                    .iter()
+                    .any(|peer| peer.id == announce_address.public_key)
                     && !pending.contains(&announce_address.to_string())
             })
             .collect::<Vec<_>>()
@@ -378,6 +378,22 @@ mod tests {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    fn test_peer(name: &str, byte: u8) -> PeerInfo {
+        PeerInfo {
+            id: harddrive_party_shared::PeerId::new([byte; 32]),
+            name: name.to_string(),
+        }
+    }
+
+    fn test_address(byte: u8) -> AnnounceAddress {
+        AnnounceAddress {
+            public_key: harddrive_party_shared::PeerId::new([byte; 32]),
+            connection_details: harddrive_party_shared::wire_messages::PeerConnectionDetails::NoNat(
+                format!("203.0.113.{byte}:7007").parse().unwrap(),
+            ),
+        }
+    }
+
     fn mount_host() -> HtmlElement {
         let document = document();
         let host = document
@@ -397,17 +413,17 @@ mod tests {
     fn filters_connected_peers_from_known_peers_list() {
         let host = mount_host();
         let mut connected = HashSet::new();
-        connected.insert("asphericKingCrab".to_string());
-        connected.insert("bob".to_string());
+        connected.insert(test_peer(
+            &PeerInfo::from_id(harddrive_party_shared::PeerId::new([1; 32])).name,
+            1,
+        ));
+        connected.insert(test_peer("bob", 9));
         let app_context = AppContext::for_tests();
         app_context.set_peers.set(connected);
         let (announce_address, _set_announce_address) = signal(None::<String>);
         let (pending_peers, _set_pending_peers) = signal(HashSet::<String>::new());
-        let (known_peers, _set_known_peers) = signal(vec![
-            AnnounceAddress::from_string("asphericKingCrabEJLLAHEK2".to_string()).unwrap(),
-            AnnounceAddress::from_string("amberCloudYakG1/LAHFY0".to_string()).unwrap(),
-            AnnounceAddress::from_string("bobbyxjNkTQ1".to_string()).unwrap(),
-        ]);
+        let (known_peers, _set_known_peers) =
+            signal(vec![test_address(1), test_address(2), test_address(3)]);
 
         let handle = mount_to(host.clone(), move || {
             provide_context(app_context.clone());
@@ -425,10 +441,10 @@ mod tests {
         let known_text = known_list.text_content().unwrap_or_default();
         let all_text = host.text_content().unwrap_or_default();
 
-        assert!(known_text.contains("amberCloudYak"));
-        assert!(known_text.contains("bobby"));
-        assert!(!known_text.contains("asphericKingCrab"));
-        assert!(all_text.contains("asphericKingCrab"));
+        assert!(known_text.contains(&PeerInfo::from_id(test_address(2).public_key).name));
+        assert!(known_text.contains(&PeerInfo::from_id(test_address(3).public_key).name));
+        assert!(!known_text.contains(&PeerInfo::from_id(test_address(1).public_key).name));
+        assert!(all_text.contains(&PeerInfo::from_id(test_address(1).public_key).name));
 
         drop(handle);
         host.remove();
@@ -438,11 +454,11 @@ mod tests {
     fn labels_nat_peers_as_attempt_connect() {
         let direct_peer = AnnounceAddress {
             connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
-            name: "DirectPeer".to_string(),
+            public_key: harddrive_party_shared::PeerId::new([4; 32]),
         };
         let nat_peer = AnnounceAddress {
             connection_details: PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap()),
-            name: "NatPeer".to_string(),
+            public_key: harddrive_party_shared::PeerId::new([5; 32]),
         };
 
         assert_eq!(known_peer_connect_label(&direct_peer), "Connect");
@@ -453,13 +469,13 @@ mod tests {
     async fn hides_downloaded_children_until_parent_directory_is_expanded() {
         let host = mount_host();
         let app_context = AppContext::for_tests();
-        let peer_name = "asphericKingCrab".to_string();
+        let peer = test_peer("asphericKingCrab", 1);
         let parent_path = PeerPath {
-            peer_name: peer_name.clone(),
+            peer: peer.clone(),
             path: "albums".to_string(),
         };
         let child_path = PeerPath {
-            peer_name: peer_name.clone(),
+            peer: peer.clone(),
             path: "albums/song.mp3".to_string(),
         };
 
@@ -468,7 +484,7 @@ mod tests {
                 parent_path.clone(),
                 File {
                     name: parent_path.path.clone(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(1024),
                     is_dir: Some(true),
                     is_expanded: RwSignal::new(false),
@@ -479,12 +495,12 @@ mod tests {
         });
 
         let app_context_for_mount = app_context.clone();
-        let peer_name_for_mount = peer_name.clone();
+        let peer_for_mount = peer.clone();
         let handle = mount_to(host.clone(), move || {
             provide_context(app_context_for_mount.clone());
             view! {
                 <ConfigProvider>
-                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                    <Peer peer=peer_for_mount.clone() is_self=false />
                 </ConfigProvider>
             }
         });
@@ -498,7 +514,7 @@ mod tests {
                 child_path.clone(),
                 File {
                     name: child_path.path.clone(),
-                    peer_name: child_path.peer_name.clone(),
+                    peer: child_path.peer.clone(),
                     size: Some(512),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
@@ -536,13 +552,13 @@ mod tests {
     async fn nested_subdirectories_stay_collapsed_when_parent_expands() {
         let host = mount_host();
         let app_context = AppContext::for_tests();
-        let peer_name = "asphericKingCrab".to_string();
+        let peer = test_peer("asphericKingCrab", 1);
 
         app_context.set_files.update(|files| {
             for file in [
                 File {
                     name: "albums".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(1024),
                     is_dir: Some(true),
                     is_expanded: RwSignal::new(false),
@@ -551,7 +567,7 @@ mod tests {
                 },
                 File {
                     name: "albums/live".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(512),
                     is_dir: Some(true),
                     is_expanded: RwSignal::new(false),
@@ -560,7 +576,7 @@ mod tests {
                 },
                 File {
                     name: "albums/live/song.mp3".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(256),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
@@ -570,7 +586,7 @@ mod tests {
             ] {
                 files.insert(
                     PeerPath {
-                        peer_name: file.peer_name.clone(),
+                        peer: file.peer.clone(),
                         path: file.name.clone(),
                     },
                     file,
@@ -579,12 +595,12 @@ mod tests {
         });
 
         let app_context_for_mount = app_context.clone();
-        let peer_name_for_mount = peer_name.clone();
+        let peer_for_mount = peer.clone();
         let handle = mount_to(host.clone(), move || {
             provide_context(app_context_for_mount.clone());
             view! {
                 <ConfigProvider>
-                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                    <Peer peer=peer_for_mount.clone() is_self=false />
                 </ConfigProvider>
             }
         });
@@ -616,17 +632,17 @@ mod tests {
     async fn missing_intermediate_directory_keeps_downloaded_file_hidden_until_loaded() {
         let host = mount_host();
         let app_context = AppContext::for_tests();
-        let peer_name = "asphericKingCrab".to_string();
+        let peer = test_peer("asphericKingCrab", 1);
 
         app_context.set_files.update(|files| {
             files.insert(
                 PeerPath {
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     path: "albums".to_string(),
                 },
                 File {
                     name: "albums".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(1024),
                     is_dir: Some(true),
                     is_expanded: RwSignal::new(true),
@@ -636,12 +652,12 @@ mod tests {
             );
             files.insert(
                 PeerPath {
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     path: "albums/live/song.mp3".to_string(),
                 },
                 File {
                     name: "albums/live/song.mp3".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(256),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
@@ -652,12 +668,12 @@ mod tests {
         });
 
         let app_context_for_mount = app_context.clone();
-        let peer_name_for_mount = peer_name.clone();
+        let peer_for_mount = peer.clone();
         let handle = mount_to(host.clone(), move || {
             provide_context(app_context_for_mount.clone());
             view! {
                 <ConfigProvider>
-                    <Peer name=peer_name_for_mount.clone() is_self=false />
+                    <Peer peer=peer_for_mount.clone() is_self=false />
                 </ConfigProvider>
             }
         });
@@ -669,12 +685,12 @@ mod tests {
         app_context.set_files.update(|files| {
             files.insert(
                 PeerPath {
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     path: "albums/live".to_string(),
                 },
                 File {
                     name: "albums/live".to_string(),
-                    peer_name: peer_name.clone(),
+                    peer: peer.clone(),
                     size: Some(512),
                     is_dir: Some(true),
                     is_expanded: RwSignal::new(false),

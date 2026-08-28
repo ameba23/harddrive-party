@@ -46,9 +46,9 @@ Open `http://127.0.0.1:3030` in your browser.
     - `--stun-server <HOST:PORT>` (repeatable, overrides the built-in STUN server list)
 - `connect <announce-address>`
   - Ask the running process to connect to a peer.
-- `disconnect <peer-name>`
+- `disconnect <peer-id-or-name>`
   - Disconnect from a peer and suppress automatic reconnects until you explicitly connect again.
-- `ls [peer/path]`
+- `ls [peer-id-or-name/path]`
   - Query remote peer indexes.
   - Options:
     - `--searchterm <TERM>` (filter paths case-insensitively)
@@ -58,9 +58,9 @@ Open `http://127.0.0.1:3030` in your browser.
   - Options:
     - `--searchterm <TERM>` (filter paths case-insensitively)
     - `--recursive <BOOL>` (defaults to `true`)
-- `download <peer/path>`
+- `download <peer-id-or-name/path>`
   - Start a download request.
-- `read <peer/path> [--start <N>] [--end <N>]`
+- `read <peer-id-or-name/path> [--start <N>] [--end <N>]`
   - Stream a remote file (or range) directly to stdout.
 - `stop`
   - Gracefully shut down the running process.
@@ -69,6 +69,9 @@ Global options:
 
 - `--ui-address <URL>` (default `http://127.0.0.1:3030`) for commands that talk to the UI server.
 - `--verbose` to enable debug logging (`harddrive_party=debug`).
+
+In the CLI commands you can either refer to peers by peer public key (43-character, URL-safe, unpadded
+base64) or an animal-name derived from it for convenience.
 
 Send your 'announce address' to someone you want to connect to (using some external messaging system).
 
@@ -82,8 +85,6 @@ Download a file or directory by clicking the download button next to it. You can
 
 Shared directories can also be added or removed at runtime from the 'Shares' tab. The display name for a share is the final path component of the directory. If that name is already in use, a unique alias is generated from the shortest useful path suffix.
 
-To try it out, you can try connecting to the announce address `bathypelagicKomodoDragonx4hZOg2U0`. But things will work a bit different because this peer is running on a server which is not behind NAT. This means you can connect to them without giving them your own announce address. This instance is used for experimenting with new features and there is no guarantee that it will be running or functioning correctly. Also, if someone else connects to that peer, your details will be 'gossiped' allowing you to connect to them directly as well.
-
 ![Screenshot](./screenshot.png)
 
 ## Protocol
@@ -91,23 +92,25 @@ To try it out, you can try connecting to the announce address `bathypelagicKomod
 ### Peer discovery
 
 There are 3 methods of peer discovery:
-- Manual connections by directly entering a peer's connection details using the UI. The connection details consist of IP address, port, NAT type and a name derived from the public key. For example: `IndicRedWolf0rtRbD7b2` - here `IndicRedWolf` is derived from public key, and `0rRtbQ7b2` is the connection details.
-- 'Gossiped' connections by which peers who are already connected can pass on the details of others they are also connected to.
+- Manual connections by entering an announce code in the UI. A code contains the peer's Ed25519 public key as well as IP address, port, and NAT-type.
+- 'Gossiped' connections by which peers who are already connected can pass on the details of others they are also connected to. These contain a signature to ensure the peer intended for their details to be gossiped and that the public key matches the connection details.
 - [Multicast DNS](https://en.wikipedia.org/wiki/Multicast_DNS) is also used to find peers connected to the same local network.
 
 UDP hole-punching is used to connect peers who are behind a NAT or firewall.
 
-Peers discovered manually, through gossip, or through mDNS are stored as known peers. Known peers are used for certificate verification, shown in the UI, and public-address peers are retried on startup. Symmetric-to-symmetric NAT connections are not currently supported.
+Once you have connected to a peer it is stored as a 'known peer'.  On startup, reconnection to all known peers is attempted.
 
 ### Transport
 
 Peers connect to each other using [QUIC](https://en.wikipedia.org/wiki/QUIC), with client authentication using Ed25519. A QUIC stream is opened for each RPC request to a peer. There are three types of wire message:
 
 - `Ls` - for querying the shared file index (with a sub-path, optional search term, and recursive/non-recursive mode).
-- `Read` - for downloading a file, or portion of a file. 
-- `AnnouncePeer` - for passing on connection details of another peer.
+- `Read` - for downloading a file, or portion of a file.
+- `AnnouncePeer` - for passing on signed connection details of another peer.
 
 These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode-next](https://docs.rs/bincode-next) using the bincode 1-compatible legacy configuration.
+
+Both sides send their signed self-announcement on every new connection. Which can be gossiped to other peers.
 
 ### Shared files
 
@@ -126,15 +129,15 @@ The UI server exposes:
   - `POST /api/connect` and `DELETE /api/connect`
   - `POST /api/files`, `POST /api/shares`, `PUT /api/shares`, and `DELETE /api/shares`
   - `POST /api/download` and `POST /api/read`
-  - `GET /api/info`, `GET /api/known-peers`, `GET /api/requests`, and `GET /api/request?id=<ID>`
+  - `GET /api/info`, `GET /api/peers`, `GET /api/known-peers`, `GET /api/requests`, and `GET /api/request?id=<ID>`
   - `POST /api/close`
 - Static access to downloaded files under `/downloads/*`
 
 Most `/api/*` payloads use the bincode wire format rather than JSON (see [`shared/src/client/mod.rs`](./shared/src/client/mod.rs)).
 
-### Peer names
+### Peer identity and names
 
-There are no usernames - peers are represented by an adjective and type of animal which is derived from their public authentication key. For example: 'PersianChinchilla'.
+There are no usernames. A peer is identified by its Ed25519 public key. In the UI a adjective-and-animal string derived from that key (for example, `PersianChinchilla`) is used.
 
 ## Logging
 

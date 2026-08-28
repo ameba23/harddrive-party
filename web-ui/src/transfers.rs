@@ -64,7 +64,7 @@ pub fn Transfers(
                                     each=uploads_list
                                     key=|upload| {
                                         let data = upload.get_untracked();
-                                        format!("{}:{}", data.peer_name, data.name)
+                                        format!("{}:{}:{}", data.peer.id, data.peer.name, data.name)
                                     }
                                     children=move |upload| view! { <UploadRow upload=upload /> }
                                 />
@@ -94,7 +94,10 @@ mod tests {
         AppContext,
     };
     use gloo_timers::future::sleep;
-    use harddrive_party_shared::ui_messages::UploadInfo;
+    use harddrive_party_shared::{
+        ui_messages::{PeerInfo, UploadInfo},
+        PeerId,
+    };
     use leptos::mount::mount_to;
     use leptos::wasm_bindgen::JsCast;
     use std::time::Duration;
@@ -103,6 +106,13 @@ mod tests {
     use web_sys::HtmlElement;
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    fn test_peer(name: &str, byte: u8) -> PeerInfo {
+        PeerInfo {
+            id: PeerId::new([byte; 32]),
+            name: name.to_string(),
+        }
+    }
 
     fn mount_host() -> HtmlElement {
         let document = document();
@@ -128,12 +138,12 @@ mod tests {
             total_size: 1024,
             request_id: 2000,
             timestamp: Duration::from_secs(1_710_000_000),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
@@ -144,7 +154,7 @@ mod tests {
             request: RwSignal::new(Some(request.clone())),
         };
         let request_peer_path = PeerPath {
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             path: request.path.clone(),
         };
         let mut files = BTreeMap::new();
@@ -164,7 +174,7 @@ mod tests {
             bytes_read: 2048,
             total_size: 4096,
             speed: 512,
-            peer_name: "lunarTulipOx".to_string(),
+            peer: test_peer("lunarTulipOx", 2),
         });
         let (uploads, _set_uploads) = signal(uploads);
 
@@ -198,12 +208,12 @@ mod tests {
             total_size: 1024,
             request_id: 2001,
             timestamp: Duration::from_secs(1_710_000_001),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
@@ -214,7 +224,7 @@ mod tests {
             request: RwSignal::new(Some(request.clone())),
         };
         let request_peer_path = PeerPath {
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             path: request.path.clone(),
         };
         let mut files = BTreeMap::new();
@@ -257,12 +267,12 @@ mod tests {
             total_size: 1024,
             request_id: 2002,
             timestamp: Duration::from_secs(1_710_000_002),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
@@ -274,7 +284,7 @@ mod tests {
         };
         let child_file = File {
             name: "music/single.mp3".to_string(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
@@ -287,14 +297,14 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: request.path.clone(),
             },
             request_root,
         );
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: "music/single.mp3".to_string(),
             },
             child_file,
@@ -338,12 +348,12 @@ mod tests {
             total_size: 2048,
             request_id: 2003,
             timestamp: Duration::from_secs(1_710_000_003),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
@@ -355,7 +365,7 @@ mod tests {
         };
         let child_file = File {
             name: "music/single.mp3".to_string(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(1024),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
@@ -368,14 +378,14 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: request.path.clone(),
             },
             request_root,
         );
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: "music/single.mp3".to_string(),
             },
             child_file,
@@ -412,12 +422,12 @@ mod tests {
         app_context.set_files.update(|files| {
             files.insert(
                 PeerPath {
-                    peer_name: request.peer_name.clone(),
+                    peer: request.peer.clone(),
                     path: "music/bonus.flac".to_string(),
                 },
                 File {
                     name: "music/bonus.flac".to_string(),
-                    peer_name: request.peer_name.clone(),
+                    peer: request.peer.clone(),
                     size: Some(1024),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),
@@ -446,12 +456,12 @@ mod tests {
             total_size: 1024,
             request_id: 2004,
             timestamp: Duration::from_secs(1_710_000_004),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: true,
         };
         let request_root = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(true),
             is_expanded: RwSignal::new(true),
@@ -460,7 +470,7 @@ mod tests {
         };
         let child_file = File {
             name: "music/single.mp3".to_string(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(false),
@@ -470,14 +480,14 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: request.path.clone(),
             },
             request_root,
         );
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: "music/single.mp3".to_string(),
             },
             child_file,
@@ -520,12 +530,12 @@ mod tests {
             total_size: 1024,
             request_id: 2005,
             timestamp: Duration::from_secs(1_710_000_005),
-            peer_name: "asphericKingCrab".to_string(),
+            peer: test_peer("asphericKingCrab", 1),
             is_dir: false,
         };
         let request_file = File {
             name: request.path.clone(),
-            peer_name: request.peer_name.clone(),
+            peer: request.peer.clone(),
             size: Some(request.total_size),
             is_dir: Some(false),
             is_expanded: RwSignal::new(true),
@@ -535,7 +545,7 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             PeerPath {
-                peer_name: request.peer_name.clone(),
+                peer: request.peer.clone(),
                 path: request.path.clone(),
             },
             request_file,

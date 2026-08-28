@@ -11,7 +11,7 @@ use crate::{
     search::Search,
     shares::Shares,
     transfers::Transfers,
-    ui_messages::{DownloadInfo, FilesQuery, UiEvent, UiServerError},
+    ui_messages::{DownloadInfo, FilesQuery, PeerInfo, UiEvent, UiServerError},
     uploads::Uploads,
     wire_messages::IndexQuery,
     ws::WebsocketService,
@@ -71,7 +71,7 @@ pub fn HdpUi() -> impl IntoView {
     };
 
     // Setup signals
-    let (peers, set_peers) = signal(HashSet::<String>::new());
+    let (peers, set_peers) = signal(HashSet::<PeerInfo>::new());
     let (pending_peers, set_pending_peers) = signal(HashSet::<String>::new());
     let (add_or_remove_share_message, set_add_or_remove_share_message) =
         signal(Option::<Result<String, String>>::None);
@@ -86,10 +86,10 @@ pub fn HdpUi() -> impl IntoView {
 
     let (home_dir, set_home_dir) = signal(Option::<String>::None);
     let (announce_address, set_announce_address) = signal(Option::<String>::None);
-    let (own_name, set_own_name) = signal(Option::<String>::None);
+    let (own_peer, set_own_peer) = signal(Option::<PeerInfo>::None);
     let app_context = AppContext::new(
         client,
-        own_name,
+        own_peer,
         peers.clone(),
         set_peers.clone(),
         files.clone(),
@@ -111,12 +111,17 @@ pub fn HdpUi() -> impl IntoView {
     spawn_local(async move {
         let set_announce_address = set_announce_address.clone();
         let set_home_dir = set_home_dir.clone();
-        let set_own_name = set_own_name.clone();
+        let set_own_peer = set_own_peer.clone();
         match client.info().await {
             Ok(info) => {
                 set_announce_address.update(|address| *address = Some(info.announce_address));
                 set_home_dir.update(|home_dir| *home_dir = info.os_home_dir);
-                set_own_name.update(|own_name| *own_name = Some(info.name.clone()));
+                set_own_peer.update(|own_peer| {
+                    *own_peer = Some(PeerInfo {
+                        id: info.id,
+                        name: info.name,
+                    })
+                });
             }
             Err(err) => set_error_message_for_info.update(|errors| {
                 errors.insert(err);
@@ -148,13 +153,13 @@ pub fn HdpUi() -> impl IntoView {
                 searchterm: None,
                 recursive: false,
             };
-            own_name.get();
+            own_peer.get();
             app_context.shares_query(index_query.clone());
 
             // On startup do a files query to see what peers are connected
             app_context.files(FilesQuery {
                 query: index_query,
-                peer_name: None,
+                peer_id: None,
             });
         });
     }
@@ -166,10 +171,10 @@ pub fn HdpUi() -> impl IntoView {
         // Loop over events from server
         while let Some(msg) = ws_rx.next().await {
             match msg {
-                UiEvent::PeerConnected { name } => {
-                    debug!("Connected to {}", name);
+                UiEvent::PeerConnected { peer } => {
+                    debug!("Connected to {} ({})", peer.name, peer.id);
                     set_peers.update(|peers| {
-                        peers.insert(name.clone());
+                        peers.insert(peer.clone());
                     });
                     app_context.files(FilesQuery {
                         query: IndexQuery {
@@ -177,26 +182,29 @@ pub fn HdpUi() -> impl IntoView {
                             searchterm: None,
                             recursive: false,
                         },
-                        peer_name: Some(name.clone()),
+                        peer_id: Some(peer.id),
                     });
                     set_pending_peers.update(|pending_peers| {
                         if let Some(announce_address) =
-                            pending_peers.clone().iter().find(|&a| a.starts_with(&name))
+                            pending_peers.clone().iter().find(|&address| {
+                                AnnounceAddress::from_string(address.clone())
+                                    .is_ok_and(|a| a.public_key == peer.id)
+                            })
                         {
                             pending_peers.remove(announce_address);
                         }
                     });
                 }
-                UiEvent::PeerDisconnected { name, error } => {
-                    debug!("{} disconnected {}", name, error);
+                UiEvent::PeerDisconnected { peer, error } => {
+                    debug!("{} disconnected {}", peer.name, error);
                     set_peers.update(|peers| {
-                        peers.remove(&name);
+                        peers.remove(&peer);
                     });
                     set_files.update(|files| {
-                        files.retain(|peer_path, _| peer_path.peer_name != name);
+                        files.retain(|peer_path, _| peer_path.peer.id != peer.id);
                     });
                     set_search_results.update(|results| {
-                        results.retain(|peer_path| peer_path.peer_name != name);
+                        results.retain(|peer_path| peer_path.peer.id != peer.id);
                     });
                 }
                 UiEvent::Uploaded(upload_info) => {
@@ -205,18 +213,21 @@ pub fn HdpUi() -> impl IntoView {
                         uploads.upsert(upload_info);
                     });
                 }
-                UiEvent::PeerConnectionFailed { name, error } => {
-                    debug!("Peer connection failed {} {}", name, error);
+                UiEvent::PeerConnectionFailed { peer, error } => {
+                    debug!("Peer connection failed {} {}", peer.name, error);
 
                     set_pending_peers.update(|pending_peers| {
                         if let Some(announce_address) =
-                            pending_peers.clone().iter().find(|&a| a.starts_with(&name))
+                            pending_peers.clone().iter().find(|&address| {
+                                AnnounceAddress::from_string(address.clone())
+                                    .is_ok_and(|a| a.public_key == peer.id)
+                            })
                         {
                             pending_peers.remove(announce_address);
                         }
                     });
                     set_peers.update(|peers| {
-                        peers.remove(&name);
+                        peers.remove(&peer);
                     });
                 }
                 UiEvent::Download(download_event) => {
@@ -230,7 +241,7 @@ pub fn HdpUi() -> impl IntoView {
                             set_files.update(|files| {
                                 files
                                     .entry(PeerPath {
-                                        peer_name: download_event.peer_name.clone(),
+                                        peer: download_event.peer.clone(),
                                         path: path.clone(),
                                     })
                                     .and_modify(|file| {
@@ -248,7 +259,7 @@ pub fn HdpUi() -> impl IntoView {
                                     })
                                     .or_insert(File::from_downloading_file(
                                         path,
-                                        download_event.peer_name.clone(),
+                                        download_event.peer.clone(),
                                         DownloadStatus::Downloading {
                                             bytes_read,
                                             request_id: download_event.request_id,
@@ -288,7 +299,7 @@ pub fn HdpUi() -> impl IntoView {
                             set_files.update(|files| {
                                 files
                                     .entry(PeerPath {
-                                        peer_name: download_event.peer_name.clone(),
+                                        peer: download_event.peer.clone(),
                                         path: download_event.path.clone(),
                                     })
                                     .and_modify(|file| {
@@ -349,7 +360,7 @@ pub fn HdpUi() -> impl IntoView {
         <Layout>
             <div id="root" class="main">
                 <nav>
-                    <HdpHeader peers own_name />
+                    <HdpHeader peers own_peer />
                 </nav>
                 <main>
                     <div class="error-stack">{error_message_display}</div>

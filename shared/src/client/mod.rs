@@ -7,8 +7,11 @@ pub use events::EventStream;
 use crate::{
     announce_address::{AnnounceAddress, AnnounceAddressDecodeError},
     codec::{deserialize, serialize},
-    ui_messages::{FilesQuery, Info, PeerPath, UiDownloadRequest, UiRequestedFile, UiServerError},
+    ui_messages::{
+        FilesQuery, Info, PeerInfo, PeerPath, UiDownloadRequest, UiRequestedFile, UiServerError,
+    },
     wire_messages::{IndexQuery, LsResponse, ReadQuery},
+    PeerId,
 };
 use bytes::{Buf, Bytes, BytesMut};
 use futures::Stream;
@@ -66,7 +69,7 @@ impl Client {
     pub async fn files(
         &self,
         query: FilesQuery,
-    ) -> Result<impl Stream<Item = UiResult<(LsResponse, String)>>, ClientError> {
+    ) -> Result<impl Stream<Item = UiResult<(LsResponse, PeerInfo)>>, ClientError> {
         let res = self
             .http_client
             .post(
@@ -122,7 +125,7 @@ impl Client {
         Ok(())
     }
 
-    pub async fn disconnect(&self, peer_name: String) -> Result<(), ClientError> {
+    pub async fn disconnect(&self, peer_id: PeerId) -> Result<(), ClientError> {
         let res = self
             .http_client
             .delete(
@@ -130,7 +133,7 @@ impl Client {
                     .join("api/connect")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
-            .body(peer_name)
+            .body(peer_id.to_string())
             .send()
             .await?;
 
@@ -142,10 +145,10 @@ impl Client {
 
     pub async fn read(
         &self,
-        peer_name: String,
+        peer_id: PeerId,
         read_query: ReadQuery,
     ) -> Result<impl Stream<Item = Result<Bytes, reqwest::Error>>, ClientError> {
-        // payload is (read_query, peer_name)
+        // payload is (read_query, peer_id)
         let res = self
             .http_client
             .post(
@@ -153,7 +156,7 @@ impl Client {
                     .join("api/read")
                     .map_err(|_| ClientError::InvalidUrl)?,
             )
-            .body(serialize(&(read_query, peer_name))?)
+            .body(serialize(&(read_query, peer_id))?)
             .send()
             .await?;
 
@@ -180,6 +183,22 @@ impl Client {
             return Err(ClientError::from_response(res).await);
         }
 
+        Ok(deserialize(res.bytes().await?)?)
+    }
+
+    pub async fn peers(&self) -> Result<Vec<PeerInfo>, ClientError> {
+        let res = self
+            .http_client
+            .get(
+                self.ui_url
+                    .join("api/peers")
+                    .map_err(|_| ClientError::InvalidUrl)?,
+            )
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            return Err(ClientError::from_response(res).await);
+        }
         Ok(deserialize(res.bytes().await?)?)
     }
 

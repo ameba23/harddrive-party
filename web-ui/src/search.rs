@@ -123,6 +123,13 @@ mod tests {
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+    fn peer() -> harddrive_party_shared::ui_messages::PeerInfo {
+        harddrive_party_shared::ui_messages::PeerInfo {
+            id: harddrive_party_shared::PeerId::new([1; 32]),
+            name: "asphericKingCrab".to_string(),
+        }
+    }
+
     fn mount_host() -> HtmlElement {
         let document = document();
         let host = document
@@ -166,11 +173,11 @@ mod tests {
         let host = mount_host();
         let app_context = AppContext::for_tests();
         app_context.set_peers.update(|peers| {
-            peers.insert("asphericKingCrab".to_string());
+            peers.insert(peer());
         });
 
         let peer_path = PeerPath {
-            peer_name: "asphericKingCrab".to_string(),
+            peer: peer(),
             path: "film/trailer.mov".to_string(),
         };
         app_context.set_files.update(|files| {
@@ -178,7 +185,7 @@ mod tests {
                 peer_path.clone(),
                 File {
                     name: "film/trailer.mov".to_string(),
-                    peer_name: "asphericKingCrab".to_string(),
+                    peer: peer(),
                     size: Some(1024),
                     is_dir: Some(false),
                     is_expanded: RwSignal::new(false),

@@ -22,6 +22,9 @@ tokio-tungstenite = { version = "0.18.0", optional = true }
 tokio = { version = "1.24.2", optional = true }
 base64 = "0.22.1"
 serde_json = "1.0.140"
+ed25519-dalek = "2.2.0"
+serde-big-array = "0.5.1"
+key-to-animal = "0.0.1"
 
 [features]
 default = ["native"]

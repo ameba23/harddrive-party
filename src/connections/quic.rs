@@ -21,7 +21,7 @@ const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// This makes it possible to add breaking protocol changes and provide backwards compatibility
-const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v0"];
+const SUPPORTED_PROTOCOL_VERSIONS: [&[u8]; 1] = [b"harddrive-party-v1"];
 
 /// Generate a TLS certificate with Ed25519 keypair
 pub fn generate_certificate() -> anyhow::Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
@@ -174,8 +174,8 @@ impl rustls::client::danger::ServerCertVerifier for ServerVerification {
         let owned_cert = CertificateDer::from(owned_bytes);
 
         // This internally verifies the signature
-        let (name, _) = certificate_to_name(owned_cert)?;
-        if self.known_peers.has(&name) {
+        let (_, id) = certificate_to_name(owned_cert)?;
+        if self.known_peers.has(&id) {
             Ok(rustls::client::danger::ServerCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(
@@ -247,8 +247,8 @@ impl rustls::server::danger::ClientCertVerifier for ClientVerification {
         let owned_bytes = end_entity.as_ref().to_vec();
         let owned_cert = CertificateDer::from(owned_bytes);
         // This internally verifies the signature
-        let (name, _) = certificate_to_name(owned_cert)?;
-        if self.known_peers.has(&name) {
+        let (_, id) = certificate_to_name(owned_cert)?;
+        if self.known_peers.has(&id) {
             Ok(rustls::server::danger::ClientCertVerified::assertion())
         } else {
             Err(rustls::Error::InvalidCertificate(
@@ -370,6 +370,39 @@ impl rustls::server::danger::ClientCertVerifier for SkipClientVerification {
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         vec![SignatureScheme::ED25519]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harddrive_party_shared::wire_messages::{AnnounceAddress, PeerConnectionDetails};
+    use rustls::server::danger::ClientCertVerifier;
+    use tempfile::TempDir;
+
+    #[test]
+    fn client_certificate_verification_matches_the_exact_ed25519_key() {
+        let storage = TempDir::new().unwrap();
+        let db = sled::open(storage.path()).unwrap();
+        let known_peers = KnownPeers::new(db.open_tree(b"k1").unwrap());
+        let (known_cert, _) = generate_certificate().unwrap();
+        let (_, known_id) = certificate_to_name(known_cert.clone()).unwrap();
+        known_peers
+            .add_peer(&AnnounceAddress {
+                public_key: known_id,
+                connection_details: PeerConnectionDetails::NoNat("127.0.0.1:7001".parse().unwrap()),
+            })
+            .unwrap();
+        let verifier = ClientVerification::new(known_peers);
+
+        assert!(verifier
+            .verify_client_cert(&known_cert, &[], rustls::pki_types::UnixTime::now(),)
+            .is_ok());
+
+        let (different_cert, _) = generate_certificate().unwrap();
+        assert!(verifier
+            .verify_client_cert(&different_cert, &[], rustls::pki_types::UnixTime::now(),)
+            .is_err());
     }
 }
 

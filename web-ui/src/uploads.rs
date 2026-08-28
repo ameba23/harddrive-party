@@ -4,7 +4,7 @@ use leptos::prelude::*;
 use std::collections::BTreeMap;
 
 #[derive(Clone)]
-pub struct Uploads(BTreeMap<(String, String), RwSignal<File>>);
+pub struct Uploads(BTreeMap<(harddrive_party_shared::PeerId, String), RwSignal<File>>);
 
 impl Uploads {
     pub fn new() -> Self {
@@ -12,7 +12,7 @@ impl Uploads {
     }
 
     pub fn upsert(&mut self, upload: UploadInfo) {
-        let key = (upload.peer_name.clone(), upload.path.clone());
+        let key = (upload.peer.id, upload.path.clone());
         if let Some(existing) = self.0.get(&key) {
             existing.update(|file| {
                 file.size = Some(upload.total_size);
@@ -29,7 +29,11 @@ impl Uploads {
 
     pub fn iter(
         &self,
-    ) -> std::collections::btree_map::Values<'_, (String, String), RwSignal<File>> {
+    ) -> std::collections::btree_map::Values<
+        '_,
+        (harddrive_party_shared::PeerId, String),
+        RwSignal<File>,
+    > {
         self.0.values()
     }
 }
