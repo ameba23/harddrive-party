@@ -247,6 +247,81 @@ fn next_rng_seed() -> [u8; 32] {
     rng_seed
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExpectedPunchSender {
+    SocketAddr(SocketAddr),
+    IpAddr(IpAddr),
+}
+
+impl ExpectedPunchSender {
+    fn matches(self, sender: SocketAddr) -> bool {
+        match self {
+            ExpectedPunchSender::SocketAddr(addr) => sender == addr,
+            ExpectedPunchSender::IpAddr(ip) => sender.ip() == ip,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BirthdayPunchTarget {
+    KnownPort(SocketAddr),
+    UnknownPort(IpAddr),
+}
+
+impl BirthdayPunchTarget {
+    fn mode(self) -> &'static str {
+        match self {
+            BirthdayPunchTarget::KnownPort(_) => "known-port",
+            BirthdayPunchTarget::UnknownPort(_) => "unknown-port",
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            BirthdayPunchTarget::KnownPort(addr) => addr.to_string(),
+            BirthdayPunchTarget::UnknownPort(ip) => ip.to_string(),
+        }
+    }
+}
+
+fn is_valid_holepunch_byte(byte: u8) -> bool {
+    byte == INIT_PUNCH[0] || byte == ACK_PUNCH[0]
+}
+
+fn incoming_packet_matches(
+    packet: &IncomingHolepunchPacket,
+    expected: ExpectedPunchSender,
+) -> bool {
+    expected.matches(packet.from) && is_valid_holepunch_byte(packet.data[0])
+}
+
+async fn send_socket_holepunch_packet(
+    socket: &UdpSocket,
+    data: [u8; 1],
+    dest: SocketAddr,
+) -> io::Result<()> {
+    socket.send_to(&data, dest).await.map(|_| ())
+}
+
+async fn recv_expected_holepunch_sender(
+    socket: &UdpSocket,
+    expected: ExpectedPunchSender,
+) -> io::Result<SocketAddr> {
+    let mut buf = [0u8; 32];
+    loop {
+        let (len, sender) = socket.recv_from(&mut buf).await?;
+        if len == INIT_PUNCH.len() && is_valid_holepunch_byte(buf[0]) && expected.matches(sender) {
+            return Ok(sender);
+        }
+
+        if expected.matches(sender) {
+            warn!("Got invalid holepunch packet from {sender}");
+        } else {
+            debug!("Got message from unexpected sender {sender}");
+        }
+    }
+}
+
 /// Handles requests to connect to a peer by holepunching using a channel to a [PunchingUdpSocket]
 #[derive(Debug)]
 pub struct HolePuncher {
@@ -383,11 +458,14 @@ impl HolePuncher {
             let mut rng = rand::rngs::StdRng::from_seed(seed);
             for attempt in 1..=MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
                 // Send a packet to a random port
-                let port = random_nonzero_port(&mut rng);
-                let packet = OutgoingHolepunchPacket::new_init(SocketAddr::new(addr, port));
+                let target_addr = SocketAddr::new(addr, random_nonzero_port(&mut rng));
+                let packet = OutgoingHolepunchPacket::new_init(target_addr);
                 debug!(
                     "Hole punch probe sent: mode=unknown-port remote_ip={} attempt={}/{} port={}",
-                    addr, attempt, MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS, port
+                    addr,
+                    attempt,
+                    MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS,
+                    target_addr.port()
                 );
                 if let Err(err) = send_holepunch_packet(&udp_send, packet).await {
                     warn!("Failed to send holepunch packet to {addr}: {err}");
@@ -406,7 +484,7 @@ impl HolePuncher {
         let sender = tokio::time::timeout(HOLEPUNCH_TIMEOUT, async {
             loop {
                 let recv = udp_recv.recv().await?;
-                if recv.from.ip() == addr && matches!(recv.data[0], 0 | 1) {
+                if incoming_packet_matches(&recv, ExpectedPunchSender::IpAddr(addr)) {
                     break Ok::<SocketAddr, HolePunchError>(recv.from);
                 }
                 debug!("Got message from unexpected sender - ignoring");
@@ -448,13 +526,129 @@ impl HolePuncher {
     }
 }
 
-/// We are the 'hard side' meaning we need many UDP listeners
-pub async fn birthday_hard_side(
+async fn send_birthday_success(
+    socket: UdpSocket,
+    socket_tx: mpsc::Sender<(UdpSocket, SocketAddr)>,
+    sender: SocketAddr,
+) {
+    if let Err(error) = send_socket_holepunch_packet(&socket, ACK_PUNCH, sender).await {
+        warn!("Send error: {error:?}");
+    }
+
+    if socket_tx.send((socket, sender)).await.is_err() {
+        // This may happen if we get more than one successful punch
+        warn!("Cannot send success socket - channel closed");
+    }
+}
+
+async fn run_birthday_known_port_socket(
+    socket: UdpSocket,
+    socket_tx: mpsc::Sender<(UdpSocket, SocketAddr)>,
     target_addr: SocketAddr,
+    mut stop_signal_rx: broadcast::Receiver<bool>,
+) {
+    if let Err(error) = send_socket_holepunch_packet(&socket, INIT_PUNCH, target_addr).await {
+        warn!("Send error: {error:?}");
+    }
+
+    select! {
+        recv_result = recv_expected_holepunch_sender(
+            &socket,
+            ExpectedPunchSender::SocketAddr(target_addr),
+        ) => {
+            match recv_result {
+                Ok(sender) => {
+                    send_birthday_success(socket, socket_tx, sender).await;
+                }
+                Err(error) => {
+                    warn!("Cannot receive on socket {socket:?} - {error:?}");
+                }
+            }
+        }
+        stop_signal_result = stop_signal_rx.recv() => {
+            debug!("Stop signal result {stop_signal_result:?}");
+        }
+    }
+}
+
+async fn run_birthday_unknown_port_socket(
+    socket: UdpSocket,
+    socket_tx: mpsc::Sender<(UdpSocket, SocketAddr)>,
+    remote_ip: IpAddr,
+    mut stop_signal_rx: broadcast::Receiver<bool>,
+) {
+    let mut rng = rand::rngs::StdRng::from_seed(next_rng_seed());
+    let mut attempts = 0;
+
+    loop {
+        if attempts < MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS {
+            let target_addr = SocketAddr::new(remote_ip, random_nonzero_port(&mut rng));
+            select! {
+                send_result = send_socket_holepunch_packet(&socket, INIT_PUNCH, target_addr) => {
+                    attempts += 1;
+                    debug!(
+                        "Birthday probe sent: mode=unknown-port remote_ip={} attempt={}/{} port={}",
+                        remote_ip,
+                        attempts,
+                        MAX_UNKNOWN_PORT_HOLEPUNCH_ATTEMPTS,
+                        target_addr.port()
+                    );
+                    if let Err(error) = send_result {
+                        warn!("Send error: {error:?}");
+                        return;
+                    }
+                }
+                recv_result = recv_expected_holepunch_sender(
+                    &socket,
+                    ExpectedPunchSender::IpAddr(remote_ip),
+                ) => {
+                    match recv_result {
+                        Ok(sender) => {
+                            send_birthday_success(socket, socket_tx, sender).await;
+                        }
+                        Err(error) => {
+                            warn!("Cannot receive on socket {socket:?} - {error:?}");
+                        }
+                    }
+                    return;
+                }
+                stop_signal_result = stop_signal_rx.recv() => {
+                    debug!("Stop signal result {stop_signal_result:?}");
+                    return;
+                }
+            }
+        } else {
+            select! {
+                recv_result = recv_expected_holepunch_sender(
+                    &socket,
+                    ExpectedPunchSender::IpAddr(remote_ip),
+                ) => {
+                    match recv_result {
+                        Ok(sender) => {
+                            send_birthday_success(socket, socket_tx, sender).await;
+                        }
+                        Err(error) => {
+                            warn!("Cannot receive on socket {socket:?} - {error:?}");
+                        }
+                    }
+                    return;
+                }
+                stop_signal_result = stop_signal_rx.recv() => {
+                    debug!("Stop signal result {stop_signal_result:?}");
+                    return;
+                }
+            }
+        }
+    }
+}
+
+async fn birthday_side(
+    target: BirthdayPunchTarget,
 ) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
     info!(
-        "Birthday hard side started: target_addr={} sockets={} timeout_secs={}",
-        target_addr,
+        "Birthday side started: mode={} target={} sockets={} timeout_secs={}",
+        target.mode(),
+        target.label(),
         UNKNOWN_PORT_INCOMING_SOCKETS,
         HOLEPUNCH_TIMEOUT.as_secs()
     );
@@ -464,51 +658,54 @@ pub async fn birthday_hard_side(
     for _ in 0..UNKNOWN_PORT_INCOMING_SOCKETS {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         let socket_tx = socket_tx.clone();
-        let mut stop_signal_rx = stop_signal_tx.subscribe();
+        let stop_signal_rx = stop_signal_tx.subscribe();
         spawn(async move {
-            if let Err(error) = socket.send_to(&INIT_PUNCH, target_addr).await {
-                warn!("Send error: {error:?}");
-            }
-
-            let mut buf = [0u8; 32];
-            select! {
-                recv_result = socket.recv_from(&mut buf) => {
-                    match recv_result {
-                        Ok((_len, sender)) => {
-                            if sender == target_addr {
-                                if let Err(error) = socket.send_to(&ACK_PUNCH, sender).await {
-                                    warn!("Send error: {error:?}");
-                                }
-                                if socket_tx.send(socket).await.is_err() {
-                                    // This may happen if we get more than one successful punch
-                                    warn!("Cannot send success socket - channel closed");
-                                }
-                            } else {
-                                warn!("Got message from unexpected sender {sender}");
-                            }
-                        }
-                        Err(error) => {
-                            warn!("Cannot recieve on socket {socket:?} - {error:?}");
-                        }
-                    }
+            match target {
+                BirthdayPunchTarget::KnownPort(target_addr) => {
+                    run_birthday_known_port_socket(socket, socket_tx, target_addr, stop_signal_rx)
+                        .await;
                 }
-                stop_signal_result = stop_signal_rx.recv() => {
-                    debug!("Stop signal result {stop_signal_result:?}");
+                BirthdayPunchTarget::UnknownPort(remote_ip) => {
+                    run_birthday_unknown_port_socket(socket, socket_tx, remote_ip, stop_signal_rx)
+                        .await;
                 }
             }
         });
     }
     drop(socket_tx);
-    let socket = tokio::time::timeout(HOLEPUNCH_TIMEOUT, socket_rx.recv())
-        .await
-        .map_err(|_| HolePunchError::Timeout)?
-        .ok_or(HolePunchError::SocketChannelClosed)?;
+    let (socket, sender) = match tokio::time::timeout(HOLEPUNCH_TIMEOUT, socket_rx.recv()).await {
+        Ok(Some(result)) => result,
+        Ok(None) => return Err(HolePunchError::SocketChannelClosed),
+        Err(_) => {
+            let _ = stop_signal_tx.send(true);
+            return Err(HolePunchError::Timeout);
+        }
+    };
     // This stops all the listener tasks
     stop_signal_tx
         .send(true)
         .map_err(|_| HolePunchError::Broadcast)?;
-    info!("Birthday hard side succeeded: target_addr={}", target_addr);
-    Ok((socket, target_addr))
+    info!(
+        "Birthday side succeeded: mode={} target={} sender={}",
+        target.mode(),
+        target.label(),
+        sender
+    );
+    Ok((socket, sender))
+}
+
+/// We are the 'hard side' meaning we need many UDP listeners.
+pub async fn birthday_hard_side(
+    target_addr: SocketAddr,
+) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
+    birthday_side(BirthdayPunchTarget::KnownPort(target_addr)).await
+}
+
+/// Both peers are behind symmetric NAT, so every temporary listener also probes many ports.
+pub async fn birthday_symmetric_side(
+    remote_ip: IpAddr,
+) -> Result<(UdpSocket, SocketAddr), HolePunchError> {
+    birthday_side(BirthdayPunchTarget::UnknownPort(remote_ip)).await
 }
 
 #[derive(Error, Debug)]
@@ -531,4 +728,61 @@ pub enum HolePunchError {
     SendTaskClosed(SocketAddr),
     #[error("No hole punch socket was returned")]
     SocketChannelClosed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    #[test]
+    fn expected_sender_matches_exact_addr_or_ip() {
+        let addr: SocketAddr = "203.0.113.10:1234".parse().unwrap();
+        let same_ip: SocketAddr = "203.0.113.10:5678".parse().unwrap();
+        let other_ip: SocketAddr = "198.51.100.20:1234".parse().unwrap();
+
+        assert!(ExpectedPunchSender::SocketAddr(addr).matches(addr));
+        assert!(!ExpectedPunchSender::SocketAddr(addr).matches(same_ip));
+        assert!(ExpectedPunchSender::IpAddr(addr.ip()).matches(same_ip));
+        assert!(!ExpectedPunchSender::IpAddr(addr.ip()).matches(other_ip));
+    }
+
+    #[test]
+    fn incoming_packet_matching_accepts_only_holepunch_packets_from_expected_sender() {
+        let expected: SocketAddr = "203.0.113.10:1234".parse().unwrap();
+        let unexpected: SocketAddr = "198.51.100.20:1234".parse().unwrap();
+
+        let init = IncomingHolepunchPacket {
+            data: INIT_PUNCH,
+            from: expected,
+        };
+        let ack = IncomingHolepunchPacket {
+            data: ACK_PUNCH,
+            from: expected,
+        };
+        let invalid = IncomingHolepunchPacket {
+            data: [9],
+            from: expected,
+        };
+        let wrong_sender = IncomingHolepunchPacket {
+            data: INIT_PUNCH,
+            from: unexpected,
+        };
+
+        let matcher = ExpectedPunchSender::IpAddr(expected.ip());
+        assert!(incoming_packet_matches(&init, matcher));
+        assert!(incoming_packet_matches(&ack, matcher));
+        assert!(!incoming_packet_matches(&invalid, matcher));
+        assert!(!incoming_packet_matches(&wrong_sender, matcher));
+    }
+
+    #[test]
+    fn random_unknown_port_addr_never_uses_zero_port() {
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(1);
+
+        for _ in 0..1024 {
+            assert_ne!(SocketAddr::new(ip, random_nonzero_port(&mut rng)).port(), 0);
+        }
+    }
 }

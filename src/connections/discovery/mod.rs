@@ -1,6 +1,6 @@
 //! Peer discovery
 use self::{
-    hole_punch::{birthday_hard_side, PunchingUdpSocket},
+    hole_punch::{birthday_hard_side, birthday_symmetric_side, PunchingUdpSocket},
     mdns::MdnsServer,
     stun::stun_test,
 };
@@ -327,10 +327,26 @@ pub async fn handle_peer(
 ) -> Result<(Option<DiscoveredPeer>, SocketAddr), UiServerErrorWrapper> {
     match announce_address.connection_details {
         PeerConnectionDetails::Symmetric(remote_ip) => match local {
-            PeerConnectionDetails::Symmetric(_) => Err(UiServerError::PeerDiscovery(
-                "Symmetric to symmetric not yet supported".to_string(),
-            )
-            .into()),
+            PeerConnectionDetails::Symmetric(_) => {
+                info!(
+                    "Starting birthday-paradox symmetric side: peer={} remote_ip={}",
+                    announce_address.name, remote_ip
+                );
+                let (socket, socket_address) = birthday_symmetric_side(remote_ip).await?;
+                info!(
+                    "Birthday-paradox symmetric side obtained socket for peer={} remote_addr={}",
+                    announce_address.name, socket_address
+                );
+                Ok((
+                    Some(DiscoveredPeer {
+                        discovery_method,
+                        announce_address,
+                        socket_address,
+                        socket_option: Some(socket),
+                    }),
+                    socket_address,
+                ))
+            }
             PeerConnectionDetails::Asymmetric(_) => match hole_puncher {
                 Some(mut puncher) => {
                     info!(
