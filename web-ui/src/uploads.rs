@@ -27,7 +27,9 @@ impl Uploads {
         }
     }
 
-    pub fn iter(&self) -> std::collections::btree_map::Values<'_, (String, String), RwSignal<File>> {
+    pub fn iter(
+        &self,
+    ) -> std::collections::btree_map::Values<'_, (String, String), RwSignal<File>> {
         self.0.values()
     }
 }

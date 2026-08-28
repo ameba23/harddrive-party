@@ -4,13 +4,12 @@ use thaw::*;
 
 #[component]
 pub fn AnnounceAddressView(announce_address: AnnounceAddress) -> impl IntoView {
+    let details = announce_address.connection_details.to_string();
     view! {
-        <span>
+        <span class="announce-address">
             <Icon icon=icondata::AiUserOutlined />
-            " "
-            <span>
-                {format!("{} {}", announce_address.name, announce_address.connection_details)}
-            </span>
+            <span class="announce-address__name">{announce_address.name}</span>
+            <span class="announce-address__details">{details}</span>
         </span>
     }
 }
@@ -20,8 +19,8 @@ mod tests {
     use super::*;
     use leptos::mount::mount_to;
     use leptos::wasm_bindgen::JsCast;
-    use web_sys::HtmlElement;
     use wasm_bindgen_test::wasm_bindgen_test;
+    use web_sys::HtmlElement;
 
     wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 

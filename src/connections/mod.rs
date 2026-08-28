@@ -605,10 +605,17 @@ async fn connect_to_peer(
     rpc: Rpc,
     peer: DiscoveredPeer,
 ) -> Result<(), UiServerError> {
+    let DiscoveredPeer {
+        socket_address,
+        socket_option,
+        discovery_method,
+        announce_address,
+    } = peer;
+
     let endpoint = match server_connection {
         ServerConnection::WithEndpoint(endpoint) => endpoint,
         ServerConnection::Symmetric(cert_der, priv_key_der) => {
-            let socket = match peer.socket_option {
+            let socket = match socket_option {
                 Some(socket) => socket,
                 None => UdpSocket::bind("0.0.0.0:0")
                     .await
@@ -628,7 +635,8 @@ async fn connect_to_peer(
         }
     };
 
-    let connection = connect_with_backoff(&endpoint, peer.socket_address, "peer").await?;
+    let connection =
+        connect_with_backoff(&endpoint, socket_address, &announce_address, "peer").await?;
 
     let remote_cert = get_certificate_from_connection(&connection).map_err(|err| {
         UiServerError::ConnectionError(format!("When getting certificate: {err:?}"))
@@ -639,7 +647,7 @@ async fn connect_to_peer(
         rpc,
         connection,
         false,
-        Some((peer.discovery_method, peer.announce_address)),
+        Some((discovery_method, announce_address)),
         remote_cert,
     )
     .await?;
@@ -754,14 +762,15 @@ fn jittered(delay: Duration) -> Duration {
 /// Connect to a peer, attempting several times with a backoff delay
 async fn connect_with_backoff(
     endpoint: &quinn::Endpoint,
-    peer_addr: std::net::SocketAddr,
+    socket_address: SocketAddr,
+    announce_address: &AnnounceAddress,
     server_name: &str,
 ) -> Result<quinn::Connection, UiServerError> {
     let mut delay = RECONNECT_INITIAL_DELAY;
 
     for attempt in 1..=RECONNECT_MAX_ATTEMPTS {
         let connecting = endpoint
-            .connect(peer_addr, server_name)
+            .connect(socket_address, server_name)
             .map_err(|err| UiServerError::ConnectionError(format!("When connecting: {err:?}")))?;
 
         match connecting.await {
@@ -770,11 +779,14 @@ async fn connect_with_backoff(
                 // If this was the last attempt, return the error
                 if attempt >= RECONNECT_MAX_ATTEMPTS {
                     return Err(UiServerError::ConnectionError(format!(
-                        "After connecting (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
+                        "After connecting to {announce_address} (attempt {attempt}/{RECONNECT_MAX_ATTEMPTS}): {err:?}"
                     )));
                 }
 
-                warn!("Connection failed: {err} Retrying...");
+                warn!(
+                    "Connection to {0} failed: {err} Retrying...",
+                    announce_address
+                );
                 let sleep_for = jittered(delay);
                 tokio::time::sleep(sleep_for).await;
 
