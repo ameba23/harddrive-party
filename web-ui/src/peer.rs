@@ -454,11 +454,11 @@ mod tests {
     fn labels_nat_peers_as_attempt_connect() {
         let direct_peer = AnnounceAddress {
             connection_details: PeerConnectionDetails::NoNat("127.0.0.1:1234".parse().unwrap()),
-            name: "DirectPeer".to_string(),
+            public_key: harddrive_party_shared::PeerId::new([4; 32]),
         };
         let nat_peer = AnnounceAddress {
             connection_details: PeerConnectionDetails::Symmetric("8.8.8.8".parse().unwrap()),
-            name: "NatPeer".to_string(),
+            public_key: harddrive_party_shared::PeerId::new([5; 32]),
         };
 
         assert_eq!(known_peer_connect_label(&direct_peer), "Connect");
