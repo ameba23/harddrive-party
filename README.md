@@ -9,7 +9,7 @@ Allows two or more peers to share files. Peers can choose directories to share, 
 
 - Local and remote download/upload queueing.
 - Minimal initial setup - don't need to wait long for shared files to index (no hashing).
-- Udp hole-punching - with support for asymmetric to symmetric NAT connections using the birthday paradox. For an explanation see [Tailscale's NAT traversal article](https://tailscale.com/blog/how-nat-traversal-works).
+- UDP hole-punching, including asymmetric-to-symmetric and symmetric-to-symmetric NAT connections using the birthday paradox. For an explanation, see [Tailscale's NAT traversal article](https://tailscale.com/blog/how-nat-traversal-works).
 - Practical for transferring large media collections.
 - Remote control via websocket / HTTP interface. Can be run on a headless device or NAS and controlled from another computer.
 - Minimal reliance on centralised infrastructure - servers are only used for STUN.
@@ -97,7 +97,7 @@ There are 3 methods of peer discovery:
 
 UDP hole-punching is used to connect peers who are behind a NAT or firewall.
 
-Peers discovered manually, through gossip, or through mDNS are stored as known peers. Known peers are used for certificate verification, shown in the UI, and public-address peers are retried on startup. Symmetric-to-symmetric NAT connections are not currently supported.
+Peers discovered manually, through gossip, or through mDNS are stored as known peers. Known peers are used for certificate verification, shown in the UI, and public-address peers are retried on startup. UDP hole-punching supports connections between symmetric NATs using a probabilistic approach.
 
 ### Transport
 
