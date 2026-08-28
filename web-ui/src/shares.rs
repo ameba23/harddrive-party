@@ -21,8 +21,17 @@ pub fn Shares(
     };
 
     let add_share_value = RwSignal::new(home_dir_if_exists());
+    Effect::new(move || {
+        if let Some(home_dir) = home_dir.get() {
+            if add_share_value.with_untracked(|value| value.is_empty()) {
+                add_share_value.set(home_dir);
+            }
+        }
+    });
+
     let context = app_context.clone();
-    let add_share = move |_| {
+    let add_share = move |e: leptos::ev::SubmitEvent| {
+        e.prevent_default();
         let dir_to_share = add_share_value.get();
         let dir_to_share = dir_to_share.trim();
         if !dir_to_share.is_empty() {
@@ -34,17 +43,19 @@ pub fn Shares(
     view! {
         <h2 class="text-xl">"Shared files"</h2>
         <Flex vertical=true>
-            <div>
-                <p>"Add a directory to share"</p>
+            <form class="share-form" on:submit=add_share>
+                <p class="section-intro">
+                    "Add a local directory and make it visible to connected peers."
+                </p>
                 <Flex class="form-row">
-                    <Input value=add_share_value>
+                    <Input value=add_share_value placeholder="Directory path">
                         <InputPrefix slot>
                             <Icon icon=icondata::AiFolderAddOutlined />
                         </InputPrefix>
                     </Input>
-                    <Button on:click=add_share>"Add"</Button>
+                    <Button button_type=ButtonType::Submit>"Add share"</Button>
                 </Flex>
-            </div>
+            </form>
 
             // TODO could use <Show> here
             {move || {

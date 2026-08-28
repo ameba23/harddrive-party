@@ -11,8 +11,12 @@ pub fn HdpHeader(
     own_peer: ReadSignal<Option<PeerInfo>>,
 ) -> impl IntoView {
     let location = use_location();
-    let selected_value = location.pathname;
-    let selected_value = RwSignal::new(selected_value.get_untracked());
+    let pathname = location.pathname;
+    let selected_value = RwSignal::new(pathname.get_untracked());
+
+    Effect::new(move || {
+        selected_value.set(pathname.get());
+    });
 
     let files = use_context::<AppContext>().unwrap().get_files;
 
@@ -36,14 +40,11 @@ pub fn HdpHeader(
 
     view! {
         <LayoutHeader class="hdp-header">
-            <Flex>
-                <img
-                    class="hover-invert"
-                    src="hdd.png"
-                    alt="hard drive"
-                    width="60"
-                    title="harddrive-party"
-                />
+            <Flex class="header-shell">
+                <div class="brand-lockup" title="harddrive-party">
+                    <img class="hover-invert" src="hdd.png" alt="" width="54" />
+                    <span class="brand-title">"harddrive party"</span>
+                </div>
                 <TabList class="tab-list" selected_value>
                     <Flex>
                         <Tab

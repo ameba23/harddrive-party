@@ -90,29 +90,34 @@ pub enum FileDisplayContext {
 pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let (file_name, _set_file_name) = signal(file.name);
-    let peer = file.peer.clone();
     let peer_for_uploader = file.peer.clone();
 
     let app_context_1 = app_context.clone();
-    let download_request = move |_| {
-        app_context_1.download(PeerPath {
-            path: file_name.get().to_string(),
-            peer: peer.clone(),
-        });
-    };
+    let peer_for_download = file.peer.clone();
+
+    let is_dir = file.is_dir == Some(true);
 
     // Only display download button if we dont have it requested, and it is not our share
     let download_button = move || {
-        if file.download_status.get_untracked() == DownloadStatus::Nothing
+        if file.download_status.get() == DownloadStatus::Nothing
             && !is_shared
-            && file.request.get_untracked() == None
+            && file.request.get() == None
             && context != FileDisplayContext::Transfer
         {
+            let app_ctx = app_context_1.clone();
+            let peer = peer_for_download.clone();
             Either::Left(view! {
                 <span title="Download">
                     <Button
                         icon=icondata::FiDownload
-                        on:click=download_request
+                        on:click=move |event: leptos::ev::MouseEvent| {
+                            event.stop_propagation();
+                            app_ctx
+                                .download(PeerPath {
+                                    path: file_name.get().to_string(),
+                                    peer: peer.clone(),
+                                });
+                        }
                         size=ButtonSize::Small
                     />
                 </span>
@@ -196,20 +201,19 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                     }
                     None => view! { <span></span> }.into_any(),
                 }} {indentation} {icon} " "
-                <span class="text-sm font-medium" title=display_name.clone()>
+                <span class:font-medium=is_dir title=display_name.clone()>
                     {display_name.clone()}
                 </span>
             </pre>
         }
     };
 
-    let is_dir = file.is_dir == Some(true);
-
     view! {
         <TableRow
             class:file-row--downloaded=move || {
                 !is_dir && matches!(file.download_status.get(), DownloadStatus::Downloaded(_))
             }
+            class:file-row--directory=move || is_dir
             on:click=expand_dir
         >
             <TableCell>{file_name_and_indentation}</TableCell>
@@ -221,7 +225,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             None => "-".to_string(),
                         }}
                     </span>
-                    {download_button()}
+                    {move || download_button()}
                 </div>
                 <div class="file-meta-status">
                     {move || {
@@ -229,24 +233,28 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             DownloadStatus::Nothing => EitherOf6::A(view! { <span></span> }),
                             DownloadStatus::Downloaded(_) => {
                                 if is_dir {
-                                    EitherOf6::B(view! { <span>"Downloaded"</span> })
+                                    EitherOf6::B(
+                                        view! { <span class="status-pill status-pill--complete">"Downloaded"</span> },
+                                    )
                                 } else {
                                     let file_path = file_name.get();
                                     EitherOf6::C(
                                         view! {
-                                            "Downloaded"
+                                            <span class="status-pill status-pill--complete">"Downloaded"</span>
                                             <Preview file_path=&file_path shared=is_shared />
                                         },
                                     )
                                 }
                             }
                             DownloadStatus::Requested(_) => {
-                                EitherOf6::D(view! { <span>"Requested"</span> })
+                                EitherOf6::D(
+                                    view! { <span class="status-pill status-pill--pending">"Requested"</span> },
+                                )
                             }
                             DownloadStatus::Downloading { bytes_read, .. } => {
                                 EitherOf6::E(
                                     view! {
-                                        <span>
+                                        <span class="transfer-state">
                                             <DownloadingFile bytes_read size=file.size />
                                         </span>
                                     },
@@ -255,7 +263,7 @@ pub fn File(file: File, is_shared: bool, context: FileDisplayContext) -> impl In
                             DownloadStatus::Uploading { bytes_read, total_size, speed } => {
                                 EitherOf6::F(
                                     view! {
-                                        <span>
+                                        <span class="transfer-state">
                                             <UploadingFile bytes_read total_size speed />
                                         </span>
                                     },
@@ -441,6 +449,8 @@ fn Preview<'a>(file_path: &'a str, shared: bool) -> impl IntoView {
                     <a
                         href=format!("{}//{}/{}/{}", protocol, host, sub_path, escaped_path)
                         target="_blank"
+                        rel="noopener noreferrer"
+                        on:click=move |event| event.stop_propagation()
                     >
                         <Button size=ButtonSize::Small>"View"</Button>
                     </a>

@@ -1,22 +1,23 @@
 use crate::{file::FileDisplayContext, AppContext, File};
 use harddrive_party_shared::ui_messages::PeerPath;
-use leptos::{either::Either, prelude::*};
+use leptos::prelude::*;
 use thaw::*;
 
 #[component]
 pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
     let app_context = use_context::<AppContext>().unwrap();
     let input_value = RwSignal::new(String::new());
+    let last_query = RwSignal::new(Option::<String>::None);
     let ac_c = app_context.clone();
     let do_search = move |e: leptos::ev::SubmitEvent| {
         e.prevent_default();
         let searchterm = input_value.get();
         let searchterm = searchterm.trim();
         if !searchterm.is_empty() {
-            ac_c.search(searchterm.to_string());
+            let searchterm = searchterm.to_string();
+            ac_c.search(searchterm.clone());
+            last_query.set(Some(searchterm));
         }
-
-        input_value.set(String::new());
     };
 
     let files = app_context.get_files;
@@ -32,14 +33,8 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
     };
 
     let show_results = move || {
-        if app_context.get_peers.get().is_empty() && search_results.get().is_empty() {
-            Either::Left(view! {
-                <div>
-                    <p>"There are no connected peers - so there is nothing to search"</p>
-                </div>
-            })
-        } else {
-            Either::Right(view! {
+        if !search_results.get().is_empty() {
+            view! {
                 <div class="table-scroll">
                     <Table class="search-table">
                         <TableBody>
@@ -59,17 +54,51 @@ pub fn Search(search_results: ReadSignal<Vec<PeerPath>>) -> impl IntoView {
                         </TableBody>
                     </Table>
                 </div>
-            })
+            }
+            .into_any()
+        } else if app_context.get_peers.get().is_empty() {
+            view! {
+                <div class="empty-state">
+                    <strong>"No peers connected"</strong>
+                    <p>"Connect to a peer before searching their shared files."</p>
+                </div>
+            }
+            .into_any()
+        } else if last_query.get().is_none() {
+            view! {
+                <div class="empty-state empty-state--quiet">
+                    <strong>"Search connected peers"</strong>
+                    <p>"Enter a filename, folder, or extension to find shared files."</p>
+                </div>
+            }
+            .into_any()
+        } else {
+            view! {
+                <div class="empty-state">
+                    <strong>"No matches"</strong>
+                    <p>
+                        {move || {
+                            format!(
+                                "No files matched \"{}\".",
+                                last_query.get().unwrap_or_default(),
+                            )
+                        }}
+                    </p>
+                </div>
+            }
+            .into_any()
         }
     };
 
     view! {
+        <h2 class="text-xl">"Search files"</h2>
+        <p class="section-intro">"Search across all currently connected peers."</p>
         <form on:submit=do_search>
             <Flex class="form-row">
                 <Input
                     rules=vec![InputRule::required(true.into())]
                     value=input_value
-                    placeholder="Searchterm"
+                    placeholder="Search filenames, folders, or extensions"
                 >
                     <InputPrefix slot>
                         <Icon icon=icondata::ImSearch />
@@ -132,7 +161,8 @@ mod tests {
         });
 
         let text = host.text_content().unwrap_or_default();
-        assert!(text.contains("There are no connected peers - so there is nothing to search"));
+        assert!(text.contains("No peers connected"));
+        assert!(text.contains("Connect to a peer before searching their shared files."));
 
         drop(handle);
         host.remove();

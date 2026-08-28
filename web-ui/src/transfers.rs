@@ -25,30 +25,64 @@ pub fn Transfers(
         })
     };
     let uploads_list = move || uploads.with(|uploads| uploads.iter().cloned().collect::<Vec<_>>());
+    let has_requests = move || requests.with(|requests| requests.iter().next().is_some());
+    let has_uploads = move || uploads.with(|uploads| uploads.iter().next().is_some());
 
     view! {
         <h2 class="text-xl">"Transfers"</h2>
         <h3 class="text-lg">"Requested"</h3>
-        <Flex vertical=true class="transfer-list">
-            <For
-                each=wishlist
-                key=|file| format!("{}{:?}", file.name, file.size)
-                children=move |file| view! { <Request file /> }
-            />
-        </Flex>
+        {move || {
+            if has_requests() {
+                view! {
+                    <Flex vertical=true class="transfer-list">
+                        <For
+                            each=wishlist
+                            key=|file| format!("{}{:?}", file.name, file.size)
+                            children=move |file| view! { <Request file /> }
+                        />
+                    </Flex>
+                }
+                    .into_any()
+            } else {
+                view! {
+                    <div class="empty-state empty-state--quiet">
+                        <strong>"No requested downloads"</strong>
+                        <p>"Downloads you start from peers or search results will show up here."</p>
+                    </div>
+                }
+                    .into_any()
+            }
+        }}
         <h3 class="text-lg">"Uploads"</h3>
-        <Table class="transfer-table file-table">
-            <TableBody>
-                <For
-                    each=uploads_list
-                    key=|upload| {
-                        let data = upload.get_untracked();
-                        format!("{}:{}:{}", data.peer.id, data.peer.name, data.name)
-                    }
-                    children=move |upload| view! { <UploadRow upload=upload /> }
-                />
-            </TableBody>
-        </Table>
+        {move || {
+            if has_uploads() {
+                view! {
+                    <div class="table-scroll">
+                        <Table class="transfer-table file-table">
+                            <TableBody>
+                                <For
+                                    each=uploads_list
+                                    key=|upload| {
+                                        let data = upload.get_untracked();
+                                        format!("{}:{}:{}", data.peer.id, data.peer.name, data.name)
+                                    }
+                                    children=move |upload| view! { <UploadRow upload=upload /> }
+                                />
+                            </TableBody>
+                        </Table>
+                    </div>
+                }
+                    .into_any()
+            } else {
+                view! {
+                    <div class="empty-state empty-state--quiet">
+                        <strong>"No active uploads"</strong>
+                        <p>"Uploads appear while peers are downloading files from you."</p>
+                    </div>
+                }
+                    .into_any()
+            }
+        }}
     }
 }
 

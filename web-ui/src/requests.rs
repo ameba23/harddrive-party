@@ -89,10 +89,15 @@ pub fn Request(file: File) -> impl IntoView {
                 peer: request.peer.clone(),
                 path: request.path.clone(),
             };
+            let file_for_group = file.clone();
+            let file_for_status = file.clone();
 
             view! {
                 <div class=move || {
-                    if matches!(file.download_status.get(), DownloadStatus::Downloaded(_)) {
+                    if matches!(
+                        file_for_group.download_status.get(),
+                        DownloadStatus::Downloaded(_)
+                    ) {
                         "transfer-request-group transfer-request-group--complete"
                     } else {
                         "transfer-request-group"
@@ -101,6 +106,27 @@ pub fn Request(file: File) -> impl IntoView {
                     <div class="transfer-request-status">
                         <span class="file-peer-label" title=request_peer_name.clone()>
                             {request_peer_name.clone()}
+                        </span>
+                        <span class=move || {
+                            if matches!(
+                                file_for_status.download_status.get(),
+                                DownloadStatus::Downloaded(_)
+                            ) {
+                                "status-pill status-pill--complete"
+                            } else {
+                                "status-pill status-pill--pending"
+                            }
+                        }>
+                            {move || {
+                                if matches!(
+                                    file.download_status.get(),
+                                    DownloadStatus::Downloaded(_)
+                                ) {
+                                    "Downloaded"
+                                } else {
+                                    "Requested"
+                                }
+                            }}
                         </span>
                     </div>
                     <div class="table-scroll transfer-request-files">

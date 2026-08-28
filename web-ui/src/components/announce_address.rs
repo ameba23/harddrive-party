@@ -5,18 +5,14 @@ use thaw::*;
 
 #[component]
 pub fn AnnounceAddressView(announce_address: AnnounceAddress) -> impl IntoView {
+    let peer = PeerInfo::from_id(announce_address.public_key);
+    let name = format!("{}#{}", peer.name, peer.id.abbreviated());
+    let details = announce_address.connection_details.to_string();
     view! {
-        <span>
+        <span class="announce-address">
             <Icon icon=icondata::AiUserOutlined />
-            " "
-            <span>
-                {format!(
-                    "{}#{} {}",
-                    PeerInfo::from_id(announce_address.public_key).name,
-                    announce_address.public_key.abbreviated(),
-                    announce_address.connection_details
-                )}
-            </span>
+            <span class="announce-address__name">{name}</span>
+            <span class="announce-address__details">{details}</span>
         </span>
     }
 }
