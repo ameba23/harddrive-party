@@ -70,12 +70,8 @@ Global options:
 - `--ui-address <URL>` (default `http://127.0.0.1:3030`) for commands that talk to the UI server.
 - `--verbose` to enable debug logging (`harddrive_party=debug`).
 
-A peer's canonical identity is its full 43-character, URL-safe, unpadded
-base64 Ed25519 public key. CLI selectors accept that full ID first. As a
-convenience they also accept an exact, case-sensitive animal-name label when
-exactly one connected peer has that label. Ambiguous labels are rejected and
-the matching full IDs are shown. Command output displays the animal label with
-an abbreviated ID.
+In the CLI commands you can either refer to peers by peer public key (43-character, URL-safe, unpadded
+base64) or an animal-name derived from it for convenience.
 
 Send your 'announce address' to someone you want to connect to (using some external messaging system).
 
@@ -96,55 +92,25 @@ Shared directories can also be added or removed at runtime from the 'Shares' tab
 ### Peer discovery
 
 There are 3 methods of peer discovery:
-- Manual connections by entering an announce code in the UI. A code contains
-  the peer's full Ed25519 public key followed by the compact IP address, port,
-  and NAT-type suffix. The public-key prefix is always 43 URL-safe base64
-  characters; the existing suffix uses standard unpadded base64 plus a final
-  type digit. For example,
-  `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAG1/LAHFY0` represents a fixed
-  public key followed by IPv4 address/port details. Old animal-name-prefixed
-  codes are rejected.
-- 'Gossiped' connections by which peers who are already connected can pass on the details of others they are also connected to.
+- Manual connections by entering an announce code in the UI. A code contains the peer's Ed25519 public key as well as IP address, port, and NAT-type.
+- 'Gossiped' connections by which peers who are already connected can pass on the details of others they are also connected to. These contain a signature to ensure the peer intended for their details to be gossiped and that the public key matches the connection details.
 - [Multicast DNS](https://en.wikipedia.org/wiki/Multicast_DNS) is also used to find peers connected to the same local network.
 
 UDP hole-punching is used to connect peers who are behind a NAT or firewall.
 
-Manual and mDNS discovery records are unsigned, but their embedded public key
-pins the exact Ed25519 key required from the subsequent TLS connection.
-Gossiped records are accepted only after signature verification. Known peers
-are stored under their raw 32-byte public key and contain connection details
-only; signed gossip is reacquired from live peers. Legacy name-keyed records
-are left untouched but ignored, so upgrading requires pairing again. Known
-peers are used for exact certificate verification, shown in the UI, and
-public-address peers are retried on startup. Symmetric-to-symmetric NAT
-connections are not currently supported.
+Once you have connected to a peer it is stored as a 'known peer'.  On startup, reconnection to all known peers is attempted.
 
 ### Transport
 
-Peers connect using [QUIC](https://en.wikipedia.org/wiki/QUIC), negotiate ALPN
-`harddrive-party-v1`, and authenticate with Ed25519 certificates. The exact
-certificate public key is the peer ID; animal names are derived display labels
-only and are never used for authorization or routing. A QUIC stream is opened
-for each RPC request. There are three wire-message types:
+Peers connect to each other using [QUIC](https://en.wikipedia.org/wiki/QUIC), with client authentication using Ed25519. A QUIC stream is opened for each RPC request to a peer. There are three types of wire message:
 
 - `Ls` - for querying the shared file index (with a sub-path, optional search term, and recursive/non-recursive mode).
-- `Read` - for downloading a file, or portion of a file. 
-- `AnnouncePeer` - a connection address plus a 64-byte Ed25519 signature.
+- `Read` - for downloading a file, or portion of a file.
+- `AnnouncePeer` - for passing on signed connection details of another peer.
 
 These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode-next](https://docs.rs/bincode-next) using the bincode 1-compatible legacy configuration.
 
-Both sides send their signed self-announcement on every new connection. Its
-signature covers
-`harddrive-party-v1:announce-peer\0 || bincode(announce_address)`. A
-self-announcement must verify and its public key must exactly match the live
-TLS certificate or the connection is closed. Invalid third-party gossip is
-dropped without closing the sender's connection. Only verified signed records
-are stored in live peer state or relayed.
-
-A valid signed announcement is an indefinitely replayable authorization to
-gossip that address. It proves origin and integrity, but it does not prove that
-the endpoint is fresh or currently reachable. Protocol v1 deliberately has no
-timestamp, expiry, or sequence number.
+Both sides send their signed self-announcement on every new connection. Which can be gossiped to other peers.
 
 ### Shared files
 
@@ -171,10 +137,7 @@ Most `/api/*` payloads use the bincode wire format rather than JSON (see [`share
 
 ### Peer identity and names
 
-There are no usernames. A peer is represented canonically by its full Ed25519
-public key. The adjective-and-animal string derived from that key (for example,
-`PersianChinchilla`) is only a friendly UI label. Different public keys remain
-distinct even if their derived labels collide.
+There are no usernames. A peer is identified by its Ed25519 public key. In the UI a adjective-and-animal string derived from that key (for example, `PersianChinchilla`) is used.
 
 ## Logging
 
