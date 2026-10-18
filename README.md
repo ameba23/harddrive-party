@@ -109,6 +109,8 @@ Peers connect to each other using [QUIC](https://en.wikipedia.org/wiki/QUIC), wi
 
 These [wire messages](./shared/src/wire_messages.rs) are serialized with [bincode-next](https://docs.rs/bincode-next) using the bincode 1-compatible legacy configuration.
 
+Uploads run concurrently for up to four peers, with one active upload per peer.
+
 ### Shared files
 
 To speed up file index queries, shared directories are indexed using a key-value store ([sled](https://docs.rs/sled)). The only metadata stored is filenames and sizes. Directory sizes are cumulative, and large query responses are streamed in chunks.
