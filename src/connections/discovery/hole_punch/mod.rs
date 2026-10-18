@@ -4,6 +4,8 @@ use futures::ready;
 use log::{debug, info, warn};
 use rand::{rngs::OsRng, Rng, RngCore, SeedableRng};
 use std::{
+    fmt,
+    future::Future,
     io,
     net::{IpAddr, SocketAddr},
     pin::Pin,
@@ -61,7 +63,7 @@ impl PunchingUdpSocket {
     pub async fn bind(socket: tokio::net::UdpSocket) -> io::Result<(Self, HolePuncher)> {
         let socket = socket.into_std()?;
 
-        quinn_udp::UdpSocketState::new((&socket).into())?;
+        let quinn_socket_state = Arc::new(quinn_udp::UdpSocketState::new((&socket).into())?);
 
         let socket = Arc::new(tokio::net::UdpSocket::from_std(socket)?);
 
@@ -92,7 +94,7 @@ impl PunchingUdpSocket {
         Ok((
             Self {
                 socket: socket.clone(),
-                quinn_socket_state: Arc::new(quinn_udp::UdpSocketState::new((&socket).into())?),
+                quinn_socket_state,
                 udp_recv_tx: udp_recv_tx.clone(),
             },
             HolePuncher {
@@ -108,46 +110,52 @@ impl PunchingUdpSocket {
     }
 }
 
-#[derive(Debug)]
 struct PunchingUdpPoller {
     inner: Arc<PunchingUdpSocket>,
+    writable: Option<Pin<Box<dyn Future<Output = io::Result<()>> + Send + Sync>>>,
+}
+
+impl fmt::Debug for PunchingUdpPoller {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PunchingUdpPoller")
+            .field("inner", &self.inner)
+            .finish_non_exhaustive()
+    }
 }
 
 impl quinn::UdpPoller for PunchingUdpPoller {
     fn poll_writable(
-        self: Pin<&mut PunchingUdpPoller>,
+        mut self: Pin<&mut PunchingUdpPoller>,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<()>> {
-        // Register the QUIC stack's Waker with the tokio socket for write readiness
-        // We call poll_send_ready on the inner tokio socket
-        self.inner.socket.poll_send_ready(cx)
+        // Each poller needs its own waiter: poll_send_ready only retains one
+        // waker, which other connections could overwrite on this shared socket.
+        if self.writable.is_none() {
+            let socket = self.inner.socket.clone();
+            self.writable = Some(Box::pin(async move { socket.writable().await }));
+        }
+        let result = self.writable.as_mut().unwrap().as_mut().poll(cx);
+        if result.is_ready() {
+            // A future must not be polled again after completion.
+            self.writable = None;
+        }
+        result
     }
 }
 
 impl quinn::AsyncUdpSocket for PunchingUdpSocket {
     fn create_io_poller(self: Arc<Self>) -> Pin<Box<dyn quinn::UdpPoller>> {
-        Box::pin(PunchingUdpPoller { inner: self })
+        Box::pin(PunchingUdpPoller {
+            inner: self,
+            writable: None,
+        })
     }
 
     fn try_send(&self, transmit: &quinn_udp::Transmit<'_>) -> io::Result<()> {
-        // NOTE: tokio::net::UdpSocket does not directly support QUIC's multi-segment
-        // Transmit (which is for GSO/GRO). For simplicity and standard usage, we
-        // assume a single datagram send.
-
-        let sent_bytes = self
-            .socket
-            .try_send_to(transmit.contents, transmit.destination)?;
-
-        if sent_bytes == transmit.contents.len() {
-            Ok(())
-        } else {
-            // This case should generally not happen for UDP unless the datagram was
-            // partially sent, which is usually not possible with a single UDP send.
-            // If it were a stream, a partial write would be normal.
-            Err(io::Error::other(
-                "Partial UDP datagram send detected, which is unexpected.",
-            ))
-        }
+        self.socket.try_io(Interest::WRITABLE, || {
+            self.quinn_socket_state
+                .send((&*self.socket).into(), transmit)
+        })
     }
 
     fn poll_recv(
@@ -158,7 +166,7 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
     ) -> Poll<io::Result<usize>> {
         loop {
             ready!(self.socket.poll_recv_ready(cx))?;
-            if let Ok(res) = self.socket.try_io(Interest::READABLE, || {
+            match self.socket.try_io(Interest::READABLE, || {
                 let res = self
                     .quinn_socket_state
                     .recv((&*self.socket).into(), bufs, metas);
@@ -169,13 +177,27 @@ impl quinn::AsyncUdpSocket for PunchingUdpSocket {
 
                 res
             }) {
-                return Poll::Ready(Ok(res));
+                Ok(res) => return Poll::Ready(Ok(res)),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => continue,
+                Err(error) => return Poll::Ready(Err(error)),
             }
         }
     }
 
     fn local_addr(&self) -> io::Result<std::net::SocketAddr> {
         self.socket.local_addr()
+    }
+
+    fn max_transmit_segments(&self) -> usize {
+        self.quinn_socket_state.max_gso_segments()
+    }
+
+    fn max_receive_segments(&self) -> usize {
+        self.quinn_socket_state.gro_segments()
+    }
+
+    fn may_fragment(&self) -> bool {
+        self.quinn_socket_state.may_fragment()
     }
 }
 
@@ -186,9 +208,14 @@ fn forward_holepunch(
     msg_count: usize,
 ) {
     for (meta, buf) in metas.iter().zip(bufs.iter()).take(msg_count) {
-        if meta.len == 1 {
+        // GRO can combine several datagrams in one buffer. Its stride describes
+        // their boundaries; the final datagram may be shorter than the stride.
+        for datagram in buf[..meta.len].chunks(meta.stride.max(1)) {
+            if datagram.len() != 1 {
+                continue;
+            }
             let packet = IncomingHolepunchPacket {
-                data: [buf[0]], // *&buf[0]
+                data: [datagram[0]],
                 from: meta.addr,
             };
             debug!("Forwarding hole punch packet");
@@ -532,3 +559,6 @@ pub enum HolePunchError {
     #[error("No hole punch socket was returned")]
     SocketChannelClosed,
 }
+
+#[cfg(test)]
+mod tests;
