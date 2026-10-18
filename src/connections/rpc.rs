@@ -10,6 +10,7 @@ use crate::{
     ui_messages::{UiEvent, UploadInfo},
     SharedState,
 };
+use futures::FutureExt;
 use harddrive_party_shared::{
     codec::{deserialize, serialize, DecodeError},
     wire_messages::{AnnouncePeer, IndexQuery, LsResponse, LsResponseError, ReadQuery, Request},
@@ -25,14 +26,13 @@ use thiserror::Error;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncSeekExt},
-    sync::{
-        broadcast,
-        mpsc::{channel, Receiver, Sender},
-        Mutex,
-    },
+    sync::{broadcast, mpsc::Sender, Mutex},
 };
 
-use super::speedometer::{self, Speedometer};
+use super::{
+    speedometer::{self, Speedometer},
+    uploads::{self, UploadSender},
+};
 
 /// Number of bytes uploaded at a time
 const UPLOAD_BLOCK_SIZE: usize = 64 * 1024;
@@ -57,7 +57,7 @@ pub struct Rpc {
     /// The file index database
     pub shares: Shares,
     /// Channel for sending upload requests
-    upload_tx: Sender<ReadRequest>,
+    upload_tx: UploadSender<ReadRequest>,
     peer_announce_tx: Sender<PeerConnect>,
     peers: Arc<Mutex<HashMap<String, Peer>>>,
     known_peers: KnownPeers,
@@ -71,16 +71,13 @@ impl Rpc {
         peers: Arc<Mutex<HashMap<String, Peer>>>,
         known_peers: KnownPeers,
     ) -> Rpc {
-        let (upload_tx, upload_rx) = channel(65536);
-        let shares_clone = shares.clone();
-
-        tokio::spawn(async move {
-            let mut uploader = Uploader {
-                shares: shares_clone,
-                upload_rx,
-                event_broadcaster,
-            };
-            uploader.run().await;
+        let uploader = Uploader {
+            shares: shares.clone(),
+            event_broadcaster,
+        };
+        let (upload_tx, _) = uploads::spawn(move |request: ReadRequest| {
+            let uploader = uploader.clone();
+            async move { uploader.upload(request).await }
         });
 
         Rpc {
@@ -244,37 +241,42 @@ impl Rpc {
         output: quinn::SendStream,
         requester_name: String,
     ) -> Result<(), RpcError> {
-        self.upload_tx
-            .send(ReadRequest {
-                path,
-                start,
-                end,
-                output,
-                requester_name,
-            })
-            .await
-            .map_err(|_| RpcError::ChannelClosed)?;
-        Ok(())
+        let stopped = output.stopped();
+        let request = ReadRequest {
+            path,
+            start,
+            end,
+            output,
+            requester_name: requester_name.clone(),
+        };
+        tokio::select! {
+            result = self.upload_tx.send(requester_name, request) => {
+                result.map_err(|_| RpcError::ChannelClosed)
+            },
+            _ = stopped => Ok(()),
+        }
     }
 }
 
-/// Uploads are processed sequentially in a separate task
+/// Resources shared by the bounded concurrent upload tasks.
+#[derive(Clone)]
 struct Uploader {
     /// Our share db
     shares: Shares,
-    /// Incoming read requests
-    upload_rx: Receiver<ReadRequest>,
     /// Channel for sending messages to the UI
     event_broadcaster: broadcast::Sender<UiEvent>,
 }
 
 impl Uploader {
-    /// Iterate over incoming read requests
-    async fn run(&mut self) {
-        while let Some(read_request) = self.upload_rx.recv().await {
-            if let Err(e) = self.do_read(read_request).await {
-                warn!("Error uploading {e:?}");
-            }
+    async fn upload(&self, request: ReadRequest) -> Result<(), RpcError> {
+        // Skip already canceled requests before opening their files.
+        if request.output.stopped().now_or_never().is_some() {
+            return Ok(());
+        }
+        let stopped = request.output.stopped();
+        tokio::select! {
+            result = self.do_read(request) => result,
+            _ = stopped => Ok(()),
         }
     }
 
@@ -465,3 +467,255 @@ pub enum RpcError {
 //     let response = response::Response::Err(err as i32);
 //     Box::new(stream::iter(vec![response]))
 // }
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use crate::connections::quic::generate_certificate;
+    use quinn::{ClientConfig, Connection, Endpoint, RecvStream, ServerConfig, TransportConfig};
+    use tempfile::TempDir;
+    use tokio::time::timeout;
+
+    struct Fixture {
+        _storage: TempDir,
+        uploader: Uploader,
+        server: Endpoint,
+        client_config: ClientConfig,
+        events: broadcast::Receiver<UiEvent>,
+    }
+
+    impl Fixture {
+        async fn new() -> Self {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let storage = TempDir::new().unwrap();
+            let share = storage.path().join("shared");
+            fs::create_dir(&share).await.unwrap();
+            let large = fs::File::create(share.join("large")).await.unwrap();
+            large.set_len(1024 * 1024).await.unwrap();
+            fs::write(share.join("small"), b"small").await.unwrap();
+            let db = sled::Config::new().temporary(true).open().unwrap();
+            let shares = Shares::new(db, vec![share.to_str().unwrap().into()])
+                .await
+                .unwrap();
+            let (events_tx, events) = broadcast::channel(64);
+            let uploader = Uploader {
+                shares,
+                event_broadcaster: events_tx,
+            };
+
+            let (cert, key) = generate_certificate().unwrap();
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(cert.clone()).unwrap();
+            let mut client_config = ClientConfig::with_root_certificates(Arc::new(roots)).unwrap();
+            let mut transport = TransportConfig::default();
+            transport.stream_receive_window(16_384u32.into());
+            transport.receive_window(131_072u32.into());
+            client_config.transport_config(Arc::new(transport));
+            let mut server_config = ServerConfig::with_single_cert(vec![cert], key).unwrap();
+            let mut transport = TransportConfig::default();
+            transport.send_window(16_384);
+            server_config.transport_config(Arc::new(transport));
+            let server = Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
+            Self {
+                _storage: storage,
+                uploader,
+                server,
+                client_config,
+                events,
+            }
+        }
+
+        async fn connect(&self) -> (Endpoint, Connection, Connection) {
+            let mut endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+            endpoint.set_default_client_config(self.client_config.clone());
+            let client = endpoint
+                .connect(self.server.local_addr().unwrap(), "peer")
+                .unwrap();
+            let (client, server) = tokio::join!(client, async {
+                self.server.accept().await.unwrap().await.unwrap()
+            });
+            (endpoint, client.unwrap(), server)
+        }
+
+        fn spawn(&self) -> (UploadSender<ReadRequest>, tokio::task::JoinHandle<()>) {
+            let uploader = self.uploader.clone();
+            uploads::spawn(move |request| {
+                let uploader = uploader.clone();
+                async move { uploader.upload(request).await }
+            })
+        }
+    }
+
+    async fn request(
+        client: &Connection,
+        server: &Connection,
+        peer: &str,
+        path: &str,
+    ) -> (ReadRequest, RecvStream) {
+        let (mut send, recv) = client.open_bi().await.unwrap();
+        send.write_all(b"request").await.unwrap();
+        send.finish().unwrap();
+        let (output, mut input) = server.accept_bi().await.unwrap();
+        input.read_to_end(32).await.unwrap();
+        (
+            ReadRequest {
+                path: path.into(),
+                start: None,
+                end: None,
+                output,
+                requester_name: peer.into(),
+            },
+            recv,
+        )
+    }
+
+    #[tokio::test]
+    async fn stalled_receiver_does_not_block_other_peer_and_stop_releases_its_slot() {
+        timeout(Duration::from_secs(10), async {
+            let mut fixture = Fixture::new().await;
+            let (_endpoint_a, client_a, server_a) = fixture.connect().await;
+            let (_endpoint_b, client_b, server_b) = fixture.connect().await;
+            let (sender, handle) = fixture.spawn();
+            let (large, mut large_recv) = request(&client_a, &server_a, "a", "shared/large").await;
+            sender.send("a".into(), large).await.unwrap();
+            // Observe that uploading began, then leave almost all data unread. The
+            // file exceeds both receive credit and send buffering by a large margin.
+            large_recv.read_exact(&mut [0; 1]).await.unwrap();
+            let (next_a, mut next_a_recv) =
+                request(&client_a, &server_a, "a", "shared/small").await;
+            sender.send("a".into(), next_a).await.unwrap();
+            let (mut next_b, mut next_b_recv) =
+                request(&client_b, &server_b, "b", "shared/small").await;
+            next_b.start = Some(1);
+            next_b.end = Some(4);
+            sender.send("b".into(), next_b).await.unwrap();
+            assert_eq!(next_b_recv.read_to_end(16).await.unwrap(), b"mal");
+            assert!(next_a_recv.read(&mut [0; 1]).now_or_never().is_none());
+            let progress = loop {
+                if let UiEvent::Uploaded(progress) = fixture.events.recv().await.unwrap() {
+                    if progress.peer_name == "b" {
+                        break progress;
+                    }
+                }
+            };
+            assert_eq!(progress.path, "shared/small");
+            assert_eq!(progress.bytes_read, 4);
+            assert_eq!(progress.total_size, 5);
+            large_recv.stop(0u32.into()).unwrap();
+            assert_eq!(next_a_recv.read_to_end(16).await.unwrap(), b"small");
+            drop(sender);
+            handle.await.unwrap();
+        })
+        .await
+        .expect("uploads must progress despite a stalled receiver");
+    }
+
+    #[tokio::test]
+    async fn queued_cancellation_is_skipped_before_opening_the_file() {
+        timeout(Duration::from_secs(10), async {
+            let fixture = Fixture::new().await;
+            let (_endpoint, client, server) = fixture.connect().await;
+            let (sender, handle) = fixture.spawn();
+            let (large, mut large_recv) = request(&client, &server, "a", "shared/large").await;
+            sender.send("a".into(), large).await.unwrap();
+            large_recv.read_exact(&mut [0; 1]).await.unwrap();
+            let (canceled, mut canceled_recv) =
+                request(&client, &server, "a", "shared/missing").await;
+            let stopped = canceled.output.stopped();
+            sender.send("a".into(), canceled).await.unwrap();
+            canceled_recv.stop(0u32.into()).unwrap();
+            stopped.await.unwrap();
+            let (next, mut next_recv) = request(&client, &server, "a", "shared/small").await;
+            sender.send("a".into(), next).await.unwrap();
+            large_recv.stop(0u32.into()).unwrap();
+            assert_eq!(next_recv.read_to_end(16).await.unwrap(), b"small");
+            drop(sender);
+            handle.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn disconnected_upload_releases_peer_for_replacement_connection() {
+        timeout(Duration::from_secs(10), async {
+            let fixture = Fixture::new().await;
+            let (_old_endpoint, old_client, old_server) = fixture.connect().await;
+            let (_new_endpoint, new_client, new_server) = fixture.connect().await;
+            let (sender, handle) = fixture.spawn();
+            let (large, mut recv) = request(&old_client, &old_server, "a", "shared/large").await;
+            sender.send("a".into(), large).await.unwrap();
+            recv.read_exact(&mut [0; 1]).await.unwrap();
+            let (next, mut next_recv) =
+                request(&new_client, &new_server, "a", "shared/small").await;
+            sender.send("a".into(), next).await.unwrap();
+            old_client.close(0u32.into(), b"test disconnect");
+            assert_eq!(next_recv.read_to_end(16).await.unwrap(), b"small");
+            drop(sender);
+            handle.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn uploader_returns_without_opening_a_canceled_request() {
+        timeout(Duration::from_secs(10), async {
+            let fixture = Fixture::new().await;
+            let (_endpoint, client, server) = fixture.connect().await;
+            let (canceled, mut recv) = request(&client, &server, "a", "shared/missing").await;
+            let stopped = canceled.output.stopped();
+            recv.stop(0u32.into()).unwrap();
+            stopped.await.unwrap();
+            // Opening this nonexistent file would return PathNotFound instead.
+            fixture.uploader.upload(canceled).await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn canceled_read_does_not_wait_for_queue_capacity() {
+        timeout(Duration::from_secs(10), async {
+            let fixture = Fixture::new().await;
+            let (_endpoint, client, server) = fixture.connect().await;
+            let (sender, handle) = fixture.spawn();
+            let (large, mut large_recv) = request(&client, &server, "a", "shared/large").await;
+            sender.send("a".into(), large).await.unwrap();
+            large_recv.read_exact(&mut [0; 1]).await.unwrap();
+            let mut queued_receivers = Vec::new();
+            for _ in 0..8 {
+                let (next, recv) = request(&client, &server, "a", "shared/small").await;
+                sender.send("a".into(), next).await.unwrap();
+                queued_receivers.push(recv);
+            }
+            let db = sled::Config::new().temporary(true).open().unwrap();
+            let rpc = Rpc {
+                shares: fixture.uploader.shares.clone(),
+                upload_tx: sender.clone(),
+                peer_announce_tx: tokio::sync::mpsc::channel(1).0,
+                peers: Default::default(),
+                known_peers: KnownPeers::new(db.open_tree("peers").unwrap()),
+            };
+            let (next, mut recv) = request(&client, &server, "a", "shared/small").await;
+            let mut admission = Box::pin(rpc.read(
+                next.path,
+                next.start,
+                next.end,
+                next.output,
+                next.requester_name,
+            ));
+            assert!(admission.as_mut().now_or_never().is_none());
+            recv.stop(0u32.into()).unwrap();
+            admission.await.unwrap();
+            // The active receiver remains stalled throughout canceled admission.
+            large_recv.stop(0u32.into()).unwrap();
+            drop(queued_receivers);
+            drop(rpc);
+            drop(sender);
+            handle.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
+}

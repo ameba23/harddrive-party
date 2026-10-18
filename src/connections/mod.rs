@@ -4,6 +4,7 @@ pub mod known_peers;
 pub mod quic;
 pub mod rpc;
 pub mod speedometer;
+mod uploads;
 
 use crate::{
     connections::{
